@@ -50,7 +50,7 @@
     /* Header, a disk question, the list, the status bar. Every row but the
        list is `auto`, so leftover height lands on the list. */
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
     min-height: 0;
     height: 100%;
   }
@@ -323,9 +323,38 @@
   /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
   .body[hidden], .report[hidden] { display: none; }
   .query { grid-row: 1; }
-  .disk-ask { grid-row: 2; }
-  #view-search, #view-report { grid-row: 3; }
-  .meter { grid-row: 4; }
+  .tabstrip { grid-row: 2; }
+  .disk-ask { grid-row: 3; }
+  #view-search, #view-report { grid-row: 4; }
+  .meter { grid-row: 5; }
+
+  /* ---------------- search tabs ---------------- */
+  .tabstrip {
+    display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px;
+    background: var(--ground); border-bottom: 1px solid var(--line); min-width: 0;
+  }
+  .tabstrip[hidden] { display: none; }
+  .stab {
+    display: flex; align-items: center; gap: 4px; height: 28px;
+    min-width: 96px; max-width: 220px; padding: 0 4px 0 12px;
+    border: 1px solid transparent; border-radius: 7px;
+    color: var(--ink-2); font: 12.5px/1 var(--sans); cursor: pointer; user-select: none;
+  }
+  .stab:hover { background: var(--hover); }
+  .stab[aria-selected="true"] { background: var(--panel); color: var(--ink); border-color: var(--line); }
+  .stab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .stab .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stab .x {
+    width: 20px; height: 20px; border: 0; border-radius: 5px; padding: 0;
+    background: none; color: var(--ink-2); cursor: pointer; opacity: 0; font-size: 13px;
+  }
+  .stab:hover .x, .stab[aria-selected="true"] .x { opacity: 1; }
+  .stab .x:hover { background: var(--line); }
+  .tabplus {
+    width: 28px; height: 28px; border: 0; border-radius: 7px; background: none;
+    color: var(--ink-2); font-size: 17px; cursor: pointer;
+  }
+  .tabplus:hover { background: var(--hover); }
   .rail { overflow-y: auto; min-height: 0; }
   /* Advice, not an alarm: the window works, it is only slower than it should be. */
   .stale { color: var(--t1); }
@@ -1606,6 +1635,8 @@
         <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
                 aria-expanded="false" data-t-title="disks"
                 data-t-aria="the disks this machine has, and which are indexed">⛁</button>
+        <button type="button" id="tab-new" class="about"
+                data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
         <button type="button" id="csv" class="about"
                 data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
         <button type="button" id="about" class="about" aria-pressed="false" hidden
@@ -1629,6 +1660,9 @@
       </div>
       <p class="qread" id="qread"></p>
     </div>
+
+    <!-- The search tabs. Drawn from two up: one tab is the page as it was. -->
+    <div class="tabstrip" id="tabstrip" role="tablist" data-t-aria="Search tabs" hidden></div>
 
     <div class="meter">
       <span class="big" id="count">—</span>
@@ -3621,7 +3655,141 @@
   let typingSearch = null;
   let lastMeter = null;
 
+  /* ---------------- search tabs ----------------
+   * Each tab its own query and order, kept by the service as `tabs`, so the
+   * window and this page show the same ones. The keys are Alt's: a browser
+   * keeps Ctrl+T and Ctrl+W for itself, and Ctrl+W closes this window. */
+  let TABS = [];
+  let TAB = 0;
+  let TABS_READ = false;
+  let tabsTimer = 0;
+  const strip = document.getElementById("tabstrip");
+  const freshTab = () => ({ query: "", sort: "modified", descending: true });
+  const nowTab = () => ({ query: q.value, sort: sortKey, descending: sortDesc });
+  const keepTabs = () => keep({ tabs: TABS, tab: TAB });
+
+  function drawTabs() {
+    if (!TABS.length) TABS = [nowTab()];
+    const searching = document.getElementById("tab-report").getAttribute("aria-selected") !== "true";
+    strip.hidden = TABS.length < 2 || !searching;
+    if (strip.hidden) return;
+    const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    strip.innerHTML = TABS.map((t, i) => {
+      const name = esc(t.query.trim() || T("New tab"));
+      return `<div class="stab" role="tab" tabindex="0" data-i="${i}" aria-selected="${i === TAB}" title="${name}">`
+        + `<span class="nm">${name}</span>`
+        + `<button type="button" class="x" data-close="${i}" aria-label="${esc(T("Close tab"))}">×</button></div>`;
+    }).join("") + `<button type="button" class="tabplus" aria-label="${esc(T("New tab (Alt+T)"))}" title="${esc(T("New tab (Alt+T)"))}">+</button>`;
+  }
+
+  /* What is on screen goes into the tab in front, and is kept a moment later. */
+  function holdTab() {
+    if (!TABS.length) TABS = [nowTab()];
+    TABS[TAB] = nowTab();
+    drawTabs();
+    /* Not before the kept tabs are read: the first search would write one
+       tab over all of them. */
+    if (!TABS_READ) return;
+    clearTimeout(tabsTimer);
+    tabsTimer = setTimeout(keepTabs, 2000);
+  }
+
+  function showTab(t) {
+    if (COLUMNS.some((c) => c.key === t.sort)) sortKey = t.sort;
+    sortDesc = typeof t.descending === "boolean" ? t.descending : true;
+    q.value = t.query || "";
+    render();
+    q.focus();
+  }
+
+  function moved() {
+    drawTabs();
+    clearTimeout(tabsTimer);
+    keepTabs();
+    showTab(TABS[TAB]);
+  }
+
+  function tabNew() {
+    holdTab();
+    if (TABS.length >= 24) return;
+    TABS.push(freshTab());
+    TAB = TABS.length - 1;
+    moved();
+  }
+
+  function tabSwitch(i) {
+    if (i === TAB || i < 0 || i >= TABS.length) return;
+    holdTab();
+    TAB = i;
+    moved();
+  }
+
+  /* The one to the right takes a closed tab's place, as a browser does. */
+  function tabClose(i) {
+    if (TABS.length <= 1 || i < 0 || i >= TABS.length) return;
+    holdTab();
+    const was = TAB;
+    TABS.splice(i, 1);
+    if (i < was || was >= TABS.length) TAB = Math.max(0, Math.min(was - 1, TABS.length - 1));
+    if (i === was) { moved(); return; }
+    drawTabs();
+    keepTabs();
+  }
+
+  const tabStep = (by) => tabSwitch(((TAB + by) % TABS.length + TABS.length) % TABS.length);
+
+  strip.addEventListener("click", (e) => {
+    const x = e.target.closest("[data-close]");
+    if (x) { tabClose(Number(x.dataset.close)); return; }
+    if (e.target.closest(".tabplus")) { tabNew(); return; }
+    const t = e.target.closest(".stab");
+    if (t) tabSwitch(Number(t.dataset.i));
+  });
+  /* The middle button closes, the empty strip opens one on a double-click. */
+  strip.addEventListener("auxclick", (e) => {
+    const t = e.target.closest(".stab");
+    if (t && e.button === 1) { e.preventDefault(); tabClose(Number(t.dataset.i)); }
+  });
+  strip.addEventListener("dblclick", (e) => { if (e.target === strip) tabNew(); });
+  strip.addEventListener("keydown", (e) => {
+    const t = e.target.closest(".stab");
+    if (t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); tabSwitch(Number(t.dataset.i)); }
+  });
+  document.getElementById("tab-new").addEventListener("click", tabNew);
+  document.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    if (k === "t") tabNew();
+    else if (k === "w") tabClose(TAB);
+    else if (e.key === "PageDown") tabStep(1);
+    else if (e.key === "PageUp") tabStep(-1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  /* The tabs the service keeps, once: a later settings answer is this page's
+     own writes coming back. True when the front tab's query was put in. */
+  function readTabs(s) {
+    if (TABS_READ) return false;
+    TABS_READ = true;
+    if (!Array.isArray(s.tabs) || !s.tabs.length) { drawTabs(); return false; }
+    TABS = s.tabs.slice(0, 24).map((t) => ({
+      query: typeof t.query === "string" ? t.query : "",
+      sort: typeof t.sort === "string" && t.sort ? t.sort : "modified",
+      descending: typeof t.descending === "boolean" ? t.descending : true,
+    }));
+    TAB = Math.min(Math.max(0, Number(s.tab) || 0), TABS.length - 1);
+    const f = TABS[TAB];
+    if (COLUMNS.some((c) => c.key === f.sort)) sortKey = f.sort;
+    sortDesc = f.descending;
+    drawTabs();
+    if (f.query && f.query !== q.value) { q.value = f.query; return true; }
+    return false;
+  }
+
   function render() {
+    holdTab();
     const text = q.value;
     /* Asked now: once the search lands, a re-sort looks like a new query. */
     const queryChanged = LIST.query !== text;
@@ -4259,8 +4427,10 @@
     /* From the top of the settings, not `view.web`, and after the headings,
        whose widths it decides. An empty string means nobody has chosen. */
     if (typeof s.layout === "string" && MODES.includes(s.layout)) applyMode(s.layout);
-    /* The list started with the defaults, so only a new ordering re-searches. */
-    if (sortKey !== oldSort || sortDesc !== oldDescending) render();
+    /* The list started with the defaults, so only a new ordering re-searches —
+       or a tab that comes back with a query in it. */
+    const tabQuery = readTabs(s);
+    if (tabQuery || sortKey !== oldSort || sortDesc !== oldDescending) render();
   }
 
   /* Held, because both closures want it and only one owns the transport. */
@@ -5929,6 +6099,7 @@
     buildHeads();               // the headings, and the picker's title
     syncFacets(parse(q.value)); // the three rails
     drawSelBar();               // the selection bar, if anything is selected
+    drawTabs();                 // "New tab", on a tab with nothing typed
     /* The two lines nothing else rewrites until something happens. */
     drawCost();
     if (LAST_STATUS) applyStatus(LAST_STATUS);
@@ -7361,6 +7532,7 @@
     document.getElementById("tab-search").setAttribute("aria-selected", String(s));
     document.getElementById("tab-report").setAttribute("aria-selected", String(!s));
     document.querySelector(".meter").style.display = s ? "" : "none";
+    drawTabs();
     if (s) document.dispatchEvent(new Event("scour-search-shown"));
     else drawReport();
   }

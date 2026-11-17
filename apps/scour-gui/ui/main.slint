@@ -237,39 +237,6 @@ export struct Facet {
 }
 
 
-// One tab. Small capitals; the selected one carries the accent line under it.
-component Tab inherits Rectangle {
-    in property <string> label;
-    in property <bool> on;
-    callback clicked();
-
-    touch := TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-    // The width comes from the word plus its padding: asking the text for the
-    // box's width while the box asks the text for its own is a binding loop.
-    HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
-
-        Text {
-            text: root.label;
-            color: root.on ? Theme.ink : touch.has-hover ? Theme.ink-2 : Theme.ink-3;
-            font-size: 12px;
-            font-weight: 500;
-            vertical-alignment: center;
-        }
-    }
-
-    if root.on: Rectangle {
-        y: parent.height - 2px;
-        height: 2px;
-        background: Theme.ink;
-    }
-}
-
 // One row of the rail: a word, a count, and a bar behind them showing what
 // share of the matching set it is. Behind, because a 186px rail has no lane.
 component FacetRow inherits Rectangle {
@@ -448,11 +415,13 @@ component Tool inherits Rectangle {
     in property <bool> on;
     callback clicked();
 
-    width: 18px;
-    height: 18px;
-    border-width: Theme.hair;
-    border-radius: 3px;
-    border-color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
+    // A header bar's button: no frame until it is on, a wash under the hand.
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border-width: root.on ? Theme.hair : 0px;
+    border-color: Theme.line;
+    background: root.on ? Theme.panel-2 : touch.has-hover ? Theme.hover : transparent;
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -460,8 +429,8 @@ component Tool inherits Rectangle {
 
     if !root.has-icon: Text {
         text: root.glyph;
-        color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-3;
-        font-size: 11px;
+        color: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: 14px;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -470,11 +439,74 @@ component Tool inherits Rectangle {
     }
     if root.has-icon: Image {
         source: root.icon;
-        colorize: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-3;
-        width: 12px;
-        height: 12px;
+        colorize: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
+        width: 16px;
+        height: 16px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+    }
+}
+
+/// One search tab on the strip: its query as its name, a × while it is in
+/// front or under the hand, and the middle button closes it as a browser's does.
+component SearchTabChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback picked();
+    callback closed();
+
+    height: 28px;
+    min-width: 96px;
+    max-width: 220px;
+    preferred-width: name.preferred-width + 48px;
+    border-radius: 7px;
+    border-width: root.on ? Theme.hair : 0px;
+    border-color: Theme.line;
+    background: root.on ? Theme.panel : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.picked();
+            }
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.middle) {
+                root.closed();
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 4px;
+        spacing: 4px;
+        name := Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 12.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 5px;
+                background: x-touch.has-hover ? Theme.line : transparent;
+                opacity: root.on || touch.has-hover || x-touch.has-hover ? 1 : 0;
+                x-touch := TouchArea {
+                    clicked => { root.closed(); }
+                }
+                Image {
+                    source: @image-url("icons/tools/close.svg");
+                    colorize: Theme.ink-2;
+                    width: 12px;
+                    height: 12px;
+                    x: 4px;
+                    y: 4px;
+                }
+            }
+        }
     }
 }
 
@@ -1679,6 +1711,16 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    /// The search tabs: each one's name on the strip, and which is in front. The
+    /// strip shows from two tabs up; one tab is the window as it always was.
+    in property <[string]> tab-labels;
+    in property <int> tab-active;
+    callback tab-new();
+    callback tab-picked(int);
+    callback tab-closed(int);
+    /// The next tab along (`1`) or the previous (`-1`), wrapping.
+    callback tab-step(int);
+
     /// The query field's own edits, for its right-click menu.
     public function query-edit(what: string) {
         input.focus();
@@ -2014,6 +2056,25 @@ export component MainWindow inherits Window {
                             if (e.text == "X") { self.cut(); return accept; }
                             if (e.text == "A") { self.select-all(); return accept; }
                         }
+                        // The tabs, with a browser's keys. Lower and upper case:
+                        // Slint reads no Caps Lock for us. See `Field`.
+                        if (e.modifiers.control && !e.modifiers.alt) {
+                            if (e.text == "t" || e.text == "T") { root.tab-new(); return accept; }
+                            if (e.text == "w" || e.text == "W") { root.tab-closed(root.tab-active); return accept; }
+                            if (e.text == Key.Tab) { root.tab-step(e.modifiers.shift ? -1 : 1); return accept; }
+                            if (e.text == Key.Backtab) { root.tab-step(-1); return accept; }
+                            if (e.text == Key.PageDown) { root.tab-step(1); return accept; }
+                            if (e.text == Key.PageUp) { root.tab-step(-1); return accept; }
+                            if (e.text == "1") { root.tab-picked(0); return accept; }
+                            if (e.text == "2") { root.tab-picked(1); return accept; }
+                            if (e.text == "3") { root.tab-picked(2); return accept; }
+                            if (e.text == "4") { root.tab-picked(3); return accept; }
+                            if (e.text == "5") { root.tab-picked(4); return accept; }
+                            if (e.text == "6") { root.tab-picked(5); return accept; }
+                            if (e.text == "7") { root.tab-picked(6); return accept; }
+                            if (e.text == "8") { root.tab-picked(7); return accept; }
+                            if (e.text == "9") { root.tab-picked(root.tab-labels.length - 1); return accept; }
+                        }
                         // `Alt+↓` opens what was searched before; plain `↓`
                         // still walks into the results.
                         if (e.text == Key.DownArrow && e.modifiers.alt) {
@@ -2207,6 +2268,8 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
+                        // A new search tab, beside what is about the window.
+                        Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
                         Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
                         // Faces, language, disks, skips and the keys: one page.
                         Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
@@ -2283,6 +2346,46 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                         overflow: elide;
                         horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
+        // The search tabs. Not drawn for one: a window that is never given a
+        // second tab looks as it did before there were any.
+        if root.tab-labels.length > 1 && root.tab != "report": Rectangle {
+            height: 36px;
+            background: Theme.ground;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+            // Under the tabs: a double-click on the empty strip opens one.
+            TouchArea {
+                double-clicked => { root.tab-new(); }
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 2px;
+                alignment: start;
+                for label[i] in root.tab-labels: VerticalLayout {
+                    alignment: center;
+                    SearchTabChip {
+                        label: label;
+                        on: i == root.tab-active;
+                        picked => { root.tab-picked(i); }
+                        closed => { root.tab-closed(i); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Tool {
+                        icon: @image-url("icons/tools/plus.svg");
+                        has-icon: true;
+                        clicked => { root.tab-new(); }
                     }
                 }
             }

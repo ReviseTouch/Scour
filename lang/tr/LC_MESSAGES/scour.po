@@ -2069,3 +2069,16 @@ msgstr "Tümünü seç"
 
 msgid "Clear"
 msgstr "Temizle"
+
+# A search tab with nothing typed in it yet.
+msgid "New tab"
+msgstr "Yeni sekme"
+
+msgid "Search tabs"
+msgstr "Arama sekmeleri"
+
+msgid "Close tab"
+msgstr "Sekmeyi kapat"
+
+msgid "New tab (Alt+T)"
+msgstr "Yeni sekme (Alt+T)"

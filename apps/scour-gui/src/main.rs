@@ -16,6 +16,7 @@ mod link;
 mod paste;
 mod report;
 mod rows;
+mod tabs;
 mod tray;
 
 use std::cell::RefCell;
@@ -546,11 +547,25 @@ fn main() -> Result<()> {
         });
     // The order chosen last, in whichever face: a word no key has is a file
     // from somewhere else, and the newest-first default stands.
-    let kept_sort = scour_core::SortKey::named(&kept.sort)
+    // The search tabs as they were left; one tab of the kept order when there
+    // were none. The tab in front decides the order the window opens in.
+    let tabs = Rc::new(RefCell::new(tabs::Tabs::kept(
+        &kept.tabs,
+        kept.tab,
+        scour_settings::SearchTab {
+            query: args.query.clone(),
+            sort: kept.sort.clone(),
+            descending: kept.descending,
+        },
+    )));
+    let front = tabs.borrow().front().clone();
+    let kept_sort = scour_core::SortKey::named(&front.sort)
         .unwrap_or_default()
         .name();
+    let kept_descending = front.descending.unwrap_or(true);
     window.set_sorted_by(kept_sort.into());
-    window.set_sorted_down(kept.descending.unwrap_or(true));
+    window.set_sorted_down(kept_descending);
+    draw_tabs(&window, &tabs.borrow(), &cat.borrow());
     window.set_has_past(!kept.history.is_empty());
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
@@ -602,7 +617,7 @@ fn main() -> Result<()> {
         shown: 0,
         query: String::new(),
         sort: kept_sort.into(),
-        descending: kept.descending.unwrap_or(true),
+        descending: kept_descending,
         added_paths: Vec::new(),
         added_dirs: Vec::new(),
         added_files: Vec::new(),
@@ -802,6 +817,73 @@ fn main() -> Result<()> {
         });
     }
 
+    // --- the search tabs ---------------------------------------------------
+    // Kept two seconds after the last keystroke, not on every one.
+    let tabs_later = Rc::new(slint::Timer::default());
+    {
+        let keep = {
+            let link = Rc::clone(&link);
+            let tabs = Rc::clone(&tabs);
+            move || keep_tabs(&link, &tabs.borrow())
+        };
+        let keep = Rc::new(keep);
+        let go = {
+            let state = Rc::clone(&state);
+            let tabs = Rc::clone(&tabs);
+            let cat = Rc::clone(&cat);
+            let weak = window.as_weak();
+            let keep = Rc::clone(&keep);
+            move |moved: Option<scour_settings::SearchTab>| {
+                let Some(w) = weak.upgrade() else { return };
+                draw_tabs(&w, &tabs.borrow(), &cat.borrow());
+                keep();
+                if let Some(tab) = moved {
+                    show_tab(&w, &state, &tab);
+                }
+            }
+        };
+        let go = Rc::new(go);
+        {
+            let (state, tabs, go) = (Rc::clone(&state), Rc::clone(&tabs), Rc::clone(&go));
+            window.on_tab_new(move || {
+                let new = tabs.borrow_mut().open(now_tab(&state.borrow()));
+                go(Some(new));
+            });
+        }
+        {
+            let (state, tabs, go) = (Rc::clone(&state), Rc::clone(&tabs), Rc::clone(&go));
+            window.on_tab_picked(move |i| {
+                let Ok(i) = usize::try_from(i) else { return };
+                let moved = tabs.borrow_mut().switch(i, now_tab(&state.borrow()));
+                if moved.is_some() {
+                    go(moved);
+                }
+            });
+        }
+        {
+            let (state, tabs, go) = (Rc::clone(&state), Rc::clone(&tabs), Rc::clone(&go));
+            window.on_tab_closed(move |i| {
+                let Ok(i) = usize::try_from(i) else { return };
+                let before = tabs.borrow().len();
+                let moved = tabs.borrow_mut().close(i, now_tab(&state.borrow()));
+                if tabs.borrow().len() != before {
+                    go(moved);
+                }
+            });
+        }
+        {
+            let (state, tabs, go) = (Rc::clone(&state), Rc::clone(&tabs), Rc::clone(&go));
+            window.on_tab_step(move |by| {
+                let moved = tabs
+                    .borrow_mut()
+                    .step(by as isize, now_tab(&state.borrow()));
+                if moved.is_some() {
+                    go(moved);
+                }
+            });
+        }
+    }
+
     // --- the query line ---------------------------------------------------
     {
         let state = state.clone();
@@ -809,6 +891,9 @@ fn main() -> Result<()> {
         let facets = facets.clone();
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
+        let tabs = Rc::clone(&tabs);
+        let tabs_later = Rc::clone(&tabs_later);
+        let cat = Rc::clone(&cat);
         window.on_query_changed(move |text| {
             stir(&state, &link);
             // **A query has a length, and the reason is the renderer**: the
@@ -834,6 +919,20 @@ fn main() -> Result<()> {
                 s.typed_at = Some(std::time::Instant::now());
                 s.generation
             };
+            // The tab in front is named by what is typed in it.
+            tabs.borrow_mut().hold(now_tab(&state.borrow()));
+            if let Some(w) = weak.upgrade() {
+                draw_tabs(&w, &tabs.borrow(), &cat.borrow());
+            }
+            {
+                let link = Rc::clone(&link);
+                let tabs = Rc::clone(&tabs);
+                tabs_later.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_secs(2),
+                    move || keep_tabs(&link, &tabs.borrow()),
+                );
+            }
             // Laid over the text as it is now, so a deletion shows this frame.
             if let Some(w) = weak.upgrade() {
                 let s = state.borrow();
@@ -2446,6 +2545,9 @@ fn main() -> Result<()> {
     if !args.query.is_empty() {
         window.set_query(args.query.clone().into());
         window.invoke_query_changed(args.query.clone().into());
+    } else if !front.query.is_empty() {
+        window.set_query(front.query.as_str().into());
+        window.invoke_query_changed(front.query.as_str().into());
     }
 
     // A long line in one go: how to stand on the renderer's `i16` ceiling.
@@ -3553,6 +3655,51 @@ fn past_matching(past: &[String], typed: &str) -> Vec<slint::SharedString> {
 /// How many past searches the box offers at once; the service keeps a hundred
 /// (`scour_settings::HISTORY`).
 const PAST_SHOWN: usize = 12;
+
+/// The tab in front as the window has it now: what is typed and the order.
+fn now_tab(s: &State) -> scour_settings::SearchTab {
+    scour_settings::SearchTab {
+        query: s.query.clone(),
+        sort: s.sort.clone(),
+        descending: Some(s.descending),
+    }
+}
+
+/// The strip: every tab's name and which is in front.
+fn draw_tabs(w: &MainWindow, tabs: &tabs::Tabs, cat: &Catalogue) {
+    let untitled = t(cat, "New tab");
+    let labels: Vec<slint::SharedString> =
+        tabs.labels(&untitled).into_iter().map(Into::into).collect();
+    w.set_tab_labels(ModelRc::new(VecModel::from(labels)));
+    w.set_tab_active(i32::try_from(tabs.active()).unwrap_or(0));
+}
+
+/// Bring a tab's query and order onto the window, and search for it.
+fn show_tab(w: &MainWindow, state: &Rc<RefCell<State>>, tab: &scour_settings::SearchTab) {
+    let key = scour_core::SortKey::named(&tab.sort).unwrap_or_default();
+    let descending = tab.descending.unwrap_or_else(|| key.starts_descending());
+    {
+        let mut s = state.borrow_mut();
+        s.sort = key.name().to_owned();
+        s.descending = descending;
+    }
+    w.set_sorted_by(key.name().into());
+    w.set_sorted_down(descending);
+    w.set_query(tab.query.as_str().into());
+    w.invoke_query_changed(tab.query.as_str().into());
+    w.invoke_focus_query();
+}
+
+/// The tabs, for every face: replaced whole, as `Change::tabs` says.
+fn keep_tabs(link: &Link, tabs: &tabs::Tabs) {
+    link.send(Ask::Remember {
+        change: scour_settings::Change {
+            tabs: Some(tabs.list().to_vec()),
+            tab: Some(tabs.active()),
+            ..Default::default()
+        },
+    });
+}
 
 /// Put one query at the front of the history: what was committed to, not every
 /// keystroke searched. The cap is `scour_settings::HISTORY`.

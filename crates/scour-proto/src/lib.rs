@@ -387,7 +387,9 @@ pub enum Response {
     ExportDone {
         rows: u64,
     },
-    Settings(scour_settings::Settings),
+    /// Boxed: with the tabs in it, the largest answer by far, and every other
+    /// answer would be its size too. The same on the wire.
+    Settings(Box<scour_settings::Settings>),
     Facets(FacetResponse),
     Tree {
         root: TreeNode,

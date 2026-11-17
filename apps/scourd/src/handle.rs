@@ -150,12 +150,12 @@ fn run(
                 unconfirmed: r.unconfirmed,
             }
         }
-        Request::Settings {} => Response::Settings(
+        Request::Settings {} => Response::Settings(Box::new(
             kept.settings
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone(),
-        ),
+        )),
         // Written where the change happens, not at shutdown: a killed process
         // never gets to write anything.
         Request::SetSettings { change } => {

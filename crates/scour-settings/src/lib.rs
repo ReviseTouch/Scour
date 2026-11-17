@@ -20,6 +20,22 @@ pub fn rule_id(kind: &str, value: &str) -> String {
 /// bound however long the service runs.
 pub const HISTORY: usize = 100;
 
+/// How many search tabs are kept. Applied on write, as [`HISTORY`] is.
+pub const TABS: usize = 24;
+
+/// One search tab: what it looks for and in what order, in the protocol's words,
+/// so every face that has tabs reads the same list.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SearchTab {
+    #[serde(default)]
+    pub query: String,
+    /// As [`Settings::sort`]: `modified`, not a column's name. Empty is the default.
+    #[serde(default)]
+    pub sort: String,
+    #[serde(default)]
+    pub descending: Option<bool>,
+}
+
 /// Everything a frontend remembers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Settings {
@@ -75,6 +91,13 @@ pub struct Settings {
     pub sort: String,
     #[serde(default)]
     pub descending: Option<bool>,
+    /// The search tabs, in order. Empty is one tab — the query line as it stands,
+    /// which is what every face had before there were tabs.
+    #[serde(default)]
+    pub tabs: Vec<SearchTab>,
+    /// Which of [`Settings::tabs`] is in front. Out of range reads as the last.
+    #[serde(default)]
+    pub tab: usize,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -132,6 +155,9 @@ pub struct Change {
     pub widths: Option<BTreeMap<String, u32>>,
     pub sort: Option<String>,
     pub descending: Option<bool>,
+    /// Replace the tabs outright, capped at [`TABS`]. See [`Settings::tabs`].
+    pub tabs: Option<Vec<SearchTab>>,
+    pub tab: Option<usize>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -196,6 +222,13 @@ impl Change {
         }
         if let Some(v) = self.descending {
             to.descending = Some(v);
+        }
+        if let Some(mut v) = self.tabs {
+            v.truncate(TABS);
+            to.tabs = v;
+        }
+        if let Some(v) = self.tab {
+            to.tab = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;
@@ -636,5 +669,37 @@ mod tests {
             format!("q{}", HISTORY * 2 - 1),
             "newest first"
         );
+    }
+
+    /// Tabs are replaced whole and capped; an old file without them reads as none.
+    #[test]
+    fn tabs_are_kept_whole_and_capped() {
+        let old: Settings = serde_json::from_str(r#"{"sort":"size"}"#).expect("parse");
+        assert!(old.tabs.is_empty());
+        assert_eq!(old.tab, 0);
+
+        let mut s = Settings::default();
+        let one = SearchTab {
+            query: "rapor".into(),
+            sort: "size".into(),
+            descending: Some(true),
+        };
+        Change {
+            tabs: Some(vec![one.clone(); TABS + 5]),
+            tab: Some(3),
+            ..Default::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.tabs.len(), TABS);
+        assert_eq!(s.tabs[0], one);
+        assert_eq!(s.tab, 3);
+
+        // Saying nothing about tabs leaves them.
+        Change {
+            sort: Some("name".into()),
+            ..Default::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.tabs.len(), TABS);
     }
 }
