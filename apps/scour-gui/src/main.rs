@@ -166,6 +166,9 @@ struct State {
     /// A question whose answer belongs at the top of the list: a new query, sort
     /// or rail press — never a page fetch or the live refresh.
     rewind: bool,
+    /// Whether that question is still out: asked, and the service has not gone
+    /// away under it. A rewind with nothing out is asked again when it is back.
+    search_out: bool,
     typed_at: Option<std::time::Instant>,
     /// The generation whose search reply is currently on screen.
     shown: u64,
@@ -654,6 +657,7 @@ fn main() -> Result<()> {
         peek_path: String::new(),
         asked_pictures: std::collections::VecDeque::new(),
         rewind: true,
+        search_out: false,
         typed_at: None,
         shown: 0,
         query: String::new(),
@@ -3748,6 +3752,15 @@ fn place(w: &MainWindow, slots: &rows::Slots) {
 /// **Fetching cannot happen where the need is noticed**: `row_data` runs while
 /// the view is laying out. The position is read, not only a reported miss.
 fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
+    /* **A new question is on its way and the viewport is still the old one's.**
+     * A page asked for here would be of the new query at the old position, and
+     * the lane keeps only the newest of what is queued: behind a slow page it
+     * replaced the search from the top, the rewind never came, and the list
+     * stayed where the last query had been scrolled to. The answer from the top
+     * calls this again. */
+    if state.borrow().rewind {
+        return;
+    }
     let visible = w.get_visible_rows().max(0) as usize;
     let first = w.get_first_row().max(0) as usize;
     // A layout miss may belong to the previous viewport during a fast jump.
@@ -3780,6 +3793,7 @@ fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, model: &Rc<rows::Rows>,
         s.row_limit = limit;
         s.page_offset = 0;
         s.rewind = true;
+        s.search_out = true;
     }
     // Keeping the pages in hand across a new query would mean scrolling down
     // into the last query's results.
@@ -4137,6 +4151,7 @@ fn apply(
         Got::Down(why) => {
             let mut s = state.borrow_mut();
             s.down = true;
+            s.search_out = false;
             rows.forget_asking();
             w.set_busy(false);
             said(
@@ -4165,7 +4180,18 @@ fn apply(
             said(w, why.into());
         }
         Got::Up => {
-            state.borrow_mut().down = false;
+            let again = {
+                let mut s = state.borrow_mut();
+                s.down = false;
+                // The question the service was not there for: nothing else
+                // fetches while its rewind is pending.
+                let again = s.rewind && !s.search_out;
+                s.search_out |= again;
+                again.then_some(s.row_limit)
+            };
+            if let Some(limit) = again {
+                send_search(state, link, 0, limit);
+            }
             w.set_hint(t(
                 cat,
                 "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
@@ -4339,6 +4365,7 @@ fn apply(
                 // Only the answer asked for from the top rewinds.
                 let rewind = s.rewind && offset == 0;
                 s.rewind &= !rewind;
+                s.search_out &= !rewind;
                 rewind
             };
             if rewind {
@@ -6518,6 +6545,7 @@ mod tests {
             peek_path: String::new(),
             asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
+            search_out: false,
             typed_at: None,
             shown: 0,
             query: "rapor".into(),
@@ -6597,6 +6625,7 @@ mod tests {
             peek_path: String::new(),
             asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
+            search_out: false,
             typed_at: None,
             shown: 4,
             query: "rapor".into(),

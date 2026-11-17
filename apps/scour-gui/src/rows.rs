@@ -35,6 +35,10 @@ pub fn band(now: i64, mtime: i64) -> i32 {
 /// The search runs on folded text and Turkish folding changes byte lengths, so
 /// an offset goes back through `fold_indexed` before it touches the original.
 pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str, &'a str) {
+    // Nothing to mark: no fold of the name, which is two allocations a row.
+    if terms.is_empty() {
+        return (name, "", "");
+    }
     let folder = scour_core::text::DefaultFolder;
     let (folded, back) = folder.fold_indexed(name);
     let mut best: Option<(usize, usize)> = None;
