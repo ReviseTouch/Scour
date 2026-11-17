@@ -568,6 +568,7 @@ fn main() -> Result<()> {
     draw_tabs(&window, &tabs.borrow(), &cat.borrow());
     window.set_has_past(!kept.history.is_empty());
     window.set_grid_lines(kept.grid_lines);
+    window.set_tabs_on(!kept.tabs_off);
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {
@@ -745,6 +746,23 @@ fn main() -> Result<()> {
         config.state_dir().join("scourd.log"),
         sink,
     ));
+
+    // The tabs switched on or off; the tabs themselves are kept either way.
+    {
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_tabs_picked(move |on| {
+            if let Some(w) = weak.upgrade() {
+                w.set_tabs_on(on);
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    tabs_off: Some(!on),
+                    ..Default::default()
+                },
+            });
+        });
+    }
 
     // Lines in the list, from the settings page; kept for every face.
     {
@@ -4862,6 +4880,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_columns_push(t(cat, "Choose…"));
     w.set_set_preview(t(cat, "Preview"));
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
+    w.set_set_tabs(t(cat, "Search tabs"));
+    w.set_set_tabs_note(t(cat, "Several searches side by side. Ctrl+T opens one."));
     w.set_set_grid(t(cat, "Grid lines"));
     w.set_set_grid_note(t(cat, "Lines between the list's rows and columns."));
     w.set_grid_labels(list(&["On", "Off"]));

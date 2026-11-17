@@ -2088,3 +2088,9 @@ msgstr "Izgara çizgileri"
 
 msgid "Lines between the list's rows and columns."
 msgstr "Listenin satır ve sütunları arasında çizgiler."
+
+msgid "Several searches side by side. Ctrl+T opens one."
+msgstr "Yan yana birden çok arama. Ctrl+T yenisini açar."
+
+msgid "Several searches side by side. Alt+T opens one."
+msgstr "Yan yana birden çok arama. Alt+T yenisini açar."

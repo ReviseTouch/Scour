@@ -102,6 +102,10 @@ pub struct Settings {
     /// read by its alignment, and lines are for somebody who wants a grid.
     #[serde(default)]
     pub grid_lines: bool,
+    /// Search tabs switched off: no strip, no keys, one query line. The tabs
+    /// stay in [`Settings::tabs`] and come back with the switch.
+    #[serde(default)]
+    pub tabs_off: bool,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -163,6 +167,7 @@ pub struct Change {
     pub tabs: Option<Vec<SearchTab>>,
     pub tab: Option<usize>,
     pub grid_lines: Option<bool>,
+    pub tabs_off: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -237,6 +242,9 @@ impl Change {
         }
         if let Some(v) = self.grid_lines {
             to.grid_lines = v;
+        }
+        if let Some(v) = self.tabs_off {
+            to.tabs_off = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

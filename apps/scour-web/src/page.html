@@ -1666,7 +1666,7 @@
       <p class="qread" id="qread"></p>
     </div>
 
-    <!-- The search tabs. Drawn from two up: one tab is the page as it was. -->
+    <!-- The search tabs. Hidden only while the report is shown. -->
     <div class="tabstrip" id="tabstrip" role="tablist" data-t-aria="Search tabs" hidden></div>
 
     <div class="meter">
@@ -1745,6 +1745,7 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Layout"></div></div><div class="seg" id="seg-layout"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Search tabs"></div><div class="desc" data-t="Several searches side by side. Alt+T opens one."></div></div><div class="seg" id="seg-tabs"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Grid lines"></div><div class="desc" data-t="Lines between the list's rows and columns."></div></div><div class="seg" id="seg-grid"></div></div>
             </div>
           </section>
@@ -3677,14 +3678,20 @@
   function drawTabs() {
     if (!TABS.length) TABS = [nowTab()];
     const searching = document.getElementById("tab-report").getAttribute("aria-selected") !== "true";
-    strip.hidden = TABS.length < 2 || !searching;
+    /* Always, not from two up: a strip that came with a second tab was never
+       found. The only tab has no ×. */
+    const off = !!(KEPT && KEPT.tabs_off);
+    document.getElementById("tab-new").hidden = off;
+    strip.hidden = !searching || off;
+    const closable = TABS.length > 1;
     if (strip.hidden) return;
     const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
     strip.innerHTML = TABS.map((t, i) => {
       const name = esc(t.query.trim() || T("New tab"));
       return `<div class="stab" role="tab" tabindex="0" data-i="${i}" aria-selected="${i === TAB}" title="${name}">`
         + `<span class="nm">${name}</span>`
-        + `<button type="button" class="x" data-close="${i}" aria-label="${esc(T("Close tab"))}">×</button></div>`;
+        + (closable ? `<button type="button" class="x" data-close="${i}" aria-label="${esc(T("Close tab"))}">×</button>` : "")
+        + `</div>`;
     }).join("") + `<button type="button" class="tabplus" aria-label="${esc(T("New tab (Alt+T)"))}" title="${esc(T("New tab (Alt+T)"))}">+</button>`;
   }
 
@@ -3764,6 +3771,7 @@
   document.getElementById("tab-new").addEventListener("click", tabNew);
   document.addEventListener("keydown", (e) => {
     if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (KEPT && KEPT.tabs_off) return;
     const k = e.key.toLowerCase();
     if (k === "t") tabNew();
     else if (k === "w") tabClose(TAB);
@@ -6660,6 +6668,12 @@
     const peekOn = peekToggle.getAttribute("aria-pressed") === "true";
     seg("seg-peek", [["on", T("On")], ["off", T("Off")]], peekOn ? "on" : "off", (v) => {
       if ((v === "on") !== (peekToggle.getAttribute("aria-pressed") === "true")) peekToggle.click();
+      drawSettings();
+    });
+    seg("seg-tabs", [["on", T("On")], ["off", T("Off")]], k.tabs_off ? "off" : "on", (v) => {
+      KEPT.tabs_off = v === "off";
+      drawTabs();
+      keep({ tabs_off: KEPT.tabs_off });
       drawSettings();
     });
     seg("seg-grid", [["on", T("On")], ["off", T("Off")]], k.grid_lines ? "on" : "off", (v) => {

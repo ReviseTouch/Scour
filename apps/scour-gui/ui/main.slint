@@ -452,6 +452,8 @@ component Tool inherits Rectangle {
 component SearchTabChip inherits Rectangle {
     in property <string> label;
     in property <bool> on;
+    /// False for the only tab: there is always a query line.
+    in property <bool> closable: true;
     callback picked();
     callback closed();
 
@@ -493,6 +495,7 @@ component SearchTabChip inherits Rectangle {
                 height: 20px;
                 border-radius: 5px;
                 background: x-touch.has-hover ? Theme.line : transparent;
+                visible: root.closable;
                 opacity: root.on || touch.has-hover || x-touch.has-hover ? 1 : 0;
                 x-touch := TouchArea {
                     clicked => { root.closed(); }
@@ -1717,8 +1720,12 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
-    /// The search tabs: each one's name on the strip, and which is in front. The
-    /// strip shows from two tabs up; one tab is the window as it always was.
+    /// The search tabs: each one's name on the strip, and which is in front.
+    /// `tabs-on` is the settings' switch: off, no strip, no keys, no button.
+    in property <bool> tabs-on: true;
+    in property <string> set-tabs;
+    in property <string> set-tabs-note;
+    callback tabs-picked(bool);
     in property <[string]> tab-labels;
     in property <int> tab-active;
     callback tab-new();
@@ -2064,7 +2071,7 @@ export component MainWindow inherits Window {
                         }
                         // The tabs, with a browser's keys. Lower and upper case:
                         // Slint reads no Caps Lock for us. See `Field`.
-                        if (e.modifiers.control && !e.modifiers.alt) {
+                        if (root.tabs-on && e.modifiers.control && !e.modifiers.alt) {
                             if (e.text == "t" || e.text == "T") { root.tab-new(); return accept; }
                             if (e.text == "w" || e.text == "W") { root.tab-closed(root.tab-active); return accept; }
                             if (e.text == Key.Tab) { root.tab-step(e.modifiers.shift ? -1 : 1); return accept; }
@@ -2275,7 +2282,7 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         spacing: 2px;
                         // A new search tab, beside what is about the window.
-                        Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
+                        if root.tabs-on: Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
                         Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
                         // Faces, language, disks, skips and the keys: one page.
                         Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
@@ -2357,9 +2364,9 @@ export component MainWindow inherits Window {
             }
         }
 
-        // The search tabs. Not drawn for one: a window that is never given a
-        // second tab looks as it did before there were any.
-        if root.tab-labels.length > 1 && root.tab != "report": Rectangle {
+        // The search tabs, always: a strip that appears only with a second tab
+        // was never found (17 November). One tab has no ×.
+        if root.tabs-on && root.tab != "report": Rectangle {
             height: 36px;
             background: Theme.ground;
 
@@ -2382,6 +2389,7 @@ export component MainWindow inherits Window {
                     SearchTabChip {
                         label: label;
                         on: i == root.tab-active;
+                        closable: root.tab-labels.length > 1;
                         picked => { root.tab-picked(i); }
                         closed => { root.tab-closed(i); }
                     }
@@ -4994,6 +5002,17 @@ export component MainWindow inherits Window {
                                             label: root.preview-on ? "✓" : "—";
                                             asking: root.preview-on;
                                             clicked => { root.peek-toggled(); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-tabs;
+                                        note: root.set-tabs-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.tabs-on ? "on" : "off";
+                                            picked(v) => { root.tabs-picked(v == "on"); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }
