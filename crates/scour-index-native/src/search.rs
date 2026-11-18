@@ -523,11 +523,10 @@ fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a 
 }
 
 /// Whether the extension counts, which its *spelling's* length decides. The
-/// fold is as long wherever it is ASCII that no longer letter folds to — `i`
-/// is also `ı` and `İ`, `k` also the Kelvin sign — and the spelling, rebuilt
-/// from its block's start, is read only for the rest.
+/// fold says so where it kept its length or the row's spelling is capitals at
+/// most; the spelling, rebuilt from its block's start, is read for the rest.
 fn spelling_is_eligible(seg: &Segment<'_>, row: usize, ext: &[u8]) -> bool {
-    if ext.iter().all(|&b| b < 0x80 && b != b'i' && b != b'k') {
+    if crate::extension_order::fold_kept_its_length(ext) || seg.names.is_as_long(row) {
         return ext.len() <= 12;
     }
     let spelled = seg.names.get(row).unwrap_or_default();

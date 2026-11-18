@@ -242,6 +242,14 @@ impl<'a> Spelling<'a> {
         (word(&head[0..4]), word(&head[4..8]), from + HEAD)
     }
 
+    /// Whether the row's spelling is its fold byte for byte in length — the
+    /// same, or capitals only — so what is asked of one's bytes holds for the
+    /// other's. Two reads, no scan.
+    pub fn is_as_long(&self, row: usize) -> bool {
+        let (_, high, _) = self.block(row / BLOCK);
+        row < self.rows && high >> (row % BLOCK) & 1 == 0
+    }
+
     /// One name, by row: a jump and at most `BLOCK` NUL scans. Borrowed unless
     /// the row is spelled with capitals. A caller asking in row order wants
     /// [`Reader`], which is this without the block scan or the allocation.
@@ -332,6 +340,17 @@ impl Reader {
         std::str::from_utf8(spelled).ok()
     }
 
+    /// The row's folded name, and whether its spelling is as long byte for
+    /// byte ([`Spelling::is_as_long`]): nothing is rebuilt to say so.
+    pub(crate) fn folded<'a>(
+        &mut self,
+        names: &Spelling<'a>,
+        row: usize,
+    ) -> Option<(&'a [u8], bool)> {
+        let (name, patch) = self.find(names, row)?;
+        Some((name, matches!(patch, Patch::Same | Patch::Flips(_))))
+    }
+
     /// The row's folded name and what its spelling adds, stepping on from the
     /// last row read when that is nearer than the block's start.
     fn find<'a>(&mut self, names: &Spelling<'a>, row: usize) -> Option<(&'a [u8], Patch<'a>)> {
@@ -346,14 +365,17 @@ impl Reader {
             Some(ahead) if self.placed && ahead <= within => (self.at, self.patch, within - ahead),
             _ => (names.folded.block_start(row / BLOCK)?, body, 0),
         };
+        // Seven rows in ten differ in nothing, and are stepped over as such.
+        let differs = low | high;
         while k < within {
             let n = memchr::memchr(0, folded.get(at..)?)?;
-            patch += match kind(k) {
-                SAME => 0,
-                FLIPS => n.div_ceil(8),
-                PAIRS => 2 * n.div_ceil(8),
-                _ => memchr::memchr(0, names.bytes.get(patch..)?)? + 1,
-            };
+            if differs >> k & 1 != 0 {
+                patch += match kind(k) {
+                    FLIPS => n.div_ceil(8),
+                    PAIRS => 2 * n.div_ceil(8),
+                    _ => memchr::memchr(0, names.bytes.get(patch..)?)? + 1,
+                };
+            }
             at += n + 1;
             k += 1;
         }
@@ -473,6 +495,33 @@ mod tests {
         let names: Vec<String> = (0..320).map(|i| format!("dosya_{i}.txt")).collect();
         let (spell, _) = build(&names);
         assert_eq!(spell.len(), 8 + 11 * 4);
+    }
+
+    #[test]
+    fn a_spelling_as_long_as_its_fold_is_said_to_be_without_a_scan() {
+        let names = corpus();
+        let (spell, folded) = build(&names);
+        let s = Spelling::open(NameArena::open(&folded).expect("fold"), &spell).expect("open");
+        let mut r = Reader::default();
+        let (mut long, mut short) = (0, 0);
+        for (row, name) in names.iter().enumerate() {
+            let fold = s.folded.get(row).expect("fold");
+            // Capitals and nothing else: every byte the fold's, or 0x20 away.
+            let flips = name.len() == fold.len()
+                && name
+                    .bytes()
+                    .zip(fold.bytes())
+                    .all(|(a, b)| a == b || a ^ 0x20 == b);
+            assert_eq!(s.is_as_long(row), flips, "{name:?}");
+            assert_eq!(
+                r.folded(&s, row),
+                Some((fold.as_bytes(), flips)),
+                "{name:?}"
+            );
+            if flips { long += 1 } else { short += 1 }
+        }
+        assert!(long > 100 && short > 50, "{long} and {short}");
+        assert!(!s.is_as_long(names.len()));
     }
 
     #[test]

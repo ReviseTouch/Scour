@@ -218,6 +218,13 @@ pub(crate) fn extension_is_eligible(name: &[u8]) -> bool {
         .is_some_and(|i| i > 0 && (1..=12).contains(&(name.len() - i - 1)))
 }
 
+/// Whether a folded extension is as long as it was spelled, whatever the
+/// spelling: ASCII, and none of the letters something longer folds to — `i`
+/// is also `ı` and `İ`, `k` also the Kelvin sign.
+pub(crate) fn fold_kept_its_length(ext: &[u8]) -> bool {
+    ext.iter().all(|&b| b < 0x80 && b != b'i' && b != b'k')
+}
+
 /// One eligibility bit per row, derived in a sequential pass over spellings.
 fn eligible_rows(rows: usize, names: &[u8]) -> Vec<u8> {
     let mut eligible = vec![0u8; rows.div_ceil(8)];

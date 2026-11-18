@@ -1418,6 +1418,22 @@ impl Spelled {
     fn of<'r>(&'r mut self, seg: &Segment<'r>, row: usize) -> Option<&'r str> {
         self.0.read(&seg.names, row)
     }
+
+    /// What [`scour_core::ext_of`] says of the row's spelling. Read off the
+    /// fold where the spelling is as long, or the extension is: the rule is
+    /// about bytes and a dot.
+    fn ext<'a>(&mut self, seg: &Segment<'a>, row: usize) -> std::borrow::Cow<'a, str> {
+        if let Some((folded, as_long)) = self.0.folded(&seg.names, row) {
+            let ext = std::str::from_utf8(folded)
+                .map(scour_core::ext_str)
+                .unwrap_or_default();
+            let kept = crate::extension_order::fold_kept_its_length(ext.as_bytes());
+            if as_long || (kept && !ext.is_empty()) {
+                return ext.into();
+            }
+        }
+        scour_core::ext_of(self.of(seg, row).unwrap_or_default()).into()
+    }
 }
 
 /// Which rows of one segment a batch of subtree removals takes. Asking every row
@@ -2914,12 +2930,11 @@ impl Index for NativeIndex {
             .collect();
         // Read once per row however many questions want it, and not at all when
         // none does — the common case, since kind and age are both columns.
-        let wants_name = req
-            .by
-            .iter()
-            .any(|b| matches!(b, FacetBy::Ext { .. } | FacetBy::Dir { .. }));
+        let wants_name = req.by.iter().any(|b| matches!(b, FacetBy::Dir { .. }));
+        let wants_ext = req.by.iter().any(|b| matches!(b, FacetBy::Ext { .. }));
 
         self.for_each_match(&inner, &req.query, |names, seg, row| {
+            let ext = wants_ext.then(|| names.ext(seg, row));
             let name = wants_name.then(|| names.of(seg, row).unwrap_or_default());
             for (i, by) in req.by.iter().enumerate() {
                 match by {
@@ -2931,9 +2946,16 @@ impl Index for NativeIndex {
                         *counts[i].entry(k.token().to_owned()).or_default() += 1;
                     }
                     FacetBy::Ext { .. } => {
-                        let ext = scour_core::ext_of(name.unwrap_or_default());
-                        if !ext.is_empty() {
-                            *counts[i].entry(ext).or_default() += 1;
+                        // Looked up before it is owned: nearly every row's
+                        // extension has been seen, and needs no allocation.
+                        match ext.as_deref().filter(|e| !e.is_empty()) {
+                            None => {}
+                            Some(ext) => match counts[i].get_mut(ext) {
+                                Some(n) => *n += 1,
+                                None => {
+                                    counts[i].insert(ext.to_owned(), 1);
+                                }
+                            },
                         }
                     }
                     FacetBy::Dir { .. } => {

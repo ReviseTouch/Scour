@@ -5111,6 +5111,12 @@ fn spellings_survive_the_fold_they_are_stored_against() {
         "abc.Iiiiiiiiiiiii",
         "abc.\u{212a}\u{212a}\u{212a}\u{212a}\u{212a}",
         "abc.kkkkk",
+        // Twelve bytes spelled and eighteen folded; then one more.
+        "abc.ȺȺȺȺȺȺ",
+        "abc.ȺȺȺȺȺȺa",
+        "yazısı.GIF",
+        "İİİ.lock",
+        "ısı",
     ];
     let mut entries = Vec::new();
     for i in 0..400u64 {
@@ -5188,9 +5194,37 @@ fn spellings_survive_the_fold_they_are_stored_against() {
             }
         }
     };
+    // A count by extension is the spelling's extension, folded — read off
+    // the fold wherever the fold can say it, and it has to say the same.
+    let counted = |index: &NativeIndex, q: &str| -> Vec<(String, u64)> {
+        let mut got: Vec<(String, u64)> = index
+            .facets(&FacetRequest {
+                query: parse_at(q, NOW),
+                by: vec![FacetBy::Ext { top: 1_000 }],
+            })
+            .expect("facets")
+            .facets
+            .into_iter()
+            .map(|f| (f.key, f.count))
+            .collect();
+        got.sort();
+        got
+    };
+    let mut want: std::collections::BTreeMap<String, u64> = Default::default();
+    for e in &entries {
+        let ext = scour_core::ext_of(e.name());
+        if !ext.is_empty() {
+            *want.entry(ext).or_default() += 1;
+        }
+    }
+    let want: Vec<(String, u64)> = want.into_iter().collect();
+    assert!(want.len() >= 12, "{want:?}");
+
     check(&index, "in five segments");
+    assert_eq!(counted(&index, ""), want, "in five segments");
     index.maintain(Maintenance::Rebuild).expect("rebuild");
     check(&index, "rebuilt into one");
+    assert_eq!(counted(&index, ""), want, "rebuilt into one");
     drop(index);
     let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
     check(&index, "reopened");
