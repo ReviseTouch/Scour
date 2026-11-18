@@ -6491,6 +6491,12 @@
     }
     const go = e.target.closest(".go");
     if (!go) return;
+    /* After a switch this tab's bridge has gone, so nothing here can start
+       another face: say that rather than blame the face. */
+    if (HANDED_OVER) {
+      go.textContent = T("this tab is closed");
+      return;
+    }
     const id = go.closest(".face").dataset.face;
     go.disabled = true;
     SERVICE.face(id === "window" ? "window" : "tui")
@@ -6504,7 +6510,9 @@
       })
       .catch((err) => {
         go.disabled = false;
-        go.textContent = T("not found");
+        /* A fetch that never reached the bridge is a closed tab, not a
+           missing program. */
+        go.textContent = err instanceof TypeError ? T("this tab is closed") : T("not found");
         console.warn("face:", err);
       });
   });

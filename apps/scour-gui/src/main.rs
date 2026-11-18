@@ -483,6 +483,30 @@ struct Args {
     drag: Vec<String>,
 }
 
+/// Some terminals (Ptyxis among them) start their programs without
+/// `WAYLAND_DISPLAY`, so a window opened from the terminal face fell to
+/// XWayland, where winit panics in `get_frame_extents_heuristic`. A compositor
+/// that answers on its socket is the session's, whatever the variable says.
+/// Called before any thread exists, which is what makes `set_var` sound.
+#[cfg(target_os = "linux")]
+fn wayland_found_again() {
+    let unset = std::env::var_os("WAYLAND_DISPLAY").is_none_or(|v| v.is_empty());
+    if !unset || std::env::var_os("SLINT_BACKEND").is_some() {
+        return;
+    }
+    let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        return;
+    };
+    let run = std::path::PathBuf::from(run);
+    for name in ["wayland-0", "wayland-1"] {
+        if std::os::unix::net::UnixStream::connect(run.join(name)).is_ok() {
+            // SAFETY: the process has one thread at this point.
+            unsafe { std::env::set_var("WAYLAND_DISPLAY", name) };
+            return;
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // `--version` and `--help` answer and leave, before any socket or window.
     let args = <Args as clap::Parser>::parse();
@@ -507,6 +531,8 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    #[cfg(target_os = "linux")]
+    wayland_found_again();
     let launched = std::time::Instant::now();
     let config = scour_config::Config::load_or_default().0;
     // A window from a desktop entry has nowhere for standard error to go.

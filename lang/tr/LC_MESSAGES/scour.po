@@ -1031,6 +1031,9 @@ msgstr "aç"
 msgid "not found"
 msgstr "bulunamadı"
 
+msgid "this tab is closed"
+msgstr "bu sekme kapandı"
+
 msgid "starting…"
 msgstr "başlatılıyor…"
 
