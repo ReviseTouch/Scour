@@ -1575,6 +1575,12 @@
   }
   .set-nav .badge[hidden] { display: none; }
   .set-foot { margin: auto 10px 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+  /* A face chosen in General: started from here, at the foot of the list. */
+  .set-restart { margin: auto 10px 0; display: flex; flex-direction: column; gap: 6px; }
+  .set-restart[hidden] { display: none; }
+  .set-restart p { margin: 0; font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+  .set-restart[hidden] + .set-foot, .set-restart:not([hidden]) + .set-foot { margin-top: 10px; }
+  .set-restart:not([hidden]) + .set-foot { display: none; }
   .set-main { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 26px 22px; box-sizing: border-box; }
   .set-main h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; color: var(--ink); }
   .set-lead { margin: 0 0 16px; font-size: 12.5px; color: var(--ink-2); }
@@ -1794,6 +1800,10 @@
         <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
         <button type="button" data-sec="index"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg><span data-t="Index"></span></button>
         <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
+          <div class="set-restart" id="set-restart" hidden>
+            <p id="set-restart-what"></p>
+            <button type="button" class="set-push asking" id="set-restart-go" data-t="Restart"></button>
+          </div>
           <p class="set-foot" data-t="Changes apply at once; there is nothing to save. Esc closes."></p>
         </nav>
         <div class="set-main">
@@ -6479,10 +6489,20 @@
         `<span class="dot">${here ? "●" : "○"}</span>` +
         `<span class="name">${esc(label)}</span>` +
         `<span class="aside">${esc(aside)}</span></button>` +
-        (armed ? `<div class="say"><p>${esc(note)}</p>` +
-                 `<button type="button" class="go">${esc(T("open"))}</button></div>` : "") +
+        (armed ? `<div class="say"><p>${esc(note)}</p></div>` : "") +
         `</div>`;
     };
+    /* The choice is started from the foot of the settings list. */
+    const foot = document.getElementById("set-restart");
+    foot.hidden = !ARMED;
+    if (ARMED) {
+      const name = ARMED === "window" ? T("Window") : T("Terminal");
+      document.getElementById("set-restart-what").textContent =
+        T("Scour opens again as: {face}", { face: name });
+      const go = document.getElementById("set-restart-go");
+      go.disabled = false;
+      go.textContent = T("Restart");
+    }
     document.getElementById("faces-body").innerHTML =
       row("browser", T("Browser"), T("running now"), "") +
       row("window", T("Window"),
@@ -6501,19 +6521,23 @@
       drawFaces();
       return;
     }
-    const go = e.target.closest(".go");
-    if (!go) return;
+  });
+
+  document.getElementById("set-restart-go").addEventListener("click", (e) => {
+    const go = e.currentTarget;
+    if (!ARMED) return;
     /* After a switch this tab's bridge has gone, so nothing here can start
        another face: say that rather than blame the face. */
     if (HANDED_OVER) {
       go.textContent = T("this tab is closed");
       return;
     }
-    const id = go.closest(".face").dataset.face;
+    const id = ARMED;
     go.disabled = true;
     SERVICE.face(id === "window" ? "window" : "tui")
       .then((r) => {
         ARMED = "";
+        drawFaces();
         facesPanel.hidden = true;
         facesBtn.setAttribute("aria-expanded", "false");
         /* Switching is moving, so the server goes; a tab cannot close
@@ -6966,7 +6990,13 @@
     seg("seg-lang", [["", T("The desktop's")], ...LANGUAGES.map(({ tag, name }) => [tag, name])],
       k.language || "", (v) => { KEPT.language = v; chooseLanguage(v); drawSettings(); });
     seg("seg-face", [["window", T("Window")], ["browser", T("Browser")], ["tui", T("Terminal")]],
-      k.face || "window", (v) => { KEPT.face = v; keep({ face: v }); drawSettings(); });
+      k.face || "window", (v) => {
+        KEPT.face = v; keep({ face: v });
+        /* Another face chosen: the foot offers to start it now. */
+        ARMED = v === "browser" ? "" : v;
+        drawFaces();
+        drawSettings();
+      });
     seg("seg-theme", [["", T("The desktop's")], ["light", T("Light")], ["dark", T("Dark")]],
       k.theme || "", (v) => { KEPT.theme = v; applyTheme(v); keep({ theme: v }); drawSettings(); });
     const mode = (document.querySelector("#views button[aria-pressed=true]") || {}).dataset;

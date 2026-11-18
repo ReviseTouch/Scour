@@ -2380,3 +2380,12 @@ msgstr "ad bunu içerir, bir yazım hatasına kadar"
 
 msgid "the name has these letters in this order, with anything between"
 msgstr "adda bu harfler bu sırayla geçer, aralarında ne olursa olsun"
+
+msgid "Restart"
+msgstr "Yeniden başlat"
+
+msgid "Scour opens again as:"
+msgstr "Scour şununla yeniden açılır:"
+
+msgid "Scour opens again as: {face}"
+msgstr "Scour şununla yeniden açılır: {face}"

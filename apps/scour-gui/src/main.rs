@@ -5635,6 +5635,8 @@ fn words(window: &MainWindow, cat: &Catalogue) {
         "Starts scour-web, which listens on 127.0.0.1:7621 and opens your browser. Nothing outside this computer can reach it, and the link carries a token that changes every run.",
     ));
     window.set_face_go(t(cat, "open"));
+    window.set_restart_as(t(cat, "Scour opens again as:"));
+    window.set_word_restart(t(cat, "Restart"));
     // The terminal one is offered when there is something to run.
     window.set_face_tui_ready(scour_launch::face("tui").is_some());
     window.set_report_web(t(cat, "Open the full report in the browser"));

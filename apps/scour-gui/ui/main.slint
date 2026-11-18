@@ -665,7 +665,7 @@ component FaceRow inherits Rectangle {
                 horizontal-stretch: 1;
                 vertical-alignment: center;
             }
-            VerticalLayout {
+            if root.go != "": VerticalLayout {
                 alignment: center;
                 Push {
                     label: root.go;
@@ -1588,6 +1588,8 @@ export component MainWindow inherits Window {
     callback report-search();
     // Which way of running Scour to offer, and which one is running now.
     in-out property <string> armed-face;
+    in property <string> restart-as;
+    in property <string> word-restart;
     in property <string> faces-title;
     in property <string> face-window;
     in property <string> face-window-aside;
@@ -4970,7 +4972,26 @@ export component MainWindow inherits Window {
                             clicked => { root.settings-picked("about"); }
                         }
                         Rectangle { vertical-stretch: 1; }
+                        // A face chosen in General is started from here.
+                        if root.armed-face != "": VerticalLayout {
+                            spacing: 6px;
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-bottom: 4px;
+                            Text {
+                                text: root.restart-as + " " + (root.armed-face == "tui" ? root.face-tui : root.face-web);
+                                color: Theme.ink-2;
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
+                            Push {
+                                label: root.word-restart;
+                                asking: true;
+                                clicked => { root.face-picked(root.armed-face); }
+                            }
+                        }
                         Text {
+                            visible: root.armed-face == "";
                             text: root.settings-foot;
                             color: Theme.ink-3;
                             font-size: 11.5px;
@@ -5065,7 +5086,11 @@ export component MainWindow inherits Window {
                                             labels: root.face-labels;
                                             values: ["window", "browser", "tui"];
                                             value: root.face-default;
-                                            picked(v) => { root.face-default-picked(v); }
+                                            picked(v) => {
+                                                root.face-default-picked(v);
+                                                // Another face chosen: the foot offers to start it now.
+                                                root.armed-face = v == "window" ? "" : v;
+                                            }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }
@@ -5108,7 +5133,6 @@ export component MainWindow inherits Window {
                     aside: root.face-tui-ready ? "" : root.face-tui-aside;
                     ready: root.face-tui-ready;
                     armed: root.armed-face == "tui";
-                    go: root.face-go;
                     picked => { root.armed-face = "tui"; }
                     confirmed => { root.face-picked("tui"); }
                 }
@@ -5116,7 +5140,6 @@ export component MainWindow inherits Window {
                     label: root.face-web;
                     note: root.face-web-note;
                     armed: root.armed-face == "browser";
-                    go: root.face-go;
                     picked => { root.armed-face = "browser"; }
                     confirmed => { root.face-picked("browser"); }
                 }
