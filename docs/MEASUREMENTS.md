@@ -556,7 +556,7 @@ read: every window but those over one character, or one of the term's
 swapped spellings whole. Five letters and one mistake leave no window that
 must survive, and every name is read. A name is first asked for the term's
 byte pairs (a load a byte, nothing carried), then for the edit distance kept
-as bit columns (Myers; Hyyrö for the swap) — 58 ns a name alone, 16 with the
+as bit columns (Myers; Hyyrö for the swap) — 58 ns a name alone, 12 with the
 pairs in front.
 
 | query, count cap 1,000 | ms | rows read |
