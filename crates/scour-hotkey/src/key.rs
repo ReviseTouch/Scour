@@ -363,9 +363,7 @@ impl Key {
             b'A'..=b'Z' => (vk as char).to_ascii_lowercase().to_string(),
             b'0'..=b'9' => (vk as char).to_string(),
             0x70..=0x7b => format!("F{}", vk - 0x70 + 1),
-            _ => (*CODES.iter().find(|(_, code, ..)| *code == vk)?)
-                .0
-                .to_owned(),
+            _ => CODES.iter().find(|(_, code, ..)| *code == vk)?.0.to_owned(),
         };
         let mut mods = Vec::new();
         for (bit, m) in [

@@ -775,7 +775,8 @@ impl Engine {
         let mut res = self.page_of(query, sort, descending, page)?;
         // On every path, cached included: a warning that comes and goes teaches nothing.
         res.misread = misread(query);
-        if res.total == 0 && page.offset == 0 {
+        // A first page with nothing on it; a count asks for no page at all.
+        if res.total == 0 && page.offset == 0 && page.limit > 0 {
             res.similar = self.similar(query);
         }
         self.weigh_folders(&mut res);
@@ -812,7 +813,7 @@ impl Engine {
                 },
             })
             .ok()?;
-        let found = (counted.total > 0).then(|| scour_core::Similar {
+        let found = (counted.total > 0).then_some(scour_core::Similar {
             total: counted.total,
             capped: counted.capped,
             query: text,
