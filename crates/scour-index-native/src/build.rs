@@ -28,7 +28,8 @@ pub struct SegmentBytes {
     pub porder: Vec<u8>,
     /// The rows in folded-name order: a packed row number and one tie bit a row.
     pub norder: Vec<u8>,
-    /// The rows in folded-extension order, grouped as the name order is.
+    /// The rows in folded-extension order, grouped as the name order is and
+    /// stored as steps. See [`crate::extension_order`].
     pub eorder: Vec<u8>,
 }
 

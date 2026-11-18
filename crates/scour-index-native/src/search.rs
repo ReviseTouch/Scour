@@ -44,31 +44,31 @@ pub struct Segment<'a> {
 }
 
 /// Either persisted text order; both have the same grouped-row operations.
-#[derive(Clone, Copy)]
+/// The extension order is read a chunk at a time, and the chunk is kept.
 enum GroupedPositions<'a> {
     Name(NameOrder<'a>),
-    Extension(ExtensionOrder<'a>),
+    Extension(ExtensionOrder<'a>, crate::extension_order::Chunk),
 }
 
 impl GroupedPositions<'_> {
-    fn rows(self) -> usize {
+    fn rows(&self) -> usize {
         match self {
             GroupedPositions::Name(order) => order.rows(),
-            GroupedPositions::Extension(order) => order.rows(),
+            GroupedPositions::Extension(order, _) => order.rows(),
         }
     }
 
-    fn at(self, i: usize) -> Option<u32> {
+    fn at(&mut self, i: usize) -> Option<u32> {
         match self {
             GroupedPositions::Name(order) => order.at(i),
-            GroupedPositions::Extension(order) => order.at(i),
+            GroupedPositions::Extension(order, chunk) => chunk.at(order, i),
         }
     }
 
-    fn group_at_or_before(self, i: usize) -> Option<usize> {
+    fn group_at_or_before(&self, i: usize) -> Option<usize> {
         match self {
             GroupedPositions::Name(order) => order.group_at_or_before(i),
-            GroupedPositions::Extension(order) => order.group_at_or_before(i),
+            GroupedPositions::Extension(order, _) => order.group_at_or_before(i),
         }
     }
 }
@@ -1473,9 +1473,9 @@ fn walk_segment<'v>(
         .or_else(|| {
             seg.eorder
                 .filter(|_| extension_stream)
-                .map(GroupedPositions::Extension)
+                .map(|order| GroupedPositions::Extension(order, Default::default()))
         });
-    if let Some(positions) = grouped_positions {
+    if let Some(mut positions) = grouped_positions {
         /* Ascending text keys are the position list as written; descending reads
          * primary-key groups from the end but each group forwards. Ties stay
          * newest-first then path-first in both directions. */

@@ -59,28 +59,34 @@ impl<'a> NameOrder<'a> {
         ((row as usize) < self.rows).then_some(row as u32)
     }
 
-    /// The start of the group containing position `i`, by scanning the boundary
-    /// bytes: bit at a time makes a million-row tie a million branches.
+    /// The start of the group containing position `i`.
     pub(crate) fn group_at_or_before(&self, i: usize) -> Option<usize> {
-        if i >= self.rows {
-            return None;
-        }
-        let byte = i / 8;
-        let bit = i % 8;
-        let mask = if bit == 7 {
-            u8::MAX
-        } else {
-            (1u8 << (bit + 1)) - 1
-        };
-        let here = self.groups.get(byte).copied().unwrap_or(0) & mask;
-        if here != 0 {
-            return Some(byte * 8 + (7 - here.leading_zeros() as usize));
-        }
-        self.groups[..byte]
-            .iter()
-            .rposition(|&bits| bits != 0)
-            .map(|at| at * 8 + (7 - self.groups[at].leading_zeros() as usize))
+        group_at_or_before(self.groups, self.rows, i)
     }
+}
+
+/// The last set bit at or before `i` in a bitmap of group starts, by scanning
+/// the bytes: bit at a time makes a million-row tie a million branches.
+pub(crate) fn group_at_or_before(groups: &[u8], rows: usize, i: usize) -> Option<usize> {
+    if i >= rows {
+        return None;
+    }
+    let byte = i / 8;
+    let bit = i % 8;
+    let mask = if bit == 7 {
+        u8::MAX
+    } else {
+        (1u8 << (bit + 1)) - 1
+    };
+    let here = groups.get(byte).copied().unwrap_or(0) & mask;
+    if here != 0 {
+        return Some(byte * 8 + (7 - here.leading_zeros() as usize));
+    }
+    let before = groups.get(..byte)?;
+    before
+        .iter()
+        .rposition(|&bits| bits != 0)
+        .map(|at| at * 8 + (7 - before[at].leading_zeros() as usize))
 }
 
 /// Order rows by their already-folded names. Rows carry the stored newest-first
@@ -93,19 +99,27 @@ fn build(rows: usize, names: &[u8], order: Vec<u32>) -> Vec<u8> {
 /// Build the name order and hand its row-list allocation back, so the extension
 /// order reuses those bytes rather than adding four per row to peak memory.
 pub(crate) fn build_reusing(rows: usize, names: &[u8], order: Vec<u32>) -> (Vec<u8>, Vec<u32>) {
-    build_keyed(rows, names, order, |name| name, None)
+    let (order, groups) = order_keyed(rows, names, order, |name| name, None);
+    let width = crate::packed::width_for(rows);
+    let packed = crate::packed::len(rows, width).unwrap_or(0);
+    let mut out = Vec::with_capacity(4 + packed + groups.len());
+    out.extend_from_slice(&(rows as u32).to_le_bytes());
+    crate::packed::pack(order.iter().map(|&row| u64::from(row)), width, &mut out);
+    out.extend_from_slice(&groups);
+    (out, order)
 }
 
-/// Build this grouped-row format using one derived key per name. A clear bit in
-/// `eligible` gives that row an empty key — eligibility decided pre-fold, keys
-/// compared post-fold, without a second offset table.
-pub(crate) fn build_keyed(
+/// The rows ordered by one derived key per name, and a bit per position that
+/// starts a group of equal keys. A clear bit in `eligible` gives that row an
+/// empty key — eligibility decided pre-fold, keys compared post-fold, without
+/// a second offset table.
+pub(crate) fn order_keyed(
     rows: usize,
     names: &[u8],
     mut order: Vec<u32>,
     key: for<'b> fn(&'b [u8]) -> &'b [u8],
     eligible: Option<&[u8]>,
-) -> (Vec<u8>, Vec<u32>) {
+) -> (Vec<u32>, Vec<u8>) {
     let name_at = name_offsets(rows, names);
     let name = |row: u32| -> &[u8] {
         let (a, b) = (
@@ -135,13 +149,7 @@ pub(crate) fn build_keyed(
         }
     }
 
-    let width = crate::packed::width_for(rows);
-    let packed = crate::packed::len(rows, width).unwrap_or(0);
-    let mut out = Vec::with_capacity(4 + packed + groups.len());
-    out.extend_from_slice(&(rows as u32).to_le_bytes());
-    crate::packed::pack(order.iter().map(|&row| u64::from(row)), width, &mut out);
-    out.extend_from_slice(&groups);
-    (out, order)
+    (order, groups)
 }
 
 /// Where each NUL-terminated name begins, with one final end position.
