@@ -358,9 +358,37 @@ fn hotkey(deed: &Deed) -> Got {
     }
 }
 
+/// The query an ask belongs to, when it belongs to one.
+fn generation_of(ask: &Ask) -> Option<u64> {
+    match ask {
+        Ask::Search { generation, .. }
+        | Ask::Facets { generation, .. }
+        | Ask::Explain { generation, .. }
+        | Ask::Count { generation, .. } => Some(*generation),
+        _ => None,
+    }
+}
+
+/// The next ask worth answering. Typing queues a search, a count and the
+/// rail's facets per letter, answered one after another on one connection: a
+/// question about `ra` over a million rows kept `rapor`'s first page waiting
+/// two seconds. Whatever belongs to a query already replaced is dropped.
+fn next_ask(inbox: &Receiver<Ask>, queued: &mut std::collections::VecDeque<Ask>) -> Option<Ask> {
+    if queued.is_empty() {
+        queued.push_back(inbox.recv().ok()?);
+    }
+    while let Ok(more) = inbox.try_recv() {
+        queued.push_back(more);
+    }
+    let newest = queued.iter().filter_map(generation_of).max();
+    queued.retain(|a| generation_of(a).is_none_or(|g| Some(g) >= newest));
+    queued.pop_front()
+}
+
 fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<Got>) {
     let mut client: Option<Client> = None;
-    while let Ok(ask) = inbox.recv() {
+    let mut queued = std::collections::VecDeque::new();
+    while let Some(ask) = next_ask(inbox, &mut queued) {
         if matches!(ask, Ask::Done) {
             return;
         }
@@ -516,7 +544,14 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Request::Search { page, .. } => (page.offset, page.limit),
             _ => (0, 0),
         };
-        match link.call(request) {
+        let asked_at = std::time::Instant::now();
+        let name = request.name();
+        let reply = link.call(request);
+        crate::app::trace(&format!(
+            "{name} gen {generation} answered in {} ms",
+            asked_at.elapsed().as_millis()
+        ));
+        match reply {
             Ok(Response::Search(reply)) => {
                 let _ = out.send(Got::Search {
                     generation,
