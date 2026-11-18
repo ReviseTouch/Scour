@@ -1907,7 +1907,7 @@ fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry
 
 /// Give freed memory back to the operating system. A fold builds a whole segment
 /// in memory and drops it, and glibc keeps the freed arena in its own pools
-/// rather than returning it. A no-op off Linux/glibc.
+/// rather than returning it.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn trim_allocator() {
     unsafe extern "C" {
@@ -1918,7 +1918,18 @@ fn trim_allocator() {
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+/// The process heap, which Rust allocates from on Windows, keeps freed blocks
+/// committed; compacting it decommits what is free.
+#[cfg(windows)]
+fn trim_allocator() {
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapCompact};
+    // SAFETY: the process's own heap, which lives as long as the process.
+    unsafe {
+        HeapCompact(GetProcessHeap(), 0);
+    }
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), windows)))]
 fn trim_allocator() {}
 
 fn trim_builder_allocator() {

@@ -271,6 +271,27 @@ impl Live {
                 let _ = unsafe { m.unchecked_advise(memmap2::UncheckedAdvice::DontNeed) };
             }
         }
+        // Windows has no DONTNEED for a view. Unlocking a range that was never
+        // locked takes its pages out of the working set, which is the same: a
+        // clean file page leaves, and a later read faults it back from the file.
+        #[cfg(windows)]
+        for part in self
+            .maps
+            .iter()
+            .chain(self.porder.iter())
+            .chain(self.norder.iter())
+            .chain(self.eorder.iter())
+        {
+            if let Part::Mapped(m) = part
+                && !m.is_empty()
+            {
+                // SAFETY: the range is this mapping's own; unlocking changes
+                // residency only, never the bytes.
+                unsafe {
+                    windows_sys::Win32::System::Memory::VirtualUnlock(m.as_ptr().cast(), m.len());
+                }
+            }
+        }
     }
 
     /// Take on another copy's live bits and its death count: the same segment,
