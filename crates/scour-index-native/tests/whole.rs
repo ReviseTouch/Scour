@@ -5200,7 +5200,7 @@ fn spellings_survive_the_fold_they_are_stored_against() {
 /// byte short or a byte long is damage, and the index says which file.
 #[test]
 fn a_part_of_the_wrong_length_is_refused_by_name() {
-    for part in ["spell", "norder", "eorder", "porder"] {
+    for part in ["spell", "norder", "eorder", "porder", "ids"] {
         for longer in [false, true] {
             let tmp = tempfile::tempdir().expect("tmpdir");
             {

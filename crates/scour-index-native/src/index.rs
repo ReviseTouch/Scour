@@ -51,8 +51,9 @@ const META_FILE: &str = "native-index.json";
 /// row's identity its path — three identity columns went and the lookup table is
 /// keyed on the path; 9 added the link count, without which a disk-usage report
 /// counts a hard-linked file once per name; 10 keeps a name's spelling as its
-/// difference from the fold, and the spelled arena went.
-const FORMAT: u32 = 10;
+/// difference from the fold, and the spelled arena went; 11 packed the row
+/// orders and the path lookup table to the bits a row number needs.
+const FORMAT: u32 = 11;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {

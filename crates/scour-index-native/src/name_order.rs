@@ -1,14 +1,17 @@
 //! The rows of a segment, in folded-name order.
 //!
-//! Four bytes a row, plus one bit marking the start of each equal-name group.
+//! A row number a row, as wide as the segment's rows need, plus one bit marking
+//! the start of each equal-name group.
 //! That bit is what makes descending order correct: reversing the row list
 //! would reverse the newest-first tie order too, and that stays in both.
 
-/// The rows of one segment in ascending folded-name order: a count, one 32-bit
+/// The rows of one segment in ascending folded-name order: a count, one packed
 /// row number per row, then one bit per position starting an equal-name group.
 #[derive(Debug, Clone, Copy)]
 pub struct NameOrder<'a> {
     rows: usize,
+    /// The bits of one row number: [`crate::packed::width_for`] of the count.
+    width: u32,
     rows_bytes: &'a [u8],
     groups: &'a [u8],
 }
@@ -18,7 +21,8 @@ impl<'a> NameOrder<'a> {
     /// all of its rows exactly. Absence is the segment reader's business.
     pub fn open(bytes: &'a [u8]) -> Option<NameOrder<'a>> {
         let rows = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
-        let order_len = rows.checked_mul(4)?;
+        let width = crate::packed::width_for(rows);
+        let order_len = crate::packed::len(rows, width)?;
         let groups_len = rows.div_ceil(8);
         let end = 4usize.checked_add(order_len)?.checked_add(groups_len)?;
         if bytes.len() != end {
@@ -31,6 +35,7 @@ impl<'a> NameOrder<'a> {
         }
         Some(NameOrder {
             rows,
+            width,
             rows_bytes,
             groups,
         })
@@ -46,9 +51,12 @@ impl<'a> NameOrder<'a> {
 
     /// The row whose folded name is `i`-th in ascending order.
     pub fn at(&self, i: usize) -> Option<u32> {
-        let at = i.checked_mul(4)?;
-        let row = u32::from_le_bytes(self.rows_bytes.get(at..at + 4)?.try_into().ok()?);
-        ((row as usize) < self.rows).then_some(row)
+        // The last byte's spare bits are not a position.
+        if i >= self.rows {
+            return None;
+        }
+        let row = crate::packed::get(self.rows_bytes, self.width, i)?;
+        ((row as usize) < self.rows).then_some(row as u32)
     }
 
     /// The start of the group containing position `i`, by scanning the boundary
@@ -127,11 +135,11 @@ pub(crate) fn build_keyed(
         }
     }
 
-    let mut out = Vec::with_capacity(4 + rows * 4 + groups.len());
+    let width = crate::packed::width_for(rows);
+    let packed = crate::packed::len(rows, width).unwrap_or(0);
+    let mut out = Vec::with_capacity(4 + packed + groups.len());
     out.extend_from_slice(&(rows as u32).to_le_bytes());
-    for &row in &order {
-        out.extend_from_slice(&row.to_le_bytes());
-    }
+    crate::packed::pack(order.iter().map(|&row| u64::from(row)), width, &mut out);
     out.extend_from_slice(&groups);
     (out, order)
 }
@@ -195,7 +203,10 @@ mod tests {
         assert!(NameOrder::open(&[]).is_none());
         assert!(NameOrder::open(&[9, 0, 0, 0]).is_none());
         // One row and a valid row number, but no first-group marker.
-        assert!(NameOrder::open(&[1, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
+        assert!(NameOrder::open(&[1, 0, 0, 0, 0, 0]).is_none());
+        // And with it: one position, whatever the byte's spare bits say.
+        let one = NameOrder::open(&[1, 0, 0, 0, 0, 1]).expect("one row");
+        assert_eq!([one.at(0), one.at(1), one.at(7)], [Some(0), None, None]);
     }
 
     #[test]

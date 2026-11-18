@@ -23,9 +23,10 @@ pub struct SegmentBytes {
     pub tri_dict: Vec<u8>,
     pub tri_post: Vec<u8>,
     pub alive: Vec<u8>,
-    /// The rows in ascending path order, four bytes a row. See [`crate::order`].
+    /// The rows in ascending path order, a packed row number each. See
+    /// [`crate::order`].
     pub porder: Vec<u8>,
-    /// The rows in folded-name order: four bytes and one tie bit a row.
+    /// The rows in folded-name order: a packed row number and one tie bit a row.
     pub norder: Vec<u8>,
     /// The rows in folded-extension order, grouped as the name order is.
     pub eorder: Vec<u8>,

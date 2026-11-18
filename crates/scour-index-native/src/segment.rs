@@ -335,6 +335,10 @@ impl Live {
             }),
         )?;
         whole(
+            "ids",
+            IdMap::open(&maps[3]).is_some_and(|ids| ids.len() == rows),
+        )?;
+        whole(
             "cols",
             ColumnBlocks::open(&maps[1]).is_some_and(|c| c.rows() == rows && c.is_whole()),
         )?;
@@ -462,35 +466,15 @@ impl Live {
                 }
             }
         } else {
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < ids.len() && j < keys.len() {
-                let h = ids.at(i).0;
-                match h.cmp(&keys[j].0) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        // A run of equal hashes each side: both are tiny, so
-                        // the cross product is cheap.
-                        let mut i2 = i;
-                        while i2 < ids.len() && ids.at(i2).0 == h {
-                            i2 += 1;
-                        }
-                        let mut j2 = j;
-                        while j2 < keys.len() && keys[j2].0 == h {
-                            j2 += 1;
-                        }
-                        for k in i..i2 {
-                            for w in j..j2 {
-                                if !decided[keys[w].1 as usize] {
-                                    pairs.push((ids.at(k).1 as usize, keys[w].1));
-                                }
-                            }
-                        }
-                        i = i2;
-                        j = j2;
+            ids.join(
+                keys.len(),
+                |j| keys[j].0,
+                |row, j| {
+                    if !decided[keys[j].1 as usize] {
+                        pairs.push((row as usize, keys[j].1));
                     }
-                }
-            }
+                },
+            );
         }
         if pairs.is_empty() {
             return Ok(());
@@ -663,34 +647,11 @@ impl Live {
                 }
                 return Ok(gone);
             }
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < ids.len() && j < wanted.len() {
-                let (h, row) = ids.at(i);
-                match h.cmp(&wanted[j].0) {
-                    std::cmp::Ordering::Less => i += 1,
-                    std::cmp::Ordering::Greater => j += 1,
-                    std::cmp::Ordering::Equal => {
-                        // A run of equal hashes each side: both are tiny, so
-                        // the cross product is cheap.
-                        let mut i2 = i;
-                        while i2 < ids.len() && ids.at(i2).0 == h {
-                            i2 += 1;
-                        }
-                        let mut j2 = j;
-                        while j2 < wanted.len() && wanted[j2].0 == h {
-                            j2 += 1;
-                        }
-                        for k in i..i2 {
-                            for w in j..j2 {
-                                pairs.push((ids.at(k).1 as usize, w));
-                            }
-                        }
-                        let _ = row;
-                        i = i2;
-                        j = j2;
-                    }
-                }
-            }
+            ids.join(
+                wanted.len(),
+                |j| wanted[j].0,
+                |row, j| pairs.push((row as usize, j)),
+            );
             if pairs.is_empty() {
                 Vec::new()
             } else {

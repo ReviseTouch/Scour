@@ -1,6 +1,6 @@
 //! How each name is spelled, stored as its difference from the fold.
 //!
-//! Three names in four fold to themselves, and most of the rest differ only in
+//! Seven names in ten fold to themselves, and most of the rest differ only in
 //! bytes `0x20` apart — ASCII and Latin-1 capitals. So the spelling is the
 //! folded arena plus, a block: two bits a row saying how it differs, and for
 //! each row that does a bit a byte (flip `0x20`), two bits a byte (that, `ı`,

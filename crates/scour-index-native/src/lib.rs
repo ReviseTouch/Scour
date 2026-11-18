@@ -23,6 +23,7 @@ mod lock;
 mod name_order;
 mod names;
 mod order;
+mod packed;
 mod rank;
 mod search;
 mod segment;

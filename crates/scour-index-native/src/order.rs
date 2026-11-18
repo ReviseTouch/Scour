@@ -2,18 +2,21 @@
 //!
 //! No stored number bounds a path and the directory is front-coded, so building
 //! a path key costs two reads a matching row — 31 ms of walk became 202 for a
-//! page of 200 over 2,234,583 rows. Stored instead: four bytes a row.
+//! page of 200 over 2,234,583 rows. Stored instead: a row number a row, as
+//! wide as the segment's rows need — 23 bits for five million.
 
 use std::cmp::Ordering;
 
 use crate::dirs::DirTable;
 
-/// The rows of one segment in ascending path order: a count, then one 32-bit
+/// The rows of one segment in ascending path order: a count, then one packed
 /// row number per row. Positions are the segment's own, so a merge across
 /// segments still compares real paths.
 #[derive(Debug, Clone, Copy)]
 pub struct PathOrder<'a> {
     rows: usize,
+    /// The bits of one row number: [`crate::packed::width_for`] of the count.
+    width: u32,
     rows_bytes: &'a [u8],
 }
 
@@ -22,11 +25,13 @@ impl<'a> PathOrder<'a> {
     /// whole — while an *absent* one is [`crate::Live`]'s distinction to make.
     pub fn open(bytes: &'a [u8]) -> Option<PathOrder<'a>> {
         let rows = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
-        if bytes.len() != 4usize.checked_add(rows.checked_mul(4)?)? {
+        let width = crate::packed::width_for(rows);
+        if bytes.len() != 4usize.checked_add(crate::packed::len(rows, width)?)? {
             return None;
         }
         Some(PathOrder {
             rows,
+            width,
             rows_bytes: &bytes[4..],
         })
     }
@@ -42,9 +47,12 @@ impl<'a> PathOrder<'a> {
     /// The row whose path is `i`-th in ascending order. A row number this
     /// segment does not hold answers `None` rather than reaching a column read.
     pub fn at(&self, i: usize) -> Option<u32> {
-        let at = i.checked_mul(4)?;
-        let row = u32::from_le_bytes(self.rows_bytes.get(at..at + 4)?.try_into().ok()?);
-        ((row as usize) < self.rows).then_some(row)
+        // The last byte's spare bits are not a position.
+        if i >= self.rows {
+            return None;
+        }
+        let row = crate::packed::get(self.rows_bytes, self.width, i)?;
+        ((row as usize) < self.rows).then_some(row as u32)
     }
 }
 
@@ -80,11 +88,10 @@ pub fn build(dirs: &DirTable<'_>, dir_of: &[u32], names: &[u8]) -> Vec<u8> {
             .then(a.cmp(&b))
     });
 
-    let mut out = Vec::with_capacity(4 + rows * 4);
+    let width = crate::packed::width_for(rows);
+    let mut out = Vec::with_capacity(4 + crate::packed::len(rows, width).unwrap_or(0));
     out.extend_from_slice(&(rows as u32).to_le_bytes());
-    for row in order {
-        out.extend_from_slice(&row.to_le_bytes());
-    }
+    crate::packed::pack(order.into_iter().map(u64::from), width, &mut out);
     out
 }
 
@@ -211,10 +218,13 @@ mod tests {
     #[test]
     fn a_position_naming_a_row_the_segment_lacks_answers_nothing() {
         // Right length, wrong contents: a row number out of range must not
-        // reach a column read.
-        let blob = [1u8, 0, 0, 0, 7, 0, 0, 0];
+        // reach a column read. Three rows are two bits each: 0, 3 and 1.
+        let blob = [3u8, 0, 0, 0, 0b01_11_00];
         let order = PathOrder::open(&blob).expect("order");
-        assert_eq!(order.rows(), 1);
-        assert_eq!(order.at(0), None);
+        assert_eq!(order.rows(), 3);
+        assert_eq!(
+            [order.at(0), order.at(1), order.at(2), order.at(3)],
+            [Some(0), None, Some(1), None]
+        );
     }
 }
