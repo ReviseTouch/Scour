@@ -93,6 +93,12 @@ pub enum Match {
     /// The name contains this, **spelled exactly like this**: Everything's `case:`.
     /// Compared against the name as written, which the index keeps beside the folded one.
     NameContainsCased(String),
+    /// The name contains something within this many typing mistakes of this — a
+    /// letter wrong, missing, extra, or two swapped. Accents are never mistakes.
+    NameNear(String, u8),
+    /// The name holds these letters in this order, with anything between them:
+    /// `scrgui` is in `scour-gui`.
+    NameLetters(String),
     /// A stored number compared to a value: `uid:1000`, `gid:>100`.
     Num(NumField, Cmp, i64),
     /// A stored number masked and compared, covering `find`'s three forms: `perm:644`
@@ -131,6 +137,22 @@ pub struct Group {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Ast {
     pub groups: Vec<Group>,
+    /// A letter and the same letter with a mark are different letters: `sirket`
+    /// does not find `şirket`. Off, only a term typed with a mark is that strict.
+    #[serde(default)]
+    pub exact_accents: bool,
+}
+
+/// How many typing mistakes a term of this length is forgiven: none up to four
+/// characters, where a mistake is another word; one up to eight; then two.
+pub fn mistakes_allowed(term: &str) -> u8 {
+    match term.chars().count() {
+        0..=4 => 0,
+        5..=8 => 1,
+        9..=64 => 2,
+        // The verifier is one machine word wide.
+        _ => 0,
+    }
 }
 
 impl Ast {
@@ -143,6 +165,23 @@ impl Ast {
         self.groups
             .iter()
             .flat_map(|g| g.alts.iter().map(|(_, m)| m))
+    }
+
+    /// The same query with every plain name term forgiven its typing mistakes;
+    /// `None` when no term is long enough to be, or all already are.
+    pub fn forgiving(&self) -> Option<Ast> {
+        let mut out = self.clone();
+        let mut changed = false;
+        for (negated, m) in out.groups.iter_mut().flat_map(|g| g.alts.iter_mut()) {
+            if let (false, Match::NameContains(t)) = (*negated, &*m) {
+                let edits = mistakes_allowed(t);
+                if edits > 0 {
+                    *m = Match::NameNear(t.clone(), edits);
+                    changed = true;
+                }
+            }
+        }
+        changed.then_some(out)
     }
 
     /// Does this query ask about document contents?
@@ -174,6 +213,7 @@ mod tests {
     fn ast(alts: Vec<Vec<(bool, Match)>>) -> Ast {
         Ast {
             groups: alts.into_iter().map(|alts| Group { alts }).collect(),
+            ..Ast::default()
         }
     }
 
@@ -190,6 +230,30 @@ mod tests {
             vec![(false, Match::Ext(vec!["pdf".into()]))],
         ]);
         assert_eq!(q.narrowing_terms(3), vec!["report"]);
+    }
+
+    #[test]
+    fn only_a_plain_positive_term_long_enough_is_forgiven() {
+        let q = ast(vec![
+            vec![(false, Match::NameContains("raporr".into()))],
+            vec![(true, Match::NameContains("taslak".into()))],
+            vec![(false, Match::NameContains("abcd".into()))],
+            vec![(false, Match::NameContains("muhasebeci".into()))],
+            vec![(false, Match::Ext(vec!["pdf".into()]))],
+        ]);
+        let f = q.forgiving().expect("two terms are long enough");
+        assert_eq!(f.groups[0].alts[0].1, Match::NameNear("raporr".into(), 1));
+        assert_eq!(
+            f.groups[3].alts[0].1,
+            Match::NameNear("muhasebeci".into(), 2)
+        );
+        assert_eq!(f.groups[1], q.groups[1]);
+        assert_eq!(f.groups[2], q.groups[2]);
+        assert_eq!(f.forgiving(), None);
+        assert_eq!(
+            ast(vec![vec![(false, Match::NameContains("ab".into()))]]).forgiving(),
+            None
+        );
     }
 
     #[test]

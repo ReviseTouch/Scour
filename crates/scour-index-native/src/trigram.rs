@@ -295,6 +295,49 @@ impl<'a> TrigramIndex<'a> {
         }
         Some(out)
     }
+
+    /// Blocks that could hold `folded` with some of its trigrams spoiled: a
+    /// name near the term still holds all but `spoiled` of the term's windows,
+    /// so a block holding fewer than that is not read. `None` means walk
+    /// everything, which is all a short term or a generous allowance can say.
+    pub fn candidates_near(&self, folded: &[u8], spoiled: usize) -> Option<Vec<u32>> {
+        let windows = folded.len().saturating_sub(2);
+        if self.len == 0 || windows <= spoiled {
+            return None;
+        }
+        let mut need = windows - spoiled;
+        let mut keys: Vec<u32> = Vec::with_capacity(windows);
+        for_each(folded, |k| keys.push(k));
+        keys.sort_unstable();
+        // How many of the term's windows each block holds, a repeat counted
+        // as often as the term repeats it.
+        let mut held = vec![0u8; self.blocks as usize];
+        for same in keys.chunk_by(|a, b| a == b) {
+            let weight = same.len();
+            match self.lookup(same[0]) {
+                Lookup::Absent => {}
+                // Held by every block, as far as anyone can say.
+                Lookup::Everywhere => need = need.saturating_sub(weight),
+                Lookup::Blocks { count, bytes } => {
+                    for block in Self::decode(count, bytes) {
+                        if let Some(n) = held.get_mut(block as usize) {
+                            *n = n.saturating_add(weight as u8);
+                        }
+                    }
+                }
+            }
+        }
+        if need == 0 {
+            return None;
+        }
+        let out: Vec<u32> = (0..self.blocks)
+            .filter(|&b| usize::from(held[b as usize]) >= need)
+            .collect();
+        if out.len() as u32 * 2 > self.blocks {
+            return None;
+        }
+        Some(out)
+    }
 }
 
 /// Both sorted; one pass.

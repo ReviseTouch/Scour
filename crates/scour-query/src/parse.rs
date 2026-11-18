@@ -42,7 +42,10 @@ pub fn parse_in(input: &str, now: i64, home: Option<&str>) -> Ast {
             groups.push(Group { alts });
         }
     }
-    Ast { groups }
+    Ast {
+        groups,
+        ..Ast::default()
+    }
 }
 
 /// The home directory as the index spells paths: forward slashes, no trailing one.
@@ -373,6 +376,14 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
                     .ok()
                     .map(|n| Match::NameLen(cmp, n))
             }
+            // A term too short to be forgiven anything is an ordinary one.
+            Some("fuzzy") => {
+                (!folded.is_empty()).then(|| match scour_core::mistakes_allowed(&folded) {
+                    0 => Match::NameContains(folded.clone()),
+                    edits => Match::NameNear(folded.clone(), edits),
+                })
+            }
+            Some("letters") => (!folded.is_empty()).then(|| Match::NameLetters(folded.clone())),
             // The raw text: the spelling is the whole question.
             Some("case") => (!raw.is_empty()).then(|| Match::NameContainsCased(raw.clone())),
             // A bare number means *equals*: `depth:3` reads as "three deep",
@@ -727,6 +738,35 @@ mod tests {
             vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
         );
         assert_eq!(parse_at("a;b", 0).groups.len(), 2);
+    }
+
+    #[test]
+    fn a_term_can_be_forgiven_its_typing_mistakes_or_be_letters_in_order() {
+        assert_eq!(
+            m("fuzzy:Raporr"),
+            vec![(false, Match::NameNear("raporr".into(), 1))]
+        );
+        assert_eq!(
+            m("benzer:muhasebeci"),
+            vec![(false, Match::NameNear("muhasebeci".into(), 2))]
+        );
+        // Four letters are forgiven nothing: one wrong is another word.
+        assert_eq!(
+            m("fuzzy:main"),
+            vec![(false, Match::NameContains("main".into()))]
+        );
+        assert_eq!(
+            m("letters:ScrGui"),
+            vec![(false, Match::NameLetters("scrgui".into()))]
+        );
+        assert_eq!(
+            m("!harfler:abc"),
+            vec![(true, Match::NameLetters("abc".into()))]
+        );
+        assert_eq!(
+            m("letters:"),
+            vec![(false, Match::NameContains("letters:".into()))]
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ mod source;
 mod status;
 mod syntax;
 
-pub use ast::{Ast, Cmp, Group, Match, NumField, TimeField};
+pub use ast::{Ast, Cmp, Group, Match, NumField, TimeField, mistakes_allowed};
 pub use change::Change;
 pub use entry::{
     Entry, EntryId, Key, Kind, Meta, Owner, SourceId, ext_of, ext_str, kind_of, mode_string,

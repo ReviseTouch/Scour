@@ -2,15 +2,17 @@
 //! Nothing is indexed, nothing terminates early, nothing is capped — a reference
 //! that shares a trick with the thing it checks is not a reference.
 
-use scour_core::text::{DefaultFolder, Folder};
+use scour_core::text::{DefaultFolder, Folder, Unaccented};
 use scour_core::{Ast, Cmp, Entry, Hit, Match, SortKey, TimeField};
 use scour_query::glob_matches;
 
 /// Does this entry satisfy the query?
 pub fn matches(e: &Entry, ast: &Ast) -> bool {
-    ast.groups
-        .iter()
-        .all(|g| g.alts.iter().any(|(neg, m)| matches_one(e, m) != *neg))
+    ast.groups.iter().all(|g| {
+        g.alts
+            .iter()
+            .any(|(neg, m)| matches_one(e, m, ast.exact_accents) != *neg)
+    })
 }
 
 /// The stored number a query names — the brute-force twin of the index's own
@@ -26,12 +28,51 @@ fn num_of(e: &Entry, f: scour_core::NumField) -> i64 {
     }
 }
 
-fn matches_one(e: &Entry, m: &Match) -> bool {
-    let name = DefaultFolder.fold(e.name());
+/// The fewest edits between `term` and any part of `name`, two neighbours
+/// swapped counting as one: the whole table, a cell at a time.
+fn mistakes(term: &str, name: &str) -> usize {
+    let t: Vec<char> = term.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let mut d = vec![vec![0usize; n.len() + 1]; t.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for i in 1..=t.len() {
+        for j in 1..=n.len() {
+            let cost = usize::from(t[i - 1] != n[j - 1]);
+            let mut best = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && t[i - 1] == n[j - 2] && t[i - 2] == n[j - 1] {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
+        }
+    }
+    d[t.len()].iter().copied().min().unwrap_or(t.len())
+}
+
+fn matches_one(e: &Entry, m: &Match, exact: bool) -> bool {
+    // A name as its letters are, and without their marks. A term is asked of
+    // the second unless accents are exact or it carries a mark itself.
+    let cased = DefaultFolder.fold(e.name());
+    let bare = Unaccented.fold(e.name());
+    let marked = |t: &str| exact || Unaccented::of_folded(t) != t;
+    let name = |t: &str| if marked(t) { &cased } else { &bare };
     match m {
-        Match::NameContains(t) => name.contains(t.as_str()),
-        Match::NameGlob(p) => glob_matches(p, &name),
-        Match::PathContains(t) => DefaultFolder.fold(&e.path).contains(t.as_str()),
+        Match::NameContains(t) => name(t).contains(t.as_str()),
+        Match::NameGlob(p) => glob_matches(p, name(p)),
+        Match::PathContains(t) if marked(t) => DefaultFolder.fold(&e.path).contains(t.as_str()),
+        Match::PathContains(t) => Unaccented.fold(&e.path).contains(t.as_str()),
+        Match::NameNear(t, edits) => {
+            mistakes(&Unaccented::of_folded(t), &bare) <= usize::from(*edits)
+        }
+        Match::NameLetters(t) => {
+            let mut letters = bare.chars();
+            Unaccented::of_folded(t)
+                .chars()
+                .all(|want| letters.any(|c| c == want))
+        }
         Match::Under(d) => {
             let d = d.trim_end_matches('/');
             e.path.len() > d.len()
@@ -41,7 +82,8 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::ParentIs(d) => {
             e.parent() == d.trim_end_matches('/') || (d == "/" && e.parent() == "/")
         }
-        Match::Ext(list) => list.contains(&e.ext()),
+        // An extension is compared without marks whatever the query says.
+        Match::Ext(list) => list.iter().any(|x| Unaccented::of_folded(x) == e.ext()),
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),
         Match::Num(f, cmp, v) => cmp.holds(num_of(e, *f), *v),
@@ -49,7 +91,7 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::NameContainsCased(t) => e.name().contains(t.as_str()),
         Match::Depth(cmp, v) => cmp.holds(e.path.bytes().filter(|&b| b == b'/').count() as i64, *v),
         // Compiled per call: what the index must not do and a reference should.
-        Match::Regex(p) => regex::Regex::new(p).is_ok_and(|re| re.is_match(&name)),
+        Match::Regex(p) => regex::Regex::new(p).is_ok_and(|re| re.is_match(name(p))),
         Match::Bits {
             field,
             mask,
@@ -96,9 +138,7 @@ pub fn brute_force(
             // Relevance is not modelled here: a second implementation would
             // only prove two copies of one idea agree.
             SortKey::Relevance => std::cmp::Ordering::Equal,
-            SortKey::Name => DefaultFolder
-                .fold(a.name())
-                .cmp(&DefaultFolder.fold(b.name())),
+            SortKey::Name => Unaccented.fold(a.name()).cmp(&Unaccented.fold(b.name())),
             SortKey::Path => a.path.cmp(&b.path),
             SortKey::Ext => scour_core::ext_of(a.name()).cmp(&scour_core::ext_of(b.name())),
             SortKey::Size => a.meta.size.cmp(&b.meta.size),

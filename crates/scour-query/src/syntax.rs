@@ -72,6 +72,8 @@ The columns an index has always held and no query could name. This is what
 | `group:root` `group:0` | owned by this group |
 | `depth:3` | the path has exactly three components; `depth:<=4`, `depth:>8` |
 | `regex:^[0-9]{4}-` | the name matches this regular expression |
+| `fuzzy:raporr` | the name contains this, give or take a typing mistake |
+| `letters:scrgui` | the name has these letters in this order, with anything between: `scour-gui` |
 
 `depth:` counts `/` from the root: `/home` is 1 and `/home/u/a.rs` is 3. A bare
 number means **exactly** — unlike `size:`, where a bare number means "at
@@ -84,6 +86,11 @@ case-insensitive like everything else — including Turkish dotted and dotless
 i, which no `(?i)` flag gets right. **Nothing narrows it**: a pattern says
 nothing a trigram index can read, so put a cheaper term beside it when the set
 is large.
+
+`fuzzy:` forgives a letter wrong, missing, extra, or two swapped: none in a
+term of up to four characters, one up to eight, two beyond. Settings → Search
+can offer it when a search finds nothing, or apply it to every word. `letters:`
+is never applied for you, and **nothing narrows it**: every name is read.
 
 `kind:` and `node:` are different questions and both are worth asking.
 `kind:` is what a file **is** — a document, an image, code. `node:` is what
@@ -147,6 +154,13 @@ Without an operator, `size:1mb` means "at least 1 MB".
 
 Search is case-insensitive. Turkish `i`, `ı`, `I` and `İ` are treated as the
 same letter, so `ISTANBUL`, `İstanbul` and `ıstanbul` all find each other.
+
+**Accents are ignored unless you type one.** `sirket` finds `şirket`, `cafe`
+finds `café`, `strasse` finds `Straße`, and full-width `ＡＢＣ` is `abc` — for
+Latin, Greek and Cyrillic letters, Hebrew points and Arabic vowel signs. A term
+typed *with* a mark means it: `şirket` finds only `şirket`. Settings → Search
+turns the ignoring off, and then every letter is only itself. `ext:` ignores
+marks either way.
 
 `under:` and `parent:` are the exception: they take a path and compare it the
 way the filesystem stores it; a leading `~` is your home directory. They are

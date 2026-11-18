@@ -4,9 +4,11 @@
 //! forty matches; a numeric order stops once the page's worst row beats any
 //! unopened block ([`zone_order`]); text orders read stored row lists.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 
 use memchr::memmem::Finder;
+use scour_core::text::{DefaultFolder, Folder, Unaccented};
 use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Kind, Match, Meta, SortKey, SourceId};
 
 use crate::columns::{BLOCK, ColumnBlocks, Field};
@@ -14,6 +16,7 @@ use crate::dirs::{DirScope, DirTable};
 use crate::extension_order::ExtensionOrder;
 use crate::name_order::NameOrder;
 use crate::names::{Folded, NameArena};
+use crate::near::{Letters, Near};
 use crate::order::PathOrder;
 use crate::spelling::Spelling;
 use crate::trigram::TrigramIndex;
@@ -296,6 +299,19 @@ enum Test {
     /// that way: an automaton over every name that reaches it, and nothing a
     /// trigram index can read narrows a regular expression.
     Regex(Box<regex::Regex>),
+    /// The same, of the name with its marks: the pattern has one, or accents
+    /// are exact. Dearer again by a spelling read for a name that has any.
+    RegexMarked(Box<regex::Regex>),
+    /// The name contains this **with its marks** — `şirket`, typed so, or any
+    /// term when accents are exact. Asked of the fold first, as `case:` is.
+    NameHasMarked { want: Needle, folded: Needle },
+    /// The wildcard pattern, of the name with its marks; `folded` is the
+    /// pattern without them, for what the trigram index can say.
+    NameGlobMarked { want: String, folded: String },
+    /// Some part of the name is within a few typing mistakes of the term.
+    NameNear(Box<Near>),
+    /// The name holds these letters in this order.
+    NameLetters(Letters),
     /// The kind column is any one of these. A bitset over the discriminants, so
     /// the test stays a shift and a mask however many kinds were named.
     KindIn(u16),
@@ -327,12 +343,16 @@ impl Test {
             Test::Depth { .. } => 2,
             Test::Ext { .. } => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
+            Test::NameHasMarked { .. } | Test::NameGlobMarked { .. } => 12,
+            Test::NameLetters(_) => 14,
+            Test::NameNear(_) => 30,
             Test::NameLen { .. } => 4,
             Test::NameHasCased { .. } => 20,
             // Two bitmap lookups and, rarely, a prefix test — dearer than a
             // number and cheaper than a name search.
             Test::PathIn(_) => 8,
             Test::Regex(_) => 60,
+            Test::RegexMarked(_) => 80,
         }
     }
 }
@@ -389,12 +409,15 @@ pub struct PathSet {
     /// name could answer: with `reach`, what lets `path:rapor` skip the blocks
     /// neither a directory nor a name can match in. Sorted.
     named: Option<Vec<u32>>,
+    /// The term is asked of paths with their marks, so of a name with its own.
+    marked: bool,
 }
 
 impl PathSet {
-    fn build(term: &str, seg: &Segment<'_>) -> PathSet {
-        // The term is already folded by the parser; the table is not, so it is
-        // folded here — the same fold the built path used to get.
+    /// `term` is as the parser folded it and `plain` the same without marks;
+    /// `marked` says which of the two a path is asked for.
+    fn build(term: &str, plain: &str, marked: bool, seg: &Segment<'_>) -> PathSet {
+        let term = if marked { term } else { plain };
         let (head, tail) = match term.rsplit_once('/') {
             Some((head, tail)) => (head, tail),
             // No separator at all: nothing straddles, and `whole` answers it.
@@ -408,19 +431,28 @@ impl PathSet {
             in_name: None,
             reach: Vec::new(),
             named: None,
+            marked,
         };
         let needle = Needle::new(term);
         let mut fold = Folded::default();
+        let mut cased = String::new();
         set.in_name = (!term.contains('/')).then(|| Needle::new(term));
         seg.dirs.each_bytes(|id, dir| {
-            // Folded once and asked twice — the same folding a built path used
-            // to get, and the same searcher.
-            let folded = fold.fold_bytes(dir);
+            // Folded once and asked twice — the fold a name of this segment
+            // got, or the one that keeps marks when the term is asked of them.
+            let folded = match std::str::from_utf8(dir) {
+                Ok(dir) if marked && !dir.is_ascii() => {
+                    cased.clear();
+                    DefaultFolder.fold_into(dir, &mut cased);
+                    cased.as_bytes()
+                }
+                _ => fold.fold_bytes(dir),
+            };
             set.whole[id] = needle.found_in(folded);
             set.ending[id] = folded.ends_with(head.as_bytes());
         });
         if set.in_name.is_some() && std::env::var_os("SCOUR_NO_TRIGRAM").is_none() {
-            set.named = seg.tri.candidates(needle.folded());
+            set.named = seg.tri.candidates(plain.as_bytes());
         }
         if set.in_name.is_none() || set.named.is_some() {
             set.reach.reserve_exact(count + 1);
@@ -523,10 +555,10 @@ fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a 
 }
 
 /// Whether the extension counts, which its *spelling's* length decides. The
-/// fold says so where it kept its length or the row's spelling is capitals at
-/// most; the spelling, rebuilt from its block's start, is read for the rest.
+/// fold says so where the row's spelling is capitals at most; the spelling,
+/// rebuilt from its block's start, is read for the rest.
 fn spelling_is_eligible(seg: &Segment<'_>, row: usize, ext: &[u8]) -> bool {
-    if crate::extension_order::fold_kept_its_length(ext) || seg.names.is_as_long(row) {
+    if seg.names.is_as_long(row) {
         return ext.len() <= 12;
     }
     let spelled = seg.names.get(row).unwrap_or_default();
@@ -577,10 +609,13 @@ fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
         let [(false, test)] = &c.alts[..] else {
             continue;
         };
-        let Some(needle) = filterable(test) else {
-            continue;
+        let blocks = match test {
+            Test::NameNear(near) => seg
+                .tri
+                .candidates_near(near.folded(), near.edits() as usize * near.spoiled_by_one()),
+            test => filterable(test).and_then(|needle| seg.tri.candidates(&needle)),
         };
-        let Some(blocks) = seg.tri.candidates(&needle) else {
+        let Some(blocks) = blocks else {
             continue;
         };
         out = Some(match out {
@@ -595,7 +630,9 @@ fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
 /// the only thing claimed: over-narrowing loses files and reports nothing.
 fn filterable(test: &Test) -> Option<Vec<u8>> {
     match test {
-        Test::NameHas(n) | Test::NameHasCased { folded: n, .. } => Some(n.folded().to_vec()),
+        Test::NameHas(n)
+        | Test::NameHasCased { folded: n, .. }
+        | Test::NameHasMarked { folded: n, .. } => Some(n.folded().to_vec()),
         // A name with extension `pdf` contains `.pdf`. One extension only: a list
         // would need the union of its lists, not the intersection.
         Test::Ext { list, .. } => match &list[..] {
@@ -604,7 +641,7 @@ fn filterable(test: &Test) -> Option<Vec<u8>> {
         },
         // A name matching `rap*or` contains `rap` and contains `or`. The
         // longest run is the most selective of them.
-        Test::NameGlob(p) => p
+        Test::NameGlob(p) | Test::NameGlobMarked { folded: p, .. } => p
             .split(['*', '?'])
             .max_by_key(|run| run.len())
             .filter(|run| run.len() >= 3)
@@ -654,7 +691,7 @@ impl Plan {
         for group in &ast.groups {
             let mut alts = Vec::with_capacity(group.alts.len());
             for (negated, m) in &group.alts {
-                alts.push((*negated, compile_match(m, seg)?));
+                alts.push((*negated, compile_match(m, ast.exact_accents, seg)?));
             }
             clauses.push(Clause { alts });
         }
@@ -738,6 +775,11 @@ impl Plan {
                     | Test::Regex(_)
                     | Test::NameLen { .. }
                     | Test::NameHasCased { .. }
+                    | Test::RegexMarked(_)
+                    | Test::NameHasMarked { .. }
+                    | Test::NameGlobMarked { .. }
+                    | Test::NameNear(_)
+                    | Test::NameLetters(_)
             )
         })
     }
@@ -774,10 +816,46 @@ fn num_field(f: scour_core::NumField) -> Field {
     }
 }
 
-fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error> {
+/// The row's name with case set aside and marks kept: the fold itself where
+/// the spelling is the fold or capitals of it, the spelling folded for the rest.
+fn with_marks<'a>(seg: &Segment<'_>, row: usize, name: &'a [u8]) -> Cow<'a, [u8]> {
+    if seg.names.is_as_long(row) {
+        return Cow::Borrowed(name);
+    }
+    match seg.names.get(row) {
+        Some(spelled) => Cow::Owned(DefaultFolder.fold(&spelled).into_bytes()),
+        None => Cow::Borrowed(name),
+    }
+}
+
+fn compile_regex(pattern: &str) -> Result<Box<regex::Regex>, scour_core::Error> {
+    // A pattern that will not compile is not a query that matches everything:
+    // it is a query the user has to be told about.
+    regex::Regex::new(pattern)
+        .map(Box::new)
+        .map_err(|e| scour_core::Error::QuerySyntax {
+            at: 0,
+            expected: format!("a regular expression: {e}"),
+        })
+}
+
+/// `exact` is the query's: a letter and the letter with a mark are different.
+/// Without it only a term that carries a mark is asked of names with theirs.
+fn compile_match(m: &Match, exact: bool, seg: &Segment<'_>) -> Result<Test, scour_core::Error> {
     use scour_core::TimeField;
+    let plain = |t: &str| Unaccented::of_folded(t).into_owned();
+    let marked = |t: &str| exact || Unaccented::of_folded(t) != t;
     Ok(match m {
+        Match::NameContains(t) if marked(t) => Test::NameHasMarked {
+            want: Needle::new(t),
+            folded: Needle::new(&plain(t)),
+        },
         Match::NameContains(t) => Test::NameHas(Needle::new(t)),
+        Match::NameNear(t, edits) => match Near::new(&plain(t), *edits) {
+            Some(near) if *edits > 0 => Test::NameNear(Box::new(near)),
+            _ => Test::NameHas(Needle::new(&plain(t))),
+        },
+        Match::NameLetters(t) => Test::NameLetters(Letters::new(&plain(t))),
         // `*.rs` is the common wildcard and is exactly an extension test — one
         // short string read instead of a matcher over the whole name: 175 ms
         // against 47.
@@ -785,18 +863,25 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             Some(ext) if !ext.is_empty() && !ext.contains(['*', '?', '.']) => {
                 // A pattern over the name, so a directory called `mod.rs` matches.
                 Test::Ext {
-                    list: vec![ext.to_owned()],
+                    list: vec![plain(ext)],
                     dirs: true,
                 }
             }
+            _ if marked(p) => Test::NameGlobMarked {
+                want: p.clone(),
+                folded: plain(p),
+            },
             _ => Test::NameGlob(p.clone()),
         },
         // **A path is a directory and a name, and there are eight times fewer
         // directories than rows.** Building every row's path cost 1.66 s over
         // three million rows; the directory table plus a number per row, 120 ms.
-        Match::PathContains(t) => Test::PathIn(Box::new(PathSet::build(t, seg))),
+        Match::PathContains(t) => {
+            Test::PathIn(Box::new(PathSet::build(t, &plain(t), marked(t), seg)))
+        }
+        // An extension is compared without its marks, whatever the query says.
         Match::Ext(list) => Test::Ext {
-            list: list.clone(),
+            list: list.iter().map(|e| plain(e)).collect(),
             dirs: false,
         },
         Match::IsDir(want) => Test::Num {
@@ -818,27 +903,15 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
         },
         Match::NameContainsCased(t) => Test::NameHasCased {
             want: t.clone(),
-            folded: Needle::new(&scour_core::text::Folder::fold(
-                &scour_core::text::DefaultFolder,
-                t,
-            )),
+            folded: Needle::new(&Unaccented.fold(t)),
         },
         Match::Depth(cmp, v) => Test::Depth {
             depths: seg.dirs.depths().into(),
             cmp: *cmp,
             value: *v,
         },
-        // A pattern that will not compile is not a query that matches
-        // everything: it is a query the user has to be told about.
-        Match::Regex(p) => match regex::Regex::new(p) {
-            Ok(re) => Test::Regex(Box::new(re)),
-            Err(e) => {
-                return Err(scour_core::Error::QuerySyntax {
-                    at: 0,
-                    expected: format!("a regular expression: {e}"),
-                });
-            }
-        },
+        Match::Regex(p) if marked(p) => Test::RegexMarked(compile_regex(p)?),
+        Match::Regex(p) => Test::Regex(compile_regex(p)?),
         Match::Num(f, cmp, v) => Test::Num {
             field: num_field(*f),
             cmp: *cmp,
@@ -916,8 +989,16 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
         }
         Test::NameLen { cmp, value } => {
             // Characters, not bytes: `kütüphane.pdf` is thirteen to a person
-            // and fifteen to a byte counter, and the person is asking.
-            let n = std::str::from_utf8(name).map_or(name.len(), |s| s.chars().count());
+            // and fifteen to a byte counter, and the person is asking. Of the
+            // spelling: `ß` folds to two letters and a combining mark to none.
+            let chars = |s: &[u8]| std::str::from_utf8(s).map_or(s.len(), |s| s.chars().count());
+            let n = if seg.names.is_as_long(row) {
+                chars(name)
+            } else {
+                seg.names
+                    .get(row)
+                    .map_or(chars(name), |s| s.chars().count())
+            };
             cmp.holds(n as i64, *value)
         }
         // The written spelling, compared as written. Folding is a character at
@@ -933,6 +1014,21 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             Ok(name) => re.is_match(name),
             Err(_) => false,
         },
+        Test::RegexMarked(re) => match std::str::from_utf8(&with_marks(seg, row, name)) {
+            Ok(name) => re.is_match(name),
+            Err(_) => false,
+        },
+        Test::NameHasMarked { want, folded } => {
+            folded.found_in(name) && want.found_in(&with_marks(seg, row, name))
+        }
+        Test::NameGlobMarked { want, .. } => {
+            match std::str::from_utf8(&with_marks(seg, row, name)) {
+                Ok(name) => scour_query::glob_matches(want, name),
+                Err(_) => false,
+            }
+        }
+        Test::NameNear(near) => near.found_in(name),
+        Test::NameLetters(letters) => letters.found_in(name),
         Test::Bits {
             field,
             mask,
@@ -965,17 +1061,26 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             if set.whole.get(dir).copied().unwrap_or(false) {
                 return true;
             }
+            let ending = set.ending.get(dir).copied().unwrap_or(false);
+            if set.in_name.is_none() && !ending {
+                return false;
+            }
+            let name = if set.marked {
+                with_marks(seg, row, name)
+            } else {
+                Cow::Borrowed(name)
+            };
             // A term with no separator in it can be in the name — the name is
             // part of the path.
             if let Some(needle) = &set.in_name
-                && needle.found_in(name)
+                && needle.found_in(&name)
             {
                 return true;
             }
             // And the term can straddle the one separator: the directory ends
             // with what precedes the term's last slash, the name begins with the
             // rest.
-            set.ending.get(dir).copied().unwrap_or(false) && name.starts_with(&set.tail)
+            ending && name.starts_with(&set.tail)
         }
     }
 }
@@ -1223,7 +1328,11 @@ fn walk_segment<'v>(
         plan.clauses
             .iter()
             .filter_map(|c| match &c.alts[..] {
-                [(false, Test::NameHas(n))] if !n.folded().is_empty() => Some(n.folded().to_vec()),
+                [(false, Test::NameHas(n) | Test::NameHasMarked { folded: n, .. })]
+                    if !n.folded().is_empty() =>
+                {
+                    Some(n.folded().to_vec())
+                }
                 _ => None,
             })
             .collect()
@@ -2238,8 +2347,6 @@ pub fn walk_matches(seg: &Segment<'_>, plan: &Plan, mut f: impl FnMut(usize) -> 
 }
 
 pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&str]) {
-    use scour_core::text::{DefaultFolder, Folder};
-
     // Text keys are computed once a row, not once a comparison: folding inside
     // the comparator costs O(n log n) folds for a page of forty, and measured
     // 260 ms.
@@ -2247,7 +2354,7 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&st
         .into_iter()
         .map(|h| {
             let k = match key {
-                SortKey::Name => Some(DefaultFolder.fold(h.name())),
+                SortKey::Name => Some(Unaccented.fold(h.name())),
                 SortKey::Ext => Some(scour_core::ext_of(h.name())),
                 _ => None,
             };
@@ -2256,12 +2363,12 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&st
             let r = if key == SortKey::Relevance {
                 let folded: Vec<Vec<u8>> = terms
                     .iter()
-                    .map(|t| DefaultFolder.fold(t).into_bytes())
+                    .map(|t| Unaccented.fold(t).into_bytes())
                     .collect();
                 // The distance is recomputed from the path because a `Hit` carries
                 // no directory number. Same function, same answer.
                 let steps = crate::dirs::steps_of(crate::dirs::dir_part(&h.path));
-                relevance(DefaultFolder.fold(h.name()).as_bytes(), &folded, steps)
+                relevance(Unaccented.fold(h.name()).as_bytes(), &folded, steps)
             } else {
                 0
             };
@@ -2334,14 +2441,13 @@ mod tests {
         };
         assert!(Needle::new("istanbul").found_in(&folded(&mut fold, "İSTANBUL.txt")));
         assert!(Needle::new("isparta").found_in(&folded(&mut fold, "ısparta.md")));
-        assert!(Needle::new("öğüt").found_in(&folded(&mut fold, "Öğüt.docx")));
+        assert!(Needle::new("ogut").found_in(&folded(&mut fold, "Öğüt.docx")));
+        assert!(Needle::new("strasse").found_in(&folded(&mut fold, "Straße 12.pdf")));
         assert!(!Needle::new("zzz").found_in(&folded(&mut fold, "Öğüt.docx")));
     }
 
     #[test]
     fn the_folded_extension_is_the_one_the_core_defines() {
-        use scour_core::text::{DefaultFolder, Folder};
-
         for name in [
             "main.rs",
             "a.tar.gz",
@@ -2351,8 +2457,9 @@ mod tests {
             "x.averyverylongextension",
             "UPPER.PDF",
             "İstanbul.TXT",
+            "Résumé.PDÉ",
         ] {
-            let folded = DefaultFolder.fold(name);
+            let folded = Unaccented.fold(name);
             let want = scour_core::ext_of(name);
             assert_eq!(
                 crate::extension_order::folded_extension(name.as_bytes(), folded.as_bytes()),

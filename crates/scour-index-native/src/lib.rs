@@ -22,6 +22,7 @@ mod index;
 mod lock;
 mod name_order;
 mod names;
+mod near;
 mod order;
 mod packed;
 mod rank;

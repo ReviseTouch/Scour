@@ -739,11 +739,11 @@ const GENERATED_PAGES: &[&str] = &[
     "type-search-index",
 ];
 
-/// Extension of a file name: case-folded, without the dot; a name starting with a dot
-/// has none. Folded rather than lowercased because `ext:` is folded too, or `ext:JPG`
-/// misses `photo.jpg` in a Turkish locale.
+/// Extension of a file name: folded as a name is searched, without the dot; a name
+/// starting with a dot has none. Folded rather than lowercased because `ext:` is
+/// folded too, or `ext:JPG` misses `photo.jpg` in a Turkish locale.
 pub fn ext_of(name: &str) -> String {
-    crate::text::DefaultFolder::of(ext_str(name))
+    crate::text::Unaccented::of(ext_str(name))
 }
 
 /// The same extension, as spelled and without allocating, for a caller folding into

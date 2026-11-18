@@ -124,6 +124,7 @@ fn one(m: Match) -> Ast {
         groups: vec![Group {
             alts: vec![(false, m)],
         }],
+        ..Ast::default()
     }
 }
 

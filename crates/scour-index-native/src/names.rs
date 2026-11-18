@@ -5,6 +5,8 @@
 //! matched: folding per query instead costs 40.5 ns a row against 8.3. How a
 //! name is spelled is kept as its difference from the fold: [`crate::spelling`].
 
+use scour_core::text::{Plain, plain};
+
 use crate::columns::BLOCK;
 use crate::spelling::SpellingWriter;
 
@@ -256,11 +258,17 @@ impl Default for Folded {
     }
 }
 
-/// Single-character lowercase mappings for the two-byte range, U+0080–U+07FF —
-/// Turkish, Western European, Greek and Cyrillic. Built from
-/// `char::to_lowercase` so it cannot disagree with it; an entry is left absent
-/// where the lowercase is several characters or a combining dot. 3.8 KB once,
-/// replacing a per-character binary search: 19.6% off folding a Turkish name.
+/// What [`two_byte_table`] says of a character: nothing (zero), a two-byte
+/// character, or one of these — one ASCII byte, two, or no bytes at all.
+const ONE: u16 = 0x8000;
+const TWO: u16 = 0xc000;
+const GONE: u16 = 0x4000;
+
+/// The fold of every two-byte character, U+0080–U+07FF — Turkish, Western
+/// European, Greek, Cyrillic and the combining marks — built from
+/// `char::to_lowercase` and [`plain`] so it cannot disagree with them; absent
+/// where the lowercase is several characters. 3.8 KB once, replacing a search
+/// per character: 19.6% off folding a Turkish name.
 fn two_byte_table() -> &'static [u16; 1920] {
     static TABLE: std::sync::OnceLock<Box<[u16; 1920]>> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
@@ -273,16 +281,22 @@ fn two_byte_table() -> &'static [u16; 1920] {
             let (Some(first), None) = (lower.next(), lower.next()) else {
                 continue; // more than one character: not ours to shortcut
             };
-            // The general path's two rules, in its order, for the same bytes.
-            let first = if first == 'ı' { 'i' } else { first };
-            if first == '\u{0307}' {
-                continue; // dropped there, so not shortcut here
-            }
-            if (0x80..0x800).contains(&(first as u32)) {
-                *slot = first as u16;
-            } else if first.is_ascii() {
-                // The high bit records a width change: `ı` is two bytes, `i` one.
-                *slot = 0x8000 | first as u16;
+            let base = match plain(first) {
+                Plain::Same => first,
+                Plain::One(base) => base,
+                Plain::Two(a, b) => {
+                    *slot = TWO | u16::from(a) << 7 | u16::from(b);
+                    continue;
+                }
+                Plain::Gone => {
+                    *slot = GONE;
+                    continue;
+                }
+            };
+            if (0x80..0x800).contains(&(base as u32)) {
+                *slot = base as u16;
+            } else if base.is_ascii() {
+                *slot = ONE | base as u16;
             }
         }
         t
@@ -301,11 +315,21 @@ impl Folded {
         std::str::from_utf8(folded).unwrap_or("")
     }
 
+    /// Append to the fold; false, appending nothing, when it would not fit.
+    fn put(&mut self, bytes: &[u8]) -> bool {
+        let Some(room) = self.buf.get_mut(self.len..self.len + bytes.len()) else {
+            return false;
+        };
+        room.copy_from_slice(bytes);
+        self.len += bytes.len();
+        true
+    }
+
     /// The same, on bytes, which is what a walk has. Wholly ASCII is one
     /// vectorised `make_ascii_lowercase`, 11.3 ns for nineteen bytes; a mostly
     /// ASCII name takes that per run, since one `ş` sending the whole name
     /// through `char::to_lowercase` costs 88.9; non-UTF-8 matches as bytes.
-    /// Must fold **identically** to `DefaultFolder` or a name is never found.
+    /// Must fold **identically** to `Unaccented` or a name is never found.
     pub fn fold_bytes<'s>(&'s mut self, bytes: &[u8]) -> &'s [u8] {
         if bytes.len() <= FOLD_CAP && bytes.is_ascii() {
             let n = bytes.len();
@@ -326,6 +350,7 @@ impl Folded {
         self.len = 0;
         let raw = name.as_bytes();
         let mut at = 0;
+        // Absurdly long: the first `put` that fails ends the fold with what fitted.
         while at < raw.len() {
             // The ASCII run, in bulk: no rule below distinguishes ASCII, so
             // this is what the per-character path would have produced.
@@ -334,13 +359,11 @@ impl Folded {
                 at += 1;
             }
             if at > from {
-                let n = at - from;
-                if self.len + n > FOLD_CAP {
-                    return &self.buf[..self.len];
+                let start = self.len;
+                if !self.put(&raw[from..at]) {
+                    break;
                 }
-                self.buf[self.len..self.len + n].copy_from_slice(&raw[from..at]);
-                self.buf[self.len..self.len + n].make_ascii_lowercase();
-                self.len += n;
+                self.buf[start..self.len].make_ascii_lowercase();
             }
             let Some(c) = name[at..].chars().next() else {
                 break;
@@ -348,56 +371,46 @@ impl Folded {
             at += c.len_utf8();
             // What the table exists for: a two-byte character whose lowercase
             // is one character. Everything Turkish is here.
-            if let Some(entry) = (0x80..0x800)
-                .contains(&(c as u32))
-                .then(|| two_byte_table()[c as usize - 0x80])
-                .filter(|&e| e != 0)
-            {
-                if entry & 0x8000 == 0 {
-                    let mut tmp = [0u8; 4];
-                    let wrote = char::from_u32(u32::from(entry))
-                        .unwrap_or(c)
-                        .encode_utf8(&mut tmp)
-                        .len();
-                    if self.len + wrote > FOLD_CAP {
-                        return &self.buf[..self.len];
-                    }
-                    self.buf[self.len..self.len + wrote].copy_from_slice(&tmp[..wrote]);
-                    self.len += wrote;
-                } else {
-                    if self.len >= FOLD_CAP {
-                        return &self.buf[..self.len];
-                    }
-                    self.buf[self.len] = (entry & 0x7fff) as u8;
-                    self.len += 1;
-                }
-                continue;
-            }
-            for lc in c.to_lowercase() {
-                // The two rules `DefaultFolder` applies, and they must stay
-                // identical or matching silently stops working.
-                let lc = if lc == 'ı' { 'i' } else { lc };
-                if lc == '\u{0307}' {
-                    continue;
-                }
-                let mut tmp = [0u8; 4];
-                let s = lc.encode_utf8(&mut tmp);
-                if self.len + s.len() > FOLD_CAP {
-                    // Absurdly long: match what fitted rather than panic.
-                    return &self.buf[..self.len];
-                }
-                self.buf[self.len..self.len + s.len()].copy_from_slice(s.as_bytes());
-                self.len += s.len();
+            let entry = match c as u32 {
+                cp @ 0x80..0x800 => two_byte_table()[cp as usize - 0x80],
+                _ => 0,
+            };
+            let fits = match entry & TWO {
+                _ if entry == 0 => self.put_slowly(c),
+                0 => self.put(&[0xc0 | (entry >> 6) as u8, 0x80 | (entry & 0x3f) as u8]),
+                ONE => self.put(&[(entry & 0x7f) as u8]),
+                GONE => true,
+                _ => self.put(&[(entry >> 7 & 0x7f) as u8, (entry & 0x7f) as u8]),
+            };
+            if !fits {
+                break;
             }
         }
         &self.buf[..self.len]
+    }
+
+    /// One character by the rules themselves, as `Unaccented` applies them.
+    fn put_slowly(&mut self, c: char) -> bool {
+        for lc in c.to_lowercase() {
+            let mut tmp = [0u8; 4];
+            let fits = match plain(lc) {
+                Plain::Same => self.put(lc.encode_utf8(&mut tmp).as_bytes()),
+                Plain::One(base) => self.put(base.encode_utf8(&mut tmp).as_bytes()),
+                Plain::Two(a, b) => self.put(&[a, b]),
+                Plain::Gone => true,
+            };
+            if !fits {
+                return false;
+            }
+        }
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scour_core::text::{DefaultFolder, Folder};
+    use scour_core::text::{Folder, Unaccented};
 
     fn build(names: &[&str]) -> Vec<u8> {
         let mut w = NameWriter::new();
@@ -433,7 +446,7 @@ mod tests {
         assert_eq!(folded, expected);
         let folded = NameArena::open(&folded).expect("fold");
         for (row, name) in names.iter().enumerate() {
-            assert_eq!(folded.get(row), Some(DefaultFolder.fold(name).as_str()));
+            assert_eq!(folded.get(row), Some(Unaccented.fold(name).as_str()));
         }
     }
 
@@ -499,7 +512,7 @@ mod tests {
             "",
             "ẞ.txt",
         ] {
-            assert_eq!(f.fold(name), DefaultFolder.fold(name), "{name:?}");
+            assert_eq!(f.fold(name), Unaccented.fold(name), "{name:?}");
         }
     }
 
@@ -511,7 +524,8 @@ mod tests {
             "a", "Z", "9", "-", ".", " ", "_", "ı", "İ", "I", "i", "ş", "Ş", "ğ", "Ğ", "ç", "Ç",
             "ö", "Ö", "ü", "Ü",
             // Two-byte, three-byte, four-byte, and one folding to two.
-            "é", "Ω", "д", "中", "🙂", "ẞ", "\u{0307}",
+            "é", "Ω", "д", "中", "🙂", "ẞ", "\u{0307}", "ß", "æ", "ё", "й", "ά", "ế", "Ａ", "１",
+            "\u{0301}", "\u{05b8}", "\u{064e}", "\u{3000}", "が", "Ǿ", "Ǆ",
         ];
         let mut f = Folded::new();
         // Deterministic: a failure has to reproduce by running it again.
@@ -530,7 +544,7 @@ mod tests {
             }
             assert_eq!(
                 f.fold(&name),
-                DefaultFolder.fold(&name),
+                Unaccented.fold(&name),
                 "{name:?} ({:?})",
                 name.as_bytes()
             );

@@ -2,7 +2,8 @@
 //! and the query must fold identically: a name folded when it was indexed and a
 //! term folded years later disagree silently — the file is simply not found.
 //!
-//! [`DefaultFolder`] is the canonical rule; replacing it invalidates every index.
+//! [`DefaultFolder`] sets case aside and [`Unaccented`] is what an index stores
+//! and walks; changing either invalidates every index.
 
 use std::borrow::Cow;
 
@@ -65,6 +66,101 @@ impl DefaultFolder {
     }
 }
 
+/// What a name is searched as: [`DefaultFolder`], then every letter without its
+/// mark — `é` is `e`, `ş` is `s`, `ß` is `ss`, `Ａ` is `a` — and combining marks
+/// gone. A term typed *with* a mark is compared against the [`DefaultFolder`]
+/// form instead, which is how `şirket` finds only `şirket`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Unaccented;
+
+impl Folder for Unaccented {
+    fn fold_into(&self, src: &str, dest: &mut String) {
+        for c in src.chars() {
+            for lc in c.to_lowercase() {
+                push_plain(lc, dest);
+            }
+        }
+    }
+}
+
+impl Unaccented {
+    pub fn of(src: &str) -> String {
+        Unaccented.fold(src)
+    }
+
+    /// The same for text [`DefaultFolder`] already folded, borrowed when no
+    /// letter in it carries a mark — which is how a term is asked whether one does.
+    pub fn of_folded(folded: &str) -> Cow<'_, str> {
+        if folded.is_ascii() || folded.chars().all(|c| plain(c) == Plain::Same) {
+            return Cow::Borrowed(folded);
+        }
+        let mut out = String::with_capacity(folded.len());
+        for c in folded.chars() {
+            push_plain(c, &mut out);
+        }
+        Cow::Owned(out)
+    }
+}
+
+fn push_plain(c: char, dest: &mut String) {
+    match plain(c) {
+        Plain::Same => dest.push(c),
+        Plain::One(base) => dest.push(base),
+        Plain::Two(a, b) => {
+            dest.push(a as char);
+            dest.push(b as char);
+        }
+        Plain::Gone => {}
+    }
+}
+
+/// What a lowercase character is once marks are set aside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Plain {
+    Same,
+    One(char),
+    /// Two ASCII letters: `ß` is `ss`, `æ` is `ae`.
+    Two(u8, u8),
+    /// A combining mark: nothing.
+    Gone,
+}
+
+/// One character of [`Unaccented`], for a caller folding into its own buffer.
+/// `c` is lowercase already.
+pub fn plain(c: char) -> Plain {
+    use crate::accents::{BASES, MARKS, TWO};
+    let cp = c as u32;
+    if cp < 0xdf {
+        return Plain::Same;
+    }
+    // Every base is below U+0500 or in U+1E00–1FFF: CJK searches no table.
+    if (cp < 0x500 || (0x1e00..0x2000).contains(&cp))
+        && let Ok(i) = BASES.binary_search_by_key(&cp, |&(from, _)| from)
+    {
+        let to = BASES[i].1;
+        return if to & TWO != 0 {
+            Plain::Two((to >> 8) as u8, to as u8)
+        } else {
+            char::from_u32(to).map_or(Plain::Same, Plain::One)
+        };
+    }
+    // A full-width form is the ASCII it was made to sit beside.
+    if (0xff01..=0xff5e).contains(&cp) {
+        return Plain::One(((cp - 0xfee0) as u8).to_ascii_lowercase() as char);
+    }
+    if cp == 0x3000 {
+        return Plain::One(' ');
+    }
+    let near_marks = (0x300..0x700).contains(&cp)
+        || (0x1ab0..0x1e00).contains(&cp)
+        || (0x20d0..0x2100).contains(&cp)
+        || (0xfe20..0xfe30).contains(&cp);
+    if near_marks && MARKS.iter().any(|&(lo, hi)| (lo..=hi).contains(&cp)) {
+        return Plain::Gone;
+    }
+    Plain::Same
+}
+
 /// Uppercase by Turkish rules: `i → İ`, `ı → I`, where `str::to_uppercase` spells
 /// "DEĞIŞTIRME". Presentation only; nothing is indexed in uppercase.
 pub fn upper_tr(src: &str) -> String {
@@ -122,6 +218,53 @@ mod tests {
         assert_eq!(f.fold("ÇALIŞKAN"), "çalişkan");
         assert_eq!(f.fold("Öğüt"), "öğüt");
         assert_eq!(f.fold("Hello.TXT"), "hello.txt");
+    }
+
+    #[test]
+    fn a_letter_is_searched_without_its_mark() {
+        for (name, want) in [
+            ("ŞİRKET Öğüt", "sirket ogut"),
+            ("Café Señor Ünïcode", "cafe senor unicode"),
+            (
+                "Straße Æther Øl Łódź Đà Œuvre Þór",
+                "strasse aether ol lodz da oeuvre thor",
+            ),
+            ("ẞ", "ss"),
+            ("Ёлка Й", "елка и"),
+            ("Ελληνικά ΆΈΉ", "ελληνικα αεη"),
+            ("Việt Nam ế", "viet nam e"),
+            ("cafe\u{0301}", "cafe"),
+            ("שָׁלוֹם", "שלום"),
+            ("مُحَمَّد", "محمد"),
+            ("ＡＢＣ１２３．ｔｘｔ", "abc123.txt"),
+            ("報告\u{3000}書", "報告 書"),
+            // A voicing mark is another sound, and a vowel sign is a letter.
+            ("が ガ", "が ガ"),
+            ("हिंदी", "हिंदी"),
+            ("한글", "한글"),
+        ] {
+            assert_eq!(Unaccented.fold(name), want, "{name:?}");
+            assert_eq!(Unaccented::of_folded(&DefaultFolder.fold(name)), want);
+        }
+    }
+
+    #[test]
+    fn folding_a_fold_changes_nothing() {
+        for cp in 0..0x30000u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let once = Unaccented.fold(c.encode_utf8(&mut [0; 4]));
+            assert_eq!(Unaccented.fold(&once), once, "U+{cp:04X}");
+            assert_eq!(Unaccented::of_folded(&once), once, "U+{cp:04X}");
+        }
+    }
+
+    #[test]
+    fn a_term_without_a_mark_is_borrowed() {
+        assert!(matches!(Unaccented::of_folded("rapor"), Cow::Borrowed(_)));
+        assert!(matches!(Unaccented::of_folded("報告"), Cow::Borrowed(_)));
+        assert!(matches!(Unaccented::of_folded("şirket"), Cow::Owned(_)));
     }
 
     #[test]

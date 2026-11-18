@@ -86,6 +86,11 @@ fn describe_match(m: &Match) -> String {
         Match::Depth(cmp, n) => format!("path depth {} {n}", cmp.symbol()),
         Match::NameLen(cmp, n) => format!("name length {} {n}", cmp.symbol()),
         Match::NameContainsCased(t) => format!("name contains \"{t}\", exactly so"),
+        Match::NameNear(t, 1) => format!("name contains \"{t}\", give or take one typing mistake"),
+        Match::NameNear(t, n) => {
+            format!("name contains \"{t}\", give or take {n} typing mistakes")
+        }
+        Match::NameLetters(t) => format!("name has the letters \"{t}\" in that order"),
         Match::Regex(p) => format!("name matches the pattern /{p}/"),
         // Words, not octal: "0o4000" says nothing to whoever typed `suid:`.
         Match::Bits {

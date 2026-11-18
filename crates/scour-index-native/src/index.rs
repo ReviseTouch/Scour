@@ -53,8 +53,9 @@ const META_FILE: &str = "native-index.json";
 /// counts a hard-linked file once per name; 10 keeps a name's spelling as its
 /// difference from the fold, and the spelled arena went; 11 packed the row
 /// orders and the path lookup table to the bits a row number needs; 12 keeps
-/// the extension order as the steps between its rows.
-const FORMAT: u32 = 12;
+/// the extension order as the steps between its rows; 13 folds a name without
+/// its accents, so the arena, the trigrams and the name order all changed value.
+const FORMAT: u32 = 13;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -1420,15 +1421,13 @@ impl Spelled {
     }
 
     /// What [`scour_core::ext_of`] says of the row's spelling. Read off the
-    /// fold where the spelling is as long, or the extension is: the rule is
-    /// about bytes and a dot.
+    /// fold where the spelling is as long: the rule is about bytes and a dot.
     fn ext<'a>(&mut self, seg: &Segment<'a>, row: usize) -> std::borrow::Cow<'a, str> {
         if let Some((folded, as_long)) = self.0.folded(&seg.names, row) {
             let ext = std::str::from_utf8(folded)
                 .map(scour_core::ext_str)
                 .unwrap_or_default();
-            let kept = crate::extension_order::fold_kept_its_length(ext.as_bytes());
-            if as_long || (kept && !ext.is_empty()) {
+            if as_long {
                 return ext.into();
             }
         }

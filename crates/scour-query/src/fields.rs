@@ -208,6 +208,20 @@ pub const FIELDS: &[Field] = &[
         about: "the name matches this regular expression",
         example: "regex:^[0-9]{4}-",
     },
+    Field {
+        name: "fuzzy",
+        aliases: &["typo", "benzer"],
+        takes: Takes::Text,
+        about: "the name contains this, give or take a typing mistake",
+        example: "fuzzy:raporr",
+    },
+    Field {
+        name: "letters",
+        aliases: &["harfler"],
+        takes: Takes::Text,
+        about: "the name has these letters in this order, with anything between",
+        example: "letters:scrgui",
+    },
     // ---- Everything's spellings ------------------------------------------
     // Its documented names for questions this index can answer. `dupe:` and the
     // Windows `attrib:` letters are absent rather than approximated.

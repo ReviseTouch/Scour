@@ -3,8 +3,8 @@
 //! Seven names in ten fold to themselves, and most of the rest differ only in
 //! bytes `0x20` apart — ASCII and Latin-1 capitals. So the spelling is the
 //! folded arena plus, a block: two bits a row saying how it differs, and for
-//! each row that does a bit a byte (flip `0x20`), two bits a byte (that, `ı`,
-//! `İ`, or a neighbour like `Ş`) or, failing both, the whole spelling.
+//! each row that does a bit a byte (flip `0x20`), two bits a byte (that, or the
+//! letter with its mark: `ş`, `Ş`, `ı`, `İ`) or, failing both, the whole spelling.
 
 use std::borrow::Cow;
 
@@ -38,14 +38,29 @@ const PAIRS: u32 = 2;
 const WHOLE: u32 = 3;
 
 /// What a folded byte was spelled as: itself, `0x20` away, or one of two
-/// others — for `i` the dotless `ı` and the dotted `İ`, else the byte one away.
+/// others — for a letter in [`marked`] that letter with its mark, small and
+/// capital; for any other byte, [`OTHER`] is the byte one away.
 const KEPT: u8 = 0;
 const FLIPPED: u8 = 1;
 const OTHER: u8 = 2;
-const DOTTED: u8 = 3;
+const CAPITAL: u8 = 3;
 
-const DOTLESS_I: [u8; 2] = [0xc4, 0xb1];
-const DOTTED_I: [u8; 2] = [0xc4, 0xb0];
+/// The one marked letter each ASCII letter is most often the fold of here,
+/// small and capital. Any other marked letter has its name stored whole.
+fn marked(folded: u8) -> Option<(&'static str, &'static str)> {
+    Some(match folded {
+        b'a' => ("â", "Â"),
+        b'c' => ("ç", "Ç"),
+        b'e' => ("é", "É"),
+        b'g' => ("ğ", "Ğ"),
+        b'i' => ("ı", "İ"),
+        b'n' => ("ñ", "Ñ"),
+        b'o' => ("ö", "Ö"),
+        b's' => ("ş", "Ş"),
+        b'u' => ("ü", "Ü"),
+        _ => return None,
+    })
+}
 
 /// One code a folded byte, if the spelling is the fold under those codes.
 fn align(spelled: &[u8], folded: &[u8], codes: &mut Vec<u8>) -> bool {
@@ -60,11 +75,15 @@ fn align(spelled: &[u8], folded: &[u8], codes: &mut Vec<u8>) -> bool {
             (KEPT, 1)
         } else if s ^ 0x20 == f {
             (FLIPPED, 1)
-        } else if f == b'i' && rest.starts_with(&DOTLESS_I) {
-            (OTHER, 2)
-        } else if f == b'i' && rest.starts_with(&DOTTED_I) {
-            (DOTTED, 2)
-        } else if s ^ 1 == f && f != b'i' {
+        } else if let Some((small, capital)) = marked(f) {
+            if rest.starts_with(small.as_bytes()) {
+                (OTHER, 2)
+            } else if rest.starts_with(capital.as_bytes()) {
+                (CAPITAL, 2)
+            } else {
+                return false;
+            }
+        } else if s ^ 1 == f {
             (OTHER, 1)
         } else {
             return false;
@@ -78,12 +97,11 @@ fn align(spelled: &[u8], folded: &[u8], codes: &mut Vec<u8>) -> bool {
 /// The spelling of a folded name under one code a byte.
 fn respell(name: &[u8], code: impl Fn(usize) -> u8, out: &mut Vec<u8>) {
     for (i, &b) in name.iter().enumerate() {
-        match (code(i), b) {
-            (KEPT, _) => out.push(b),
+        match (code(i), marked(b)) {
             (FLIPPED, _) => out.push(b ^ 0x20),
-            (OTHER, b'i') => out.extend_from_slice(&DOTLESS_I),
-            (DOTTED, b'i') => out.extend_from_slice(&DOTTED_I),
-            (OTHER, _) => out.push(b ^ 1),
+            (OTHER, Some((small, _))) => out.extend_from_slice(small.as_bytes()),
+            (CAPITAL, Some((_, capital))) => out.extend_from_slice(capital.as_bytes()),
+            (OTHER, None) => out.push(b ^ 1),
             _ => out.push(b),
         }
     }
@@ -532,8 +550,31 @@ mod tests {
         assert_eq!(size("KENAN PİLEVNELİ.docx"), 6);
         assert_eq!(size("yazısı"), 2);
         assert_eq!(size("ŞIRNAK"), 2);
-        // Folding changed its length in a way no code says: stored whole.
+        assert_eq!(size("Öğüt Çağ.docx"), 4);
+        // A letter no code names, or a fold of another length: stored whole.
         assert_eq!(size("ẞ.txt"), "ẞ.txt".len() + 1);
+        assert_eq!(size("Łódź"), "Łódź".len() + 1);
+    }
+
+    /// What lets a search trust a row whose spelling is its fold or capitals of
+    /// it: no letter that lost a mark can hide behind those two codes.
+    #[test]
+    fn a_letter_that_lost_a_mark_is_never_stored_as_a_capital() {
+        use scour_core::text::{DefaultFolder, Folder, Unaccented};
+        let mut codes = Vec::new();
+        for cp in 0x80..0x30000u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let spelled = c.to_string();
+            let folded = Unaccented.fold(&spelled);
+            if folded == DefaultFolder.fold(&spelled) {
+                continue;
+            }
+            let plain = align(spelled.as_bytes(), folded.as_bytes(), &mut codes)
+                && codes.iter().all(|&code| code <= FLIPPED);
+            assert!(!plain, "U+{cp:04X} {spelled:?} folds to {folded:?}");
+        }
     }
 
     #[test]
