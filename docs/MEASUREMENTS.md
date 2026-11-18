@@ -403,6 +403,95 @@ it was 102 ms and 81 MB peak (VmHWM) against 270 ms and 55 MB gathered. The
 extension order is still walked (410 MB VmHWM at 2 M); it has a stored order
 and wants the name order's reach instead.
 
+## The index on disk, a third smaller (2026-11-18)
+
+Where the bytes were, on 5,056,158 entries rebuilt into one segment, and what
+each file became. Two indexes built from the same rows by two builds
+(`examples/transplant`: the old build dumps, each loads and rebuilds).
+
+| file | before | after | |
+|---|---:|---:|---|
+| names as spelled | 117.8 MB | 8.3 MB | kept as a difference from the fold |
+| names folded | 117.3 MB | 117.3 MB | what a search walks, untouched |
+| columns | 79.8 MB | 79.8 MB | |
+| trigram postings | 51.4 MB | 51.4 MB | |
+| path lookup | 40.4 MB | 24.4 MB | bucketed, 37 bits an entry |
+| path order | 20.2 MB | 14.5 MB | 23 bits a row |
+| name order | 20.9 MB | 15.2 MB | 23 bits a row |
+| extension order | 20.9 MB | 4.4 MB | steps between rows |
+| directories, trigram keys, live bits | 10.2 MB | 10.2 MB | |
+| **the index** | **478.9 MB** | **325.6 MB** | 94.7 → 64.4 bytes an entry |
+
+Seven names in ten fold to themselves. Of the 1,491,282 that do not,
+1,260,655 are capitals — one bit a byte — and 230,576 hold a Turkish `ı`, `İ`
+or a neighbour like `Ş`, two bits a byte; 51 are stored whole.
+
+Two services alternated on the two indexes, each query once to warm and five
+times, four rounds, the order swapped each round; load average 2.4–3.4. The
+median of the rounds' medians, and the spread of those; every answer compared
+and the same rows.
+
+| query | before | after |
+|---|---:|---:|
+| everything by name, by path, at offset 2 M | 0.87, 1.00 ms | 0.87, 0.99 ms |
+| everything by size at offset 2 M | 309.8 (308.3–313.3) ms | 311.8 (308.2–314.4) ms |
+| everything by extension at offset 2 M | 766.5 (762.9–767.5) ms | 607.1 (600.6–611.0) ms |
+| `a` by date, by name, by path | 4.98, 5.77, 6.33 ms | 4.79, 5.52, 6.85 ms |
+| `a` by relevance | 35.0 (33.9–36.1) ms | 36.7 (34.3–38.9) ms |
+| `ab` by relevance | 18.5 (17.7–18.9) ms | 18.4 (18.0–18.9) ms |
+| `rapor` by date, by name | 7.40, 8.09 ms | 6.88, 7.85 ms |
+| `ext:pdf` by date | 18.9 (18.3–21.1) ms | 11.1 (9.7–12.8) ms |
+| `*.rs` by path | 32.4 (31.7–34.0) ms | 20.3 (19.4–20.9) ms |
+| `path:Projeler` by name | 46.0 (45.9–46.4) ms | 45.3 (42.9–46.4) ms |
+| `path:Projeler` by path | 91.8 (89.1–112.1) ms | 98.4 (96.3–102.3) ms |
+| `Projeler/Scour` | 33.1 (32.8–34.6) ms | 33.2 (32.5–35.7) ms |
+| `case:README` by date | 139.6 (138.2–140.9) ms | 6.1 (5.8–7.4) ms |
+| `regex:^ab.*\.rs$` by name | 38.8 (38.4–45.3) ms | 38.2 (37.9–39.2) ms |
+| `zq` by name | 17.3 (16.6–17.7) ms | 17.5 (17.2–17.9) ms |
+| `kind:folder` by path | 19.3 (18.9–20.0) ms | 19.9 (19.6–21.4) ms |
+| facets by extension | 24.5 (23.7–25.1) ms | 11.3 (10.8–11.7) ms |
+| facets by extension, `rapor` | 11.4 (10.5–11.5) ms | 10.7 (10.1–11.3) ms |
+| export of `ext:pdf` | 94.0 (93.5–94.9) ms | 87.1 (86.1–88.1) ms |
+| the service's CPU over the query set | 3,769 ms | 2,218 ms |
+
+`case:` asks the fold first, which the walk carries and the trigram index is
+keyed on; `ext:` and a count by extension read the fold where it can say what
+the spelling would. Two rows moved the other way in most sessions, inside
+their spread in each: `kind:folder` by path, 1.1 M packed positions read,
+18.4–18.8 → 19.1–19.9 ms at its fastest over four sessions; and
+`path:Projeler` by path, +5.4%, +4.3%, −3.7% and +7.2% across them (CPU
++3.8%, +6.8%, −2.8%, +1.8%).
+
+| | before | after |
+|---|---:|---:|
+| peak anonymous memory over the query set | 230.5 MB | 229.0 MB |
+| file pages resident after it | 332 MB | 220 MB |
+| open and count (`scourd --check`), 25 rounds | 40.5 (36.1–94.6) ms | 41.3 (36.4–80.2) ms |
+| load of 5.06 M rows in ten commits | 6.87 (6.74–7.01) s | 6.89 (6.83–7.03) s |
+| rebuild into one segment | 12.66 (12.57–12.75) s | 12.42 (12.39–12.48) s |
+| CPU of both | 21.61 s | 21.72 s |
+| peak resident of both | 1,109, 1,068 MB | 995, 1,009 MB |
+| a pass that finds every row unchanged | 2.19 (2.19–2.29) s | 2.10 (2.07–2.12) s |
+| every row written again, the old one retired | 9.52 (9.44–9.56) s | 9.57 (9.31–9.60) s |
+| a commit of eight rows, wall | 119.3 (118.7–120.9) ms | 113.5 (113.0–114.0) ms |
+| the same, CPU | 10.2 ms | 7.4 ms |
+
+Measured and left out: FSST on the folded names (`fsst-rs` 0.5.11, a table
+trained on every 64th block). 116.6 MB became 85.1 MB a block at a time, 80.0
+a name at a time — and the walk's name read and search went from 11.8 ns a row
+to 26.3, 59 ms to 133 over the five million, decoding alone 69 ms at 1.7 GB/s.
+A substring cannot be searched for in the coded bytes without decoding them.
+That is 73 ms of CPU on every walk of the whole index — `a` by relevance is
+201, a regular expression 239, a short term 96 — for 31 MB.
+
+```sh
+cargo run --release -p scour-index-native --example transplant -- dump /tmp/old/native /tmp/rows.bin    # the old build
+cargo run --release -p scour-index-native --example transplant -- load /tmp/rows.bin /tmp/new/native    # each build
+cargo run --release -p scour-index-native --example transplant -- again /tmp/rows.bin /tmp/copy/native  # nothing changed
+cargo run --release -p scour-index-native --example transplant -- replace /tmp/rows.bin /tmp/copy/native
+cargo run --release -p scour-index-native --example commit_cost -- /tmp/copy/native 0 <eight paths in it>
+```
+
 ## Reproducing
 
 ```sh
