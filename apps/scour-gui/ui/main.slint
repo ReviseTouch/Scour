@@ -1453,7 +1453,15 @@ export component MainWindow inherits Window {
     callback moved();
     changed first-row => {
         root.moved();
+        if (root.first-row == 0) {
+            root.new-above = 0;
+        }
     }
+    /// Rows that arrived above the one being read since the list left the top,
+    /// counted by Rust as it keeps that row in place. Cleared at the top.
+    in-out property <int> new-above;
+    in property <string> word-top;
+    in property <string> word-new;
     // Set only when Rust changes the text itself (a facet click), never on
     // every keystroke, or the caret jumps.
     in-out property <string> query;
@@ -5736,6 +5744,41 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
+            }
+        }
+    }
+
+    // Back to the top in one click, once the list has left it: how many files
+    // arrived above meanwhile, when some did. Over the list's corner, above
+    // everything but the menu.
+    if root.first-row > 0 && root.panel == "": top-pill := Rectangle {
+        x: (root.grid ? tiles.absolute-position.x + tiles.width : list.absolute-position.x + list.width)
+            - self.width - 14px;
+        y: (root.grid ? tiles.absolute-position.y + tiles.height : list.absolute-position.y + list.height)
+            - self.height - 14px;
+        width: pill-text.preferred-width + 26px;
+        height: 30px;
+        border-radius: 15px;
+        background: pill-hit.has-hover ? Theme.hover : (Theme.dark ? Theme.panel-2 : Theme.panel);
+        border-width: Theme.hair;
+        border-color: root.new-above > 0 ? Theme.q-key : Theme.line;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #0000001a;
+        pill-text := Text {
+            text: root.new-above > 0
+                ? "↑ " + root.new-above + " " + root.word-new
+                : "↑ " + root.word-top;
+            color: root.new-above > 0 ? Theme.q-key : Theme.ink-2;
+            font-size: 12.5px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        pill-hit := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.new-above = 0;
+                root.scroll-to(0px);
             }
         }
     }

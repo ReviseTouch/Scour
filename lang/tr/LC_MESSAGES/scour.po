@@ -2289,3 +2289,9 @@ msgstr "konum"
 
 msgid "This empties the index and walks every disk again; searches find little until it is done. Run `scour reset --yes` to do it."
 msgstr "Bu, indeksi boşaltır ve bütün diskleri yeniden tarar; bitene kadar aramalar eksik sonuç verir. Yapmak için `scour reset --yes` çalıştırın."
+
+msgid "To the top"
+msgstr "En üste"
+
+msgid "new"
+msgstr "yeni"

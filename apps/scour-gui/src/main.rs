@@ -543,7 +543,7 @@ fn main() -> Result<()> {
         None => return Ok(()),
     };
 
-    let kept = scour_settings::Settings::load(&config.state_dir());
+    let kept = scour_settings::Settings::load(&config.state_dir()).opened();
     // Behind a cell: picking a language rebuilds it and rewrites every string.
     let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
         &language(&kept, &config),
@@ -4384,6 +4384,9 @@ fn apply(
                     if selected >= 0 {
                         w.set_selected((selected as f32 + by).max(0.0) as i32);
                     }
+                    if by > 0.0 {
+                        w.set_new_above(w.get_new_above() + by as i32);
+                    }
                     trace(&format!("kept {path:?} in place: {by:+} rows"));
                 }
             }
@@ -5304,6 +5307,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong.",
         "What is running, and what it holds.",
     ]));
+    w.set_word_top(t(cat, "To the top"));
+    w.set_word_new(t(cat, "new"));
     w.set_set_index_where(t(cat, "Kept in"));
     w.set_set_index_open(t(cat, "Open the folder"));
     w.set_set_index_tidy(t(cat, "Reorganize"));

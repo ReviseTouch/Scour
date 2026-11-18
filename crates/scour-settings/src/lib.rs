@@ -413,6 +413,19 @@ impl Settings {
         dir.join("settings.json")
     }
 
+    /// As a face opening reads them: **newest change first**, in every tab,
+    /// whatever order was chosen last time. An order picked is kept for the
+    /// session, and is still written, but a window always opens on what is new.
+    pub fn opened(mut self) -> Settings {
+        self.sort.clear();
+        self.descending = None;
+        for tab in &mut self.tabs {
+            tab.sort.clear();
+            tab.descending = None;
+        }
+        self
+    }
+
     /// Read them, or start from nothing. A missing, unreadable or unparsable file is
     /// not an error: refusing to start over a stray comma is the worse outcome.
     pub fn load(dir: &Path) -> Settings {
@@ -446,6 +459,32 @@ mod tests {
         s.choose("uuid:a", false);
         assert!(s.volumes_on.is_empty());
         assert_eq!(s.volumes_off, ["uuid:b", "uuid:a"]);
+    }
+
+    #[test]
+    fn a_face_opens_newest_first_in_every_tab_and_keeps_the_rest() {
+        let tab = |q: &str, sort: &str| SearchTab {
+            query: q.into(),
+            sort: sort.into(),
+            descending: Some(false),
+        };
+        let s = Settings {
+            sort: "size".into(),
+            descending: Some(false),
+            tabs: vec![tab("a", "name"), tab("b", "path")],
+            tab: 1,
+            ..Default::default()
+        }
+        .opened();
+        assert_eq!((s.sort.as_str(), s.descending), ("", None));
+        for t in &s.tabs {
+            assert_eq!((t.sort.as_str(), t.descending), ("", None));
+        }
+        assert_eq!(
+            s.tabs.iter().map(|t| t.query.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(s.tab, 1);
     }
 
     fn dir(name: &str) -> PathBuf {

@@ -61,7 +61,7 @@ fn main() -> Result<()> {
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
     // What was chosen, then what was configured, then the desktop. Read here
     // rather than over the socket so the first frame is in the right language.
-    let kept = scour_settings::Settings::load(&config.state_dir());
+    let kept = scour_settings::Settings::load(&config.state_dir()).opened();
     let catalogue = scour_i18n::Catalogue::for_language(&scour_i18n::choose(
         &kept.language,
         &config.ui.language,

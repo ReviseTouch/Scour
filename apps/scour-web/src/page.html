@@ -426,7 +426,16 @@
   }
 
   /* ---------------- results ---------------- */
-  .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+  /* Back to the top in one click, once the list has left it. */
+  #to-top {
+    position: absolute; right: 22px; bottom: 16px; z-index: 5;
+    height: 30px; padding: 0 13px; border-radius: 15px;
+    background: var(--panel); color: var(--ink-2);
+    border: 1px solid var(--line); font: inherit; font-size: 12.5px; cursor: pointer;
+    box-shadow: 0 2px 10px #0000001a;
+  }
+  #to-top:hover { background: var(--hover); color: var(--ink); }
   .scroll {
     flex: 1;
     overflow: auto;
@@ -1831,6 +1840,7 @@
       </nav>
 
       <div class="results">
+        <button type="button" id="to-top" hidden></button>
         <div class="scroll">
           <div class="sizer" id="sizer"></div>
           <table>
@@ -3708,7 +3718,14 @@
       picturesSoon();
     });
   }
-  const onScroll = () => repaint(false);
+  const onScroll = () => {
+    toTop.hidden = scrollEl.scrollTop < 4;
+    if (!toTop.hidden) toTop.textContent = `↑ ${T("To the top")}`;
+    repaint(false);
+  };
+  /* A click, never a frame: the one other place the position is written. */
+  const toTop = document.getElementById("to-top");
+  toTop.addEventListener("click", () => { scrollEl.scrollTop = 0; toTop.hidden = true; });
   scrollEl.addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", () => { charW = 0; painted = ""; repaint(true); });
   document.addEventListener("scour-search-shown", () => { painted = ""; repaint(true); });
@@ -6155,8 +6172,16 @@
   /* What the window remembered, over the defaults it has already drawn with.
      Then what another face asked this page to show — `?q=…&tab=report` from
      the window's "open in the browser" — which comes after, so it wins. */
+  /* Newest change first on every opening, in every tab, as the other faces
+     open: an order picked stays for the session. See `Settings::opened`. */
+  const opened = (s) => {
+    delete s.sort;
+    delete s.descending;
+    for (const tab of Array.isArray(s.tabs) ? s.tabs : []) { delete tab.sort; delete tab.descending; }
+    return s;
+  };
   SERVICE.settings()
-    .then(applySettings)
+    .then((s) => applySettings(opened(s)))
     .catch(() => {})
     .finally(() => {
       const asked = new URLSearchParams(location.search);
