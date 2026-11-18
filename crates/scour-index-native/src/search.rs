@@ -304,7 +304,8 @@ enum Test {
     RegexMarked(Box<regex::Regex>),
     /// The name contains this **with its marks** — `şirket`, typed so, or any
     /// term when accents are exact. Asked of the fold first, as `case:` is.
-    NameHasMarked { want: Needle, folded: Needle },
+    /// Boxed: two searchers would double what every other test is moved as.
+    NameHasMarked(Box<Marked>),
     /// The wildcard pattern, of the name with its marks; `folded` is the
     /// pattern without them, for what the trigram index can say.
     NameGlobMarked { want: String, folded: String },
@@ -343,7 +344,7 @@ impl Test {
             Test::Depth { .. } => 2,
             Test::Ext { .. } => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
-            Test::NameHasMarked { .. } | Test::NameGlobMarked { .. } => 12,
+            Test::NameHasMarked(_) | Test::NameGlobMarked { .. } => 12,
             Test::NameLetters(_) => 14,
             Test::NameNear(_) => 30,
             Test::NameLen { .. } => 4,
@@ -355,6 +356,13 @@ impl Test {
             Test::RegexMarked(_) => 80,
         }
     }
+}
+
+/// A term as it was typed, and the same without its marks.
+#[derive(Debug)]
+struct Marked {
+    want: Needle,
+    folded: Needle,
 }
 
 /// A needle the query owns, prepared once: `str::contains` constructs a Two-Way
@@ -440,13 +448,14 @@ impl PathSet {
         seg.dirs.each_bytes(|id, dir| {
             // Folded once and asked twice — the fold a name of this segment
             // got, or the one that keeps marks when the term is asked of them.
-            let folded = match std::str::from_utf8(dir) {
-                Ok(dir) if marked && !dir.is_ascii() => {
+            let text = (marked && !dir.is_ascii()).then(|| std::str::from_utf8(dir).ok());
+            let folded = match text.flatten() {
+                Some(dir) => {
                     cased.clear();
                     DefaultFolder.fold_into(dir, &mut cased);
                     cased.as_bytes()
                 }
-                _ => fold.fold_bytes(dir),
+                None => fold.fold_bytes(dir),
             };
             set.whole[id] = needle.found_in(folded);
             set.ending[id] = folded.ends_with(head.as_bytes());
@@ -610,9 +619,7 @@ fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
             continue;
         };
         let blocks = match test {
-            Test::NameNear(near) => seg
-                .tri
-                .candidates_near(near.folded(), near.edits() as usize * near.spoiled_by_one()),
+            Test::NameNear(near) => near.blocks(&seg.tri),
             test => filterable(test).and_then(|needle| seg.tri.candidates(&needle)),
         };
         let Some(blocks) = blocks else {
@@ -630,9 +637,8 @@ fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
 /// the only thing claimed: over-narrowing loses files and reports nothing.
 fn filterable(test: &Test) -> Option<Vec<u8>> {
     match test {
-        Test::NameHas(n)
-        | Test::NameHasCased { folded: n, .. }
-        | Test::NameHasMarked { folded: n, .. } => Some(n.folded().to_vec()),
+        Test::NameHas(n) | Test::NameHasCased { folded: n, .. } => Some(n.folded().to_vec()),
+        Test::NameHasMarked(m) => Some(m.folded.folded().to_vec()),
         // A name with extension `pdf` contains `.pdf`. One extension only: a list
         // would need the union of its lists, not the intersection.
         Test::Ext { list, .. } => match &list[..] {
@@ -776,7 +782,7 @@ impl Plan {
                     | Test::NameLen { .. }
                     | Test::NameHasCased { .. }
                     | Test::RegexMarked(_)
-                    | Test::NameHasMarked { .. }
+                    | Test::NameHasMarked(_)
                     | Test::NameGlobMarked { .. }
                     | Test::NameNear(_)
                     | Test::NameLetters(_)
@@ -846,10 +852,10 @@ fn compile_match(m: &Match, exact: bool, seg: &Segment<'_>) -> Result<Test, scou
     let plain = |t: &str| Unaccented::of_folded(t).into_owned();
     let marked = |t: &str| exact || Unaccented::of_folded(t) != t;
     Ok(match m {
-        Match::NameContains(t) if marked(t) => Test::NameHasMarked {
+        Match::NameContains(t) if marked(t) => Test::NameHasMarked(Box::new(Marked {
             want: Needle::new(t),
             folded: Needle::new(&plain(t)),
-        },
+        })),
         Match::NameContains(t) => Test::NameHas(Needle::new(t)),
         Match::NameNear(t, edits) => match Near::new(&plain(t), *edits) {
             Some(near) if *edits > 0 => Test::NameNear(Box::new(near)),
@@ -992,7 +998,7 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             // and fifteen to a byte counter, and the person is asking. Of the
             // spelling: `ß` folds to two letters and a combining mark to none.
             let chars = |s: &[u8]| std::str::from_utf8(s).map_or(s.len(), |s| s.chars().count());
-            let n = if seg.names.is_as_long(row) {
+            let n = if seg.names.is_as_many_letters(row) {
                 chars(name)
             } else {
                 seg.names
@@ -1018,8 +1024,8 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             Ok(name) => re.is_match(name),
             Err(_) => false,
         },
-        Test::NameHasMarked { want, folded } => {
-            folded.found_in(name) && want.found_in(&with_marks(seg, row, name))
+        Test::NameHasMarked(m) => {
+            m.folded.found_in(name) && m.want.found_in(&with_marks(seg, row, name))
         }
         Test::NameGlobMarked { want, .. } => {
             match std::str::from_utf8(&with_marks(seg, row, name)) {
@@ -1062,18 +1068,18 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
                 return true;
             }
             let ending = set.ending.get(dir).copied().unwrap_or(false);
-            if set.in_name.is_none() && !ending {
-                return false;
+            if set.marked {
+                if set.in_name.is_none() && !ending {
+                    return false;
+                }
+                let name = with_marks(seg, row, name);
+                return set.in_name.as_ref().is_some_and(|n| n.found_in(&name))
+                    || (ending && name.starts_with(&set.tail));
             }
-            let name = if set.marked {
-                with_marks(seg, row, name)
-            } else {
-                Cow::Borrowed(name)
-            };
             // A term with no separator in it can be in the name — the name is
             // part of the path.
             if let Some(needle) = &set.in_name
-                && needle.found_in(&name)
+                && needle.found_in(name)
             {
                 return true;
             }
@@ -1328,11 +1334,8 @@ fn walk_segment<'v>(
         plan.clauses
             .iter()
             .filter_map(|c| match &c.alts[..] {
-                [(false, Test::NameHas(n) | Test::NameHasMarked { folded: n, .. })]
-                    if !n.folded().is_empty() =>
-                {
-                    Some(n.folded().to_vec())
-                }
+                [(false, Test::NameHas(n))] if !n.folded().is_empty() => Some(n.folded().to_vec()),
+                [(false, Test::NameHasMarked(m))] => Some(m.folded.folded().to_vec()),
                 _ => None,
             })
             .collect()

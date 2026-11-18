@@ -144,12 +144,12 @@ pub struct Ast {
 }
 
 /// How many typing mistakes a term of this length is forgiven: none up to four
-/// characters, where a mistake is another word; one up to eight; then two.
+/// characters, where a mistake is another word; one up to ten; then two.
 pub fn mistakes_allowed(term: &str) -> u8 {
     match term.chars().count() {
         0..=4 => 0,
-        5..=8 => 1,
-        9..=64 => 2,
+        5..=10 => 1,
+        11..=64 => 2,
         // The verifier is one machine word wide.
         _ => 0,
     }
@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(f.groups[0].alts[0].1, Match::NameNear("raporr".into(), 1));
         assert_eq!(
             f.groups[3].alts[0].1,
-            Match::NameNear("muhasebeci".into(), 2)
+            Match::NameNear("muhasebeci".into(), 1)
         );
         assert_eq!(f.groups[1], q.groups[1]);
         assert_eq!(f.groups[2], q.groups[2]);

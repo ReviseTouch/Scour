@@ -747,8 +747,8 @@ mod tests {
             vec![(false, Match::NameNear("raporr".into(), 1))]
         );
         assert_eq!(
-            m("benzer:muhasebeci"),
-            vec![(false, Match::NameNear("muhasebeci".into(), 2))]
+            m("benzer:muhasebeciler"),
+            vec![(false, Match::NameNear("muhasebeciler".into(), 2))]
         );
         // Four letters are forgiven nothing: one wrong is another word.
         assert_eq!(

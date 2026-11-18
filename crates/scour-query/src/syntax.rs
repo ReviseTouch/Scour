@@ -88,7 +88,7 @@ nothing a trigram index can read, so put a cheaper term beside it when the set
 is large.
 
 `fuzzy:` forgives a letter wrong, missing, extra, or two swapped: none in a
-term of up to four characters, one up to eight, two beyond. Settings → Search
+term of up to four characters, one up to ten, two beyond. Settings → Search
 can offer it when a search finds nothing, or apply it to every word. `letters:`
 is never applied for you, and **nothing narrows it**: every name is read.
 

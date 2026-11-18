@@ -268,6 +268,13 @@ impl<'a> Spelling<'a> {
         row < self.rows && high >> (row % BLOCK) & 1 == 0
     }
 
+    /// Whether the row's spelling has a character for each of its fold's: it is
+    /// not stored whole. `ß` folds to two letters and a combining mark to none.
+    pub fn is_as_many_letters(&self, row: usize) -> bool {
+        let (low, high, _) = self.block(row / BLOCK);
+        row < self.rows && (low & high) >> (row % BLOCK) & 1 == 0
+    }
+
     /// One name, by row: a jump and at most `BLOCK` NUL scans. Borrowed unless
     /// the row is spelled with capitals. A caller asking in row order wants
     /// [`Reader`], which is this without the block scan or the allocation.
@@ -531,6 +538,9 @@ mod tests {
                     .zip(fold.bytes())
                     .all(|(a, b)| a == b || a ^ 0x20 == b);
             assert_eq!(s.is_as_long(row), flips, "{name:?}");
+            if s.is_as_many_letters(row) {
+                assert_eq!(name.chars().count(), fold.chars().count(), "{name:?}");
+            }
             assert_eq!(
                 r.folded(&s, row),
                 Some((fold.as_bytes(), flips)),
