@@ -275,6 +275,40 @@ impl<'a> Spelling<'a> {
         row < self.rows && (low & high) >> (row % BLOCK) & 1 == 0
     }
 
+    /// The row's spelling with case set aside and its marks kept — what
+    /// `DefaultFolder` makes of it. Written from the fold and its codes where
+    /// they say it all, which is every Turkish name; folded again for the rest.
+    pub(crate) fn cased(&self, row: usize) -> Option<Vec<u8>> {
+        use scour_core::text::{DefaultFolder, Folder};
+        let again = |spelled: &[u8]| {
+            let spelled = std::str::from_utf8(spelled).ok()?;
+            Some(DefaultFolder.fold(spelled).into_bytes())
+        };
+        let (name, patch) = Reader::default().find(self, row)?;
+        match patch {
+            Patch::Same | Patch::Flips(_) => Some(name.to_vec()),
+            Patch::Whole(spelled) => again(spelled),
+            Patch::Pairs(low, high) => {
+                let mut out = Vec::with_capacity(name.len() + 8);
+                for (i, &b) in name.iter().enumerate() {
+                    match (bit(low, i) | bit(high, i) << 1, marked(b)) {
+                        (KEPT | FLIPPED, _) => out.push(b),
+                        // Dotless and dotted: the one pair case itself sets aside.
+                        (_, Some(_)) if b == b'i' => out.push(b),
+                        (_, Some((small, _))) => out.extend_from_slice(small.as_bytes()),
+                        // A neighbour no table names: only the spelling says.
+                        (_, None) => {
+                            out.clear();
+                            patch.respell(name, &mut out);
+                            return again(&out);
+                        }
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
+
     /// One name, by row: a jump and at most `BLOCK` NUL scans. Borrowed unless
     /// the row is spelled with capitals. A caller asking in row order wants
     /// [`Reader`], which is this without the block scan or the allocation.
@@ -488,6 +522,32 @@ mod tests {
             assert_eq!(s.get(row).as_deref(), Some(want.as_str()), "row {row}");
         }
         assert_eq!(s.get(names.len()), None);
+    }
+
+    #[test]
+    fn a_name_with_its_marks_is_what_folding_its_spelling_gives() {
+        use scour_core::text::{DefaultFolder, Folder};
+        let mut names = corpus();
+        for extra in [
+            "Йод-йод.TXT",
+            "Ѡѡ.md",
+            "Çağ Öğüt ŞİŞ ışık",
+            "Résumé Ñandú Â",
+            "Łódź ẞ",
+            "Ёлка",
+        ] {
+            names.push(extra.to_owned());
+        }
+        let (spell, folded) = build(&names);
+        let s = Spelling::open(NameArena::open(&folded).expect("fold"), &spell).expect("open");
+        for (row, name) in names.iter().enumerate() {
+            assert_eq!(
+                s.cased(row).map(|b| String::from_utf8(b).expect("text")),
+                Some(DefaultFolder.fold(name)),
+                "{name:?}"
+            );
+        }
+        assert_eq!(s.cased(names.len()), None);
     }
 
     #[test]

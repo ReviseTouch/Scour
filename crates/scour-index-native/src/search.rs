@@ -828,8 +828,8 @@ fn with_marks<'a>(seg: &Segment<'_>, row: usize, name: &'a [u8]) -> Cow<'a, [u8]
     if seg.names.is_as_long(row) {
         return Cow::Borrowed(name);
     }
-    match seg.names.get(row) {
-        Some(spelled) => Cow::Owned(DefaultFolder.fold(&spelled).into_bytes()),
+    match seg.names.cased(row) {
+        Some(cased) => Cow::Owned(cased),
         None => Cow::Borrowed(name),
     }
 }

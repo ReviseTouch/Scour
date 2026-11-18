@@ -5,6 +5,9 @@
 //! the count and a digest of the page, so two builds can be diffed.
 //!
 //!   cargo run --release -p scour-index-native --example querycost -- /tmp/idx/native 7 < queries.txt
+//!
+//! `SCOUR_EXACT_ACCENTS=1` asks as Settings → Searching does with accents not
+//! ignored, `SCOUR_FORGIVE=1` as it does with typing mistakes always forgiven.
 
 use std::hash::{Hash, Hasher};
 use std::io::BufRead;
@@ -26,8 +29,14 @@ fn main() {
             continue;
         };
         let query = parts.next().unwrap_or("");
+        // The two settings a service reads words under, for measuring them.
+        let mut ast = scour_query::parse(query);
+        ast.exact_accents = std::env::var_os("SCOUR_EXACT_ACCENTS").is_some();
+        if std::env::var_os("SCOUR_FORGIVE").is_some() {
+            ast = ast.forgiving().unwrap_or(ast);
+        }
         let request = SearchRequest {
-            query: scour_query::parse(query),
+            query: ast,
             sort: scour_core::SortKey::named(sort).expect("a sort key"),
             descending: direction == "desc",
             page: Page {
