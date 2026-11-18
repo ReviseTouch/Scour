@@ -414,6 +414,10 @@ fn run(
                 Response::Accepted
             }
         }
+        Request::Reset {} => {
+            live.reset(kept);
+            Response::Accepted
+        }
         Request::Syntax {} => Response::Text {
             text: scour_query::SYNTAX.to_owned(),
         },

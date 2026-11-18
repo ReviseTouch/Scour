@@ -88,6 +88,12 @@ pub enum Ask {
     Rescan {
         path: String,
     },
+    /// Where the index is and what it holds, for the Index section.
+    IndexFacts,
+    /// Build the ordered part of the index again from the rows it has.
+    Reorganize,
+    /// Empty the index and walk everything again.
+    Reset,
     /// What can be shown of this file. The service decides what a file is: that
     /// needs its first eight kilobytes, not a guess from the name.
     Peek {
@@ -254,6 +260,9 @@ impl Freshness {
             | Ask::Await { .. }
             | Ask::Remember { .. }
             | Ask::Rescan { .. }
+            | Ask::IndexFacts
+            | Ask::Reorganize
+            | Ask::Reset
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -332,6 +341,9 @@ impl Link {
             | Ask::Status
             | Ask::Remember { .. }
             | Ask::Rescan { .. }
+            | Ask::IndexFacts
+            | Ask::Reorganize
+            | Ask::Reset
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -556,6 +568,15 @@ fn spawn_lane(
                 ),
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
                 Ask::Rescan { path } => (0, Request::Rescan { path: Some(path) }, Lane::Places),
+                Ask::IndexFacts => (0, Request::Stats {}, Lane::Places),
+                Ask::Reorganize => (
+                    0,
+                    Request::Maintain {
+                        level: scour_core::Maintenance::Rebuild,
+                    },
+                    Lane::Places,
+                ),
+                Ask::Reset => (0, Request::Reset {}, Lane::Places),
                 Ask::Usage { ref path } => (
                     0,
                     Request::Usage {

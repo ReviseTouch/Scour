@@ -169,6 +169,14 @@ enum Command {
         /// Narrow it to one subtree.
         path: Option<String>,
     },
+    /// Empty the index and walk every disk again, from nothing.
+    ///
+    /// Searches find little until the walk is done; `scour status` says when.
+    Reset {
+        /// Do it. Without this, it only says what it would do.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Housekeeping: flush, compact or rebuild.
     Maintain {
         #[arg(default_value = "flush")]
@@ -293,6 +301,10 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Some(Command::Faces { face }) => return render::faces(face.as_deref()),
+        Some(Command::Reset { yes: false }) => {
+            eprintln!("{}", render::reset_warning());
+            std::process::exit(2);
+        }
         _ => {}
     }
 
@@ -503,6 +515,7 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Stats) => Request::Stats {},
         Some(Command::Stop) => Request::Shutdown {},
         Some(Command::Rescan { path }) => Request::Rescan { path: path.clone() },
+        Some(Command::Reset { .. }) => Request::Reset {},
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
         },

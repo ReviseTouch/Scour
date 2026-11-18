@@ -2241,3 +2241,51 @@ msgstr "5 sn"
 
 msgid "15 s"
 msgstr "15 sn"
+
+msgid "Index"
+msgstr "İndeks"
+
+msgid "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong."
+msgstr "Dosya listesinin tutulduğu yer. Disklerden kurulur ve kendiliğinden güncel kalır; baştan kurmak bir şey yanlış göründüğünde içindir."
+
+msgid "Kept in"
+msgstr "Konum"
+
+msgid "Open the folder"
+msgstr "Klasörü aç"
+
+msgid "Reorganize"
+msgstr "Yeniden düzenle"
+
+msgid "Folds new files into the ordered part of the index. Nothing is removed and searching goes on; it happens by itself when the machine is idle."
+msgstr "Yeni dosyaları indeksin sıralı kısmına katar. Hiçbir şey silinmez, arama sürer; makine boştayken bu zaten kendiliğinden olur."
+
+msgid "Reset and scan again"
+msgstr "Sıfırla ve baştan tara"
+
+msgid "Empties the index and scans every disk again, from nothing."
+msgstr "İndeksi boşaltır ve bütün diskleri sıfırdan yeniden tarar."
+
+msgid "Reset…"
+msgstr "Sıfırla…"
+
+msgid "Searches will find little until the scan is done, a minute or a few on most machines."
+msgstr "Tarama bitene kadar aramalar eksik sonuç verir; çoğu makinede bir iki dakika sürer."
+
+msgid "Reset now"
+msgstr "Şimdi sıfırla"
+
+msgid "Reorganizing. Searching goes on meanwhile."
+msgstr "Yeniden düzenleniyor. Bu sırada arama sürer."
+
+msgid "The index was emptied and every disk is being scanned again."
+msgstr "İndeks boşaltıldı, bütün diskler yeniden taranıyor."
+
+msgid "written"
+msgstr "son yazma"
+
+msgid "location"
+msgstr "konum"
+
+msgid "This empties the index and walks every disk again; searches find little until it is done. Run `scour reset --yes` to do it."
+msgstr "Bu, indeksi boşaltır ve bütün diskleri yeniden tarar; bitene kadar aramalar eksik sonuç verir. Yapmak için `scour reset --yes` çalıştırın."

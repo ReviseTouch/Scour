@@ -203,6 +203,16 @@ pub const FEATURES: &[Feature] = &[
         what: "everything reachable with one, and answering to it",
         faces: [Has, Has, Has, Never("no pointer")],
     },
+    Feature {
+        id: "index-upkeep",
+        what: "where the index is kept, and emptying it to scan again",
+        faces: [
+            Has,
+            Has,
+            Not("not yet: `scour stats` and `scour reset` from a shell"),
+            Has,
+        ],
+    },
 ];
 
 /// Start a face so that it outlives the one starting it: a desktop closing a

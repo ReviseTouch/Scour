@@ -1354,6 +1354,94 @@ fn forget_retries_a_failed_alive_write_and_survives_reopen() {
     assert_eq!(all_paths(&reopened), ["/w/kept.txt"]);
 }
 
+/// Clearing empties the index for every source, staged rows included, and
+/// what is written after is all that a reopened index holds.
+#[test]
+fn clearing_leaves_nothing_and_the_index_fills_again() {
+    fn all_paths(index: &NativeIndex) -> Vec<String> {
+        let mut paths: Vec<String> = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                page: Page::new(0, 100),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect();
+        paths.sort();
+        paths
+    }
+    let other = |path: &str| Entry {
+        id: EntryId::path_hash(SourceId(1), path),
+        path: path.into(),
+        is_dir: false,
+        meta: Meta {
+            mtime: NOW,
+            size: 2,
+            ..Meta::UNKNOWN
+        },
+    };
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for batch in 0..3u64 {
+            index
+                .apply(
+                    &mut (0..20u64)
+                        .map(|i| {
+                            Change::Upsert(entry(
+                                &format!("/a/{batch}/{i}.txt"),
+                                NOW,
+                                batch * 100 + i,
+                            ))
+                        })
+                        .chain([Change::Upsert(other(&format!("/b/{batch}.txt")))]),
+                )
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+        // Staged and never committed: it goes as well.
+        index
+            .apply(&mut [Change::Upsert(entry("/a/staged.txt", NOW, 999))].into_iter())
+            .expect("apply staged");
+        // A removal still waiting for its commit.
+        index
+            .apply(
+                &mut [Change::RemoveSubtree {
+                    path: "/a/0".into(),
+                }]
+                .into_iter(),
+            )
+            .expect("remove");
+
+        assert_eq!(index.clear().expect("clear"), 3 * 21 + 1 - 20);
+        assert!(all_paths(&index).is_empty());
+        let stats = index.stats().expect("stats");
+        assert_eq!((stats.entries, stats.segments), (0, 0));
+        assert!(stats.written_at > 0);
+        assert_eq!(stats.dir, tmp.path().display().to_string());
+
+        index
+            .apply(&mut [Change::Upsert(entry("/a/after.txt", NOW, 5000))].into_iter())
+            .expect("apply after");
+        index.commit().expect("commit after");
+        assert_eq!(all_paths(&index), ["/a/after.txt"]);
+    }
+    let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(all_paths(&reopened), ["/a/after.txt"]);
+    // Only the new segment's files are left on disk.
+    let segs: std::collections::BTreeSet<String> = std::fs::read_dir(tmp.path())
+        .expect("list")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.starts_with("seg-"))
+        .map(|n| n.split('.').next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(segs.len(), 1, "{segs:?}");
+}
+
 /// A failed sweep must restore its unchanged-row stamps as well as its dirty
 /// bitmap, or retrying deletes the row the walk explicitly saw.
 #[test]

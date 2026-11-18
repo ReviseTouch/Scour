@@ -353,6 +353,13 @@ pub struct IndexStats {
     pub pending_removals: u64,
     /// Whether the index was built with document content.
     pub has_content: bool,
+    /// Where its files are, for a settings page to show and open. Empty when
+    /// an index has no directory of its own.
+    #[serde(default)]
+    pub dir: String,
+    /// When it was last written down, seconds since the epoch; zero if never.
+    #[serde(default)]
+    pub written_at: i64,
 }
 
 /// How much work a maintenance pass may do.

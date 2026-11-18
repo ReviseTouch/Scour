@@ -81,6 +81,12 @@ pub trait Index: Send + Sync + Debug {
         0
     }
 
+    /// Remove every row, whatever source put it here: the index is empty after,
+    /// and the next walk fills it from the disks. Returns how many rows went.
+    fn clear(&self) -> Result<u64> {
+        Err(Error::unsupported("clearing the index"))
+    }
+
     /// Remove everything one source ever put here. Returns how many rows went.
     /// For a source no longer configured: a sweep needs a walk, and a source that
     /// is gone will never walk again. Defaults to nothing removed.

@@ -386,6 +386,12 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             }
         }
         Response::Stats(s) => {
+            if !s.dir.is_empty() {
+                println!("{}{}", label("location"), s.dir);
+            }
+            if s.written_at > 0 {
+                println!("{}{}", label("written"), stamp(s.written_at));
+            }
             println!("{}{}", label("entries"), s.entries);
             println!("{}{}", label("folders"), s.dirs);
             println!(
@@ -816,6 +822,14 @@ fn stamp(secs: i64) -> String {
         "" => "—".into(),
         said => said.to_owned(),
     }
+}
+
+/// What `scour reset` says before it is told `--yes`.
+pub fn reset_warning() -> String {
+    t(
+        "This empties the index and walks every disk again; searches find little until it is \
+       done. Run `scour reset --yes` to do it.",
+    )
 }
 
 /// Where everything lives. Answered without a service, because this is what

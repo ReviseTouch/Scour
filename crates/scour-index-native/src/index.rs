@@ -2176,6 +2176,37 @@ impl Index for NativeIndex {
         Ok(g)
     }
 
+    /// [`Index::forget`] for every source at once: each live row is killed
+    /// through the same bitmaps, so a segment left with none goes with its files
+    /// at the next manifest, and staged rows that never landed go too.
+    fn clear(&self) -> Result<u64> {
+        self.settle()?;
+        let mut inner = self.inner.write();
+        self.flush(&mut inner)?;
+        let mut gone = 0u64;
+        let mut touched = Vec::new();
+        for live in inner.segments.iter_mut() {
+            let mut any = false;
+            for row in 0..live.rows() {
+                if live.kill(row) {
+                    gone += 1;
+                    any = true;
+                }
+            }
+            if any {
+                touched.push(live.number);
+            }
+        }
+        inner.hidden_prefixes = scour_core::PrefixSet::default();
+        if gone > 0 {
+            inner.dirty_alive.extend(touched);
+            self.write_dirty_alive(&mut inner)?;
+            self.forget_empty(&mut inner);
+            self.save_meta(&mut inner)?;
+        }
+        Ok(gone)
+    }
+
     fn forget(&self, source: SourceId) -> Result<u64> {
         self.settle()?;
         let mut inner = self.inner.write();
@@ -3073,6 +3104,12 @@ impl Index for NativeIndex {
             pending_removals: inner.hidden_prefixes.len() as u64,
             // No extractor is registered yet. The column is reserved, not used.
             has_content: false,
+            dir: self.dir.display().to_string(),
+            written_at: std::fs::metadata(self.dir.join(META_FILE))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs() as i64),
         })
     }
 

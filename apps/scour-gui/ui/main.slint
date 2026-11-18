@@ -1617,7 +1617,26 @@ export component MainWindow inherits Window {
     in-out property <string> settings-section: "general";
     in property <string> settings-title;
     in property <string> settings-foot;
-    in property <[string]> section-ids: ["general", "view", "disks", "rules", "keys", "about"];
+    in property <[string]> section-ids: ["general", "view", "disks", "rules", "keys", "index", "about"];
+    // The index, in Settings: where it is, what it holds, and the two ways to
+    // build it again.
+    in property <string> index-dir;
+    in property <string> index-facts;
+    in property <string> set-index-where;
+    in property <string> set-index-open;
+    in property <string> set-index-tidy;
+    in property <string> set-index-tidy-note;
+    in property <string> set-index-tidy-push;
+    in property <string> set-index-reset;
+    in property <string> set-index-reset-note;
+    in property <string> set-index-reset-push;
+    in property <string> set-index-reset-sure;
+    in property <string> set-index-reset-yes;
+    in property <string> set-index-cancel;
+    in property <string> index-said;
+    callback index-open();
+    callback index-tidy();
+    callback index-reset();
     in property <[string]> section-labels;
     in property <[string]> section-leads;
     in property <string> set-language;
@@ -4856,6 +4875,12 @@ export component MainWindow inherits Window {
                         }
                         NavRow {
                             label: root.section-labels[6];
+                            icon: @image-url("icons/tools/index.svg");
+                            on: root.settings-section == "index";
+                            clicked => { root.settings-picked("index"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[7];
                             icon: @image-url("icons/tools/settings-about.svg");
                             on: root.settings-section == "about";
                             clicked => { root.settings-picked("about"); }
@@ -4890,7 +4915,8 @@ export component MainWindow inherits Window {
                             : root.settings-section == "disks" ? 2
                             : root.settings-section == "folders" ? 3
                             : root.settings-section == "rules" ? 4
-                            : root.settings-section == "keys" ? 5 : 6) : 0];
+                            : root.settings-section == "keys" ? 5
+                            : root.settings-section == "index" ? 6 : 7) : 0];
                         color: Theme.ink;
                         font-size: 18px;
                         font-weight: 600;
@@ -4902,7 +4928,8 @@ export component MainWindow inherits Window {
                             : root.settings-section == "disks" ? 2
                             : root.settings-section == "folders" ? 3
                             : root.settings-section == "rules" ? 4
-                            : root.settings-section == "keys" ? 5 : 6];
+                            : root.settings-section == "keys" ? 5
+                            : root.settings-section == "index" ? 6 : 7];
                         color: Theme.ink-2;
                         font-size: 12.5px;
                         wrap: word-wrap;
@@ -5618,6 +5645,63 @@ export component MainWindow inherits Window {
                 vertical-alignment: top;
             }
         
+                            }
+
+                            if root.settings-section == "index": VerticalLayout {
+                                spacing: 6px;
+                                Card {
+                                    SettingRow {
+                                        label: root.set-index-where;
+                                        note: root.index-dir + (root.index-facts != "" ? "\n" + root.index-facts : "");
+                                        Push {
+                                            label: root.set-index-open;
+                                            enabled: root.index-dir != "";
+                                            clicked => { root.index-open(); }
+                                        }
+                                    }
+                                }
+                                Card {
+                                    SettingRow {
+                                        label: root.set-index-tidy;
+                                        note: root.set-index-tidy-note;
+                                        Push {
+                                            label: root.set-index-tidy-push;
+                                            clicked => { root.index-tidy(); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    index-reset-row := SettingRow {
+                                        property <bool> sure;
+                                        label: root.set-index-reset;
+                                        note: self.sure ? root.set-index-reset-sure : root.set-index-reset-note;
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            if !index-reset-row.sure: Push {
+                                                label: root.set-index-reset-push;
+                                                clicked => { index-reset-row.sure = true; }
+                                            }
+                                            if index-reset-row.sure: Push {
+                                                label: root.set-index-cancel;
+                                                plain: true;
+                                                clicked => { index-reset-row.sure = false; }
+                                            }
+                                            if index-reset-row.sure: Push {
+                                                label: root.set-index-reset-yes;
+                                                asking: true;
+                                                clicked => {
+                                                    index-reset-row.sure = false;
+                                                    root.index-reset();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if root.index-said != "": Text {
+                                    text: root.index-said;
+                                    color: Theme.ink-3;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
                             }
 
                             if root.settings-section == "about": VerticalLayout {

@@ -1568,6 +1568,8 @@
     background: var(--panel-2); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
   }
   .set-push:hover { border-color: var(--q-key); }
+  .set-push.asking { color: var(--q-key); border-color: var(--q-key); }
+  .set-push:disabled { opacity: .45; }
   .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
   .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
   ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
@@ -1746,6 +1748,7 @@
         <button type="button" data-sec="folders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 18.5V7a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9z"/></svg><span data-t="Folders scanned"></span></button>
         <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
         <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
+        <button type="button" data-sec="index"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg><span data-t="Index"></span></button>
         <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
           <p class="set-foot" data-t="Changes apply at once; there is nothing to save. Esc closes."></p>
         </nav>
@@ -1794,6 +1797,16 @@
           </section>
           <section data-sec="rules" hidden><div id="set-rules"></div></section>
           <section data-sec="keys" hidden><div id="set-keys"></div></section>
+          <section data-sec="index" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Kept in"></div><div class="desc" id="index-where"></div></div><button type="button" class="set-push" id="index-open" data-t="Open the folder"></button></div>
+            </div>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Reorganize"></div><div class="desc" data-t="Folds new files into the ordered part of the index. Nothing is removed and searching goes on; it happens by itself when the machine is idle."></div></div><button type="button" class="set-push" id="index-tidy" data-t="Reorganize"></button></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Reset and scan again"></div><div class="desc" id="index-reset-desc"></div></div><span id="index-reset-btns"></span></div>
+            </div>
+            <p class="set-lead" id="index-said"></p>
+          </section>
           <section data-sec="about" hidden><pre id="set-about"></pre></section>
         </div>
       </div>
@@ -2162,6 +2175,15 @@
         cache: "no-store",
       });
       if (!r.ok) throw new Error(`rescan: ${r.status}`);
+      return r.json();
+    },
+    /* The Index section's buttons: `reorganize`, `reset` or `open`. */
+    indexDo: async (what) => {
+      const r = await fetch(`/api/index-do?${new URLSearchParams({ do: what, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`index: ${r.status}`);
       return r.json();
     },
     /* `what` is `index`, `leave` or `later`. */
@@ -5884,6 +5906,7 @@
     if (document.hidden) { missedWhileAway = true; return; }
     rowsSoon();
     countsSoon();
+    if (!settingsBox.hidden && SECTION === "index") loadIndex();
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -6756,6 +6779,7 @@
     folders: ["Folders scanned", "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched."],
     rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
     keys: ["Keyboard", "What the keys do, and what the query understands."],
+    index: ["Index", "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong."],
     about: ["About", "What is running, and what it holds."],
   };
   let SECTION = "general";
@@ -6835,6 +6859,51 @@
     drawFolders();
   }
 
+  /* Where the index is and what it holds; asked again while the section is
+     open, so a reset is seen filling up. */
+  let INDEX_SURE = false;
+  function loadIndex() {
+    SERVICE.get("index", {}).then((st) => {
+      let facts = `${fmt(st.entries)} ${T("entries")} · ${bytes(st.bytes_on_disk)}`;
+      if (st.written_at) facts += ` · ${T("written")} ${exact(st.written_at)}`;
+      const where = document.getElementById("index-where");
+      where.textContent = "";
+      where.append(st.dir || "", document.createElement("br"), facts);
+      document.getElementById("index-open").disabled = !st.dir;
+    }).catch(() => {});
+    drawIndexReset();
+  }
+  function drawIndexReset() {
+    document.getElementById("index-reset-desc").textContent = INDEX_SURE
+      ? T("Searches will find little until the scan is done, a minute or a few on most machines.")
+      : T("Empties the index and scans every disk again, from nothing.");
+    const box = document.getElementById("index-reset-btns");
+    box.innerHTML = INDEX_SURE
+      ? `<button type="button" class="set-push" data-index="cancel">${esc(T("Cancel"))}</button> ` +
+        `<button type="button" class="set-push asking" data-index="reset">${esc(T("Reset now"))}</button>`
+      : `<button type="button" class="set-push" data-index="sure">${esc(T("Reset…"))}</button>`;
+  }
+  function indexSaid(text) { document.getElementById("index-said").textContent = text; }
+  document.getElementById("index-open").addEventListener("click", () => {
+    SERVICE.indexDo("open").catch((err) => console.warn("index:", err));
+  });
+  document.getElementById("index-tidy").addEventListener("click", () => {
+    SERVICE.indexDo("reorganize")
+      .then(() => indexSaid(T("Reorganizing. Searching goes on meanwhile.")))
+      .catch((err) => console.warn("index:", err));
+  });
+  document.getElementById("index-reset-btns").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-index]");
+    if (!b) return;
+    if (b.dataset.index === "reset") {
+      SERVICE.indexDo("reset")
+        .then(() => indexSaid(T("The index was emptied and every disk is being scanned again.")))
+        .catch((err) => console.warn("index:", err));
+    }
+    INDEX_SURE = b.dataset.index === "sure";
+    drawIndexReset();
+  });
+
   function showSection(sec) {
     SECTION = sec;
     for (const b of settingsBox.querySelectorAll(".set-nav button[data-sec]")) {
@@ -6851,6 +6920,7 @@
     if (sec === "general") { ARMED = ""; drawFaces(); loadHotkey(); }
     if (sec === "rules") loadRules();
     if (sec === "disks") { drawDisks(); loadDisks(); }
+    if (sec === "index") { INDEX_SURE = false; loadIndex(); }
     if (sec === "about") {
       SERVICE.get("status", {}).then((st) => {
         document.getElementById("set-about").textContent =

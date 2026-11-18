@@ -62,3 +62,50 @@ pub fn api_volume(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req)
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }
 }
+
+/// Where the index is and what it holds: the Index section of the settings.
+pub fn api_index(stream: &mut TcpStream, client: &Mutex<Link>) {
+    match call(client, Request::Stats {}) {
+        Ok(Response::Stats(s)) => match serde_json::to_value(&s) {
+            Ok(v) => http::json(stream, &v),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        },
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
+/// The Index section's buttons: `do` is `reorganize`, `reset` or `open` —
+/// the last opens the folder, so it is behind `--no-launch` like any opening.
+pub fn api_index_do(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, launch: bool) {
+    let request = match req.param("do") {
+        Some("reorganize") => Request::Maintain {
+            level: scour_core::Maintenance::Rebuild,
+        },
+        Some("reset") => Request::Reset {},
+        Some("open") if !launch => {
+            return http::fail(stream, "403 Forbidden", "opening is off (--no-launch)");
+        }
+        // The folder the service names, never one the page names.
+        Some("open") => {
+            return match call(client, Request::Stats {}) {
+                Ok(Response::Stats(s)) if !s.dir.is_empty() => {
+                    match scour_openers::open(std::ffi::OsStr::new(&s.dir)) {
+                        Ok(()) => http::json(stream, &serde_json::json!({ "ok": true })),
+                        Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+                    }
+                }
+                Ok(_) => http::fail(stream, "404 Not Found", "the index has no folder"),
+                Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+            };
+        }
+        _ => return http::fail(stream, "400 Bad Request", "do is reorganize, reset or open"),
+    };
+    match call(client, request) {
+        Ok(Response::Accepted | Response::Maintained(_)) => {
+            http::json(stream, &serde_json::json!({ "ok": true }))
+        }
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}

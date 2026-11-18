@@ -25,6 +25,9 @@ pub struct Live {
     built: Mutex<Vec<crate::disks::Planned>>,
     /// Where a replan asks for the swap, when a thread is there to do it.
     wake: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Somebody asked for the index to be emptied and walked again; the swap
+    /// thread does it, so the request is answered at once.
+    reset: std::sync::atomic::AtomicBool,
 }
 
 /// Which sources a freshly started engine walks.
@@ -43,6 +46,7 @@ impl Live {
             plan: Mutex::new(plan),
             swapping: Mutex::default(),
             wake: Mutex::new(None),
+            reset: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -107,11 +111,27 @@ impl Live {
         }
     }
 
+    /// Empty the index and walk everything again, behind the answer: stopping
+    /// the engine waits for a walk in progress to reach its next row.
+    pub fn reset(&self, kept: &Kept) {
+        self.reset.store(true, std::sync::atomic::Ordering::SeqCst);
+        let wake = self.wake.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        match wake {
+            Some(tx) if tx.send(()).is_ok() => {}
+            _ => self.settle(kept),
+        }
+    }
+
     /// Bring the engine to the plan: wake the faces when only what they show
     /// changed, replace it when what is indexed did.
     fn settle(&self, kept: &Kept) {
         let _one = self.swapping.lock().unwrap_or_else(|p| p.into_inner());
         let plan = self.plan();
+        if self.reset.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.start_over(kept, &plan);
+            *self.built.lock().unwrap_or_else(|p| p.into_inner()) = plan.sources.clone();
+            return;
+        }
         let same = *self.built.lock().unwrap_or_else(|p| p.into_inner()) == plan.sources;
         if same {
             self.engine().nudge();
@@ -156,6 +176,30 @@ impl Live {
             new.sources().len()
         );
         start(new, walk);
+    }
+
+    /// [`Live::swap`], with the index emptied between the two engines: the old
+    /// one stopped so nothing writes while the rows go, the new one walking all.
+    fn start_over(&self, kept: &Kept, plan: &Plan) {
+        let old = self.engine();
+        let revision = old.status().revision + 1;
+        old.shutdown();
+        match self.index.clear() {
+            Ok(gone) => scour_core::note!(
+                "scourd: the index was emptied ({gone} rows); walking every source again"
+            ),
+            Err(e) => scour_core::note!(
+                "scourd: the index could not be emptied: {e}; walking again over it"
+            ),
+        }
+        let new = Arc::new(crate::wire::engine(
+            &kept.config,
+            Arc::clone(&self.index),
+            &plan.sources,
+            revision,
+        ));
+        *self.engine.write().unwrap_or_else(|p| p.into_inner()) = Arc::clone(&new);
+        start(new, Walk::All);
     }
 
     /// Stop the engine in use, for the process to end.

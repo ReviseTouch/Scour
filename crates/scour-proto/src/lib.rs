@@ -235,6 +235,9 @@ pub enum Request {
         #[serde(default)]
         level: Maintenance,
     },
+    /// Empty the index and walk every source again, from nothing. Accepted at
+    /// once; the walk runs behind it, and `Status` says when it is done.
+    Reset {},
     /// The query language reference, as text.
     Syntax {},
     /// Stop the service.
@@ -502,6 +505,7 @@ impl Request {
             Request::Rescan { .. }
             | Request::Recheck { .. }
             | Request::Maintain { .. }
+            | Request::Reset {}
             | Request::SetSettings { .. }
             // It starts programs and writes files. Nothing about the index changes,
             // but this predicate is a security boundary, not a classification.
@@ -561,6 +565,7 @@ impl Request {
             | Request::Thumbnails { .. }
             | Request::Rescan { .. }
             | Request::Maintain { .. }
+            | Request::Reset {}
             | Request::Syntax {}
             | Request::Shutdown {} => false,
         }
@@ -594,6 +599,7 @@ impl Request {
             Request::Rescan { .. } => "rescan",
             Request::Recheck { .. } => "recheck",
             Request::Maintain { .. } => "maintain",
+            Request::Reset {} => "reset",
             Request::Syntax {} => "syntax",
             Request::Shutdown {} => "shutdown",
         }

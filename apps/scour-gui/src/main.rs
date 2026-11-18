@@ -1227,6 +1227,7 @@ fn main() -> Result<()> {
                         "disks" => "disks",
                         "help" | "keys" => "keys",
                         "view" => "view",
+                        "index" => "index",
                         "about" => "about",
                         _ => "",
                     };
@@ -1279,6 +1280,47 @@ fn main() -> Result<()> {
         });
     }
 
+    // The Index section's three buttons. What they started is said under them;
+    // the facts above are asked again as the index moves.
+    {
+        let weak = window.as_weak();
+        window.on_index_open(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let dir = w.get_index_dir().to_string();
+            if !dir.is_empty()
+                && let Err(e) = scour_openers::open(std::ffi::OsStr::new(&dir))
+            {
+                trace(&format!("index: the folder did not open: {e}"));
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let cat = Rc::clone(&cat);
+        window.on_index_tidy(move || {
+            let Some(w) = weak.upgrade() else { return };
+            link.send(Ask::Reorganize);
+            w.set_index_said(t(
+                &cat.borrow(),
+                "Reorganizing. Searching goes on meanwhile.",
+            ));
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let cat = Rc::clone(&cat);
+        window.on_index_reset(move || {
+            let Some(w) = weak.upgrade() else { return };
+            link.send(Ask::Reset);
+            w.set_index_said(t(
+                &cat.borrow(),
+                "The index was emptied and every disk is being scanned again.",
+            ));
+        });
+    }
+
     // A section of the settings page, and what it needs asked for: the
     // lists come from the service, the key from the desktop, each fresh.
     {
@@ -1291,6 +1333,7 @@ fn main() -> Result<()> {
                 "rules" => link.send(Ask::Rules),
                 "disks" | "folders" => link.send(Ask::Volumes),
                 "about" => link.send(Ask::Status),
+                "index" => link.send(Ask::IndexFacts),
                 // The desktop may have been changed in its own settings since
                 // this window started; the row must not be stale.
                 "general" => hotkey::work(hotkey::Deed::Look),
@@ -4822,6 +4865,9 @@ fn apply(
         Got::Awake(reply) => {
             let Response::Status(st) = *reply else { return };
             disks_moved(state, link, st.asking);
+            if w.get_panel() == "settings" && w.get_settings_section() == "index" {
+                link.send(Ask::IndexFacts);
+            }
             // Free: a wait is answered with the whole status. The total too,
             // or the meter kept dividing by what the index held at start-up.
             w.set_scanning(scanning_note(cat, &st));
@@ -4917,6 +4963,27 @@ fn apply(
         // This desktop's own folders, each an `under:` term. The labels are the
         // desktop's own words, so nothing here translates them.
         Got::Places(reply) => {
+            if let Response::Stats(s) = &*reply {
+                w.set_index_dir(s.dir.as_str().into());
+                let mut facts = format!(
+                    "{} {} · {}",
+                    grouped(s.entries),
+                    t(cat, "entries"),
+                    compact_bytes(s.bytes_on_disk)
+                );
+                if s.written_at > 0 {
+                    facts.push_str(&format!(
+                        " · {} {}",
+                        t(cat, "written"),
+                        scour_ui::format::stamp(s.written_at)
+                    ));
+                }
+                w.set_index_facts(facts.into());
+                return;
+            }
+            if matches!(&*reply, Response::Accepted) {
+                return;
+            }
             let Response::Places(p) = *reply else {
                 trace(&format!("places: unexpected reply {reply:?}"));
                 return;
@@ -5224,6 +5291,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Folders scanned",
         "Skipped",
         "Keyboard",
+        "Index",
         "About",
     ]));
     w.set_section_leads(list(&[
@@ -5233,8 +5301,29 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched.",
         "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
         "What the keys do, and what the query understands.",
+        "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong.",
         "What is running, and what it holds.",
     ]));
+    w.set_set_index_where(t(cat, "Kept in"));
+    w.set_set_index_open(t(cat, "Open the folder"));
+    w.set_set_index_tidy(t(cat, "Reorganize"));
+    w.set_set_index_tidy_note(t(
+        cat,
+        "Folds new files into the ordered part of the index. Nothing is removed and searching goes on; it happens by itself when the machine is idle.",
+    ));
+    w.set_set_index_tidy_push(t(cat, "Reorganize"));
+    w.set_set_index_reset(t(cat, "Reset and scan again"));
+    w.set_set_index_reset_note(t(
+        cat,
+        "Empties the index and scans every disk again, from nothing.",
+    ));
+    w.set_set_index_reset_push(t(cat, "Reset…"));
+    w.set_set_index_reset_sure(t(
+        cat,
+        "Searches will find little until the scan is done, a minute or a few on most machines.",
+    ));
+    w.set_set_index_reset_yes(t(cat, "Reset now"));
+    w.set_set_index_cancel(t(cat, "Cancel"));
     w.set_set_language(t(cat, "Language"));
     w.set_set_language_note(t(cat, "Empty follows the desktop."));
     let mut labels = vec![t(cat, "The desktop's")];
