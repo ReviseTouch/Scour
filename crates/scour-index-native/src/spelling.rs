@@ -273,7 +273,21 @@ impl Patch<'_> {
     fn respell(&self, name: &[u8], out: &mut Vec<u8>) {
         match self {
             Patch::Same | Patch::Whole(_) => out.extend_from_slice(name),
-            Patch::Flips(mask) => respell(name, |i| bit(mask, i), out),
+            // Nearly every name that differs: a copy, and a flip a capital.
+            Patch::Flips(mask) => {
+                let from = out.len();
+                out.extend_from_slice(name);
+                for (at, &bits) in mask.iter().enumerate() {
+                    let mut bits = bits;
+                    while bits != 0 {
+                        if let Some(b) = out.get_mut(from + at * 8 + bits.trailing_zeros() as usize)
+                        {
+                            *b ^= 0x20;
+                        }
+                        bits &= bits - 1;
+                    }
+                }
+            }
             Patch::Pairs(low, high) => respell(name, |i| bit(low, i) | bit(high, i) << 1, out),
         }
     }
@@ -300,9 +314,12 @@ impl Reader {
     /// `Spelling::get(row).unwrap_or_default()` gives, and so what a sort key
     /// must be, or rows order by something the shown path does not say.
     pub(crate) fn at<'r>(&'r mut self, names: &Spelling<'r>, row: usize) -> &'r str {
-        let Some((name, patch)) = self.find(names, row) else {
-            return "";
-        };
+        self.read(names, row).unwrap_or_default()
+    }
+
+    /// [`Reader::at`], saying nothing where that says "": a row to skip.
+    pub(crate) fn read<'r>(&'r mut self, names: &Spelling<'r>, row: usize) -> Option<&'r str> {
+        let (name, patch) = self.find(names, row)?;
         let spelled: &'r [u8] = match patch {
             Patch::Same => name,
             Patch::Whole(spelled) => spelled,
@@ -312,7 +329,7 @@ impl Reader {
                 &self.built
             }
         };
-        std::str::from_utf8(spelled).unwrap_or_default()
+        std::str::from_utf8(spelled).ok()
     }
 
     /// The row's folded name and what its spelling adds, stepping on from the

@@ -237,13 +237,18 @@ impl<'a> Segment<'a> {
     /// Reconstruct a whole entry, for rebuilding or merging.
     pub fn entry(&self, row: usize) -> Option<Entry> {
         let name = self.names.get(row)?;
-        let h = self.hit(row, &name);
-        Some(Entry {
+        Some(self.entry_named(row, &name))
+    }
+
+    /// [`Segment::entry`] for a caller that has read the row's spelling.
+    pub(crate) fn entry_named(&self, row: usize, name: &str) -> Entry {
+        let h = self.hit(row, name);
+        Entry {
             id: h.id,
             path: h.path,
             is_dir: h.is_dir,
             meta: h.meta,
-        })
+        }
     }
 }
 

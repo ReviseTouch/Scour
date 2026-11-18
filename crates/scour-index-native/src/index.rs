@@ -1384,10 +1384,13 @@ impl NativeIndex {
         &self,
         inner: &Inner,
         query: &scour_core::Ast,
-        mut f: impl FnMut(&Segment<'_>, usize) -> bool,
+        mut f: impl FnMut(&mut Spelled, &Segment<'_>, usize) -> bool,
     ) -> Result<()> {
         for live in &inner.segments {
             let seg = live.view()?;
+            // A segment's matches come in row order, so its names are read on
+            // from the last one rather than from their block's start.
+            let mut names = Spelled::default();
             let plan = Plan::compile(query, &seg)?;
             // The pending paths become directory-number ranges once per segment;
             // rebuilding a spelled path per match meant millions of allocations.
@@ -1396,13 +1399,24 @@ impl NativeIndex {
                 if !doomed.is_empty() && doomed.takes(&seg, row, seg.dir_id(row)) {
                     return true;
                 }
-                f(&seg, row)
+                f(&mut names, &seg, row)
             });
             if !go {
                 break;
             }
         }
         Ok(())
+    }
+}
+
+/// The spellings of one segment's rows, for a pass that asks in row order.
+#[derive(Default)]
+struct Spelled(crate::spelling::Reader);
+
+impl Spelled {
+    /// The row's name as it is spelled, or nothing for a row to skip.
+    fn of<'r>(&'r mut self, seg: &Segment<'r>, row: usize) -> Option<&'r str> {
+        self.0.read(&seg.names, row)
     }
 }
 
@@ -1847,10 +1861,14 @@ fn first_of(
 fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry)) {
     use std::collections::BinaryHeap;
 
-    let next = |i: usize, from: usize| -> Option<(Entry, usize)> {
-        (from..segs[i].rows())
-            .find(|&r| segs[i].is_alive(r))
-            .and_then(|r| views[i].entry(r).map(|e| (e, r)))
+    // Each segment is read in row order, so its names are read on from the
+    // last one rather than from their block's start.
+    let mut names: Vec<crate::spelling::Reader> = Vec::new();
+    names.resize_with(segs.len(), Default::default);
+    let mut next = |i: usize, from: usize| -> Option<(Entry, usize)> {
+        let row = (from..segs[i].rows()).find(|&r| segs[i].is_alive(r))?;
+        let name = names[i].read(&views[i].names, row)?;
+        Some((views[i].entry_named(row, name), row))
     };
 
     let mut heap: BinaryHeap<Cursor> = BinaryHeap::with_capacity(segs.len());
@@ -2839,14 +2857,14 @@ impl Index for NativeIndex {
     fn scan(&self, req: &ScanRequest, f: &mut dyn FnMut(&Hit) -> bool) -> Result<u64> {
         let inner = self.inner.read();
         let mut rows = 0u64;
-        self.for_each_match(&inner, &req.query, |seg, row| {
-            let Some(name) = seg.names.get(row) else {
+        self.for_each_match(&inner, &req.query, |names, seg, row| {
+            let Some(name) = names.of(seg, row) else {
                 // A row whose name cannot be read is not a row anybody can be
                 // shown. Skipped rather than aborting the export.
                 return true;
             };
             rows += 1;
-            f(&seg.hit(row, &name))
+            f(&seg.hit(row, name))
         })?;
         Ok(rows)
     }
@@ -2901,8 +2919,8 @@ impl Index for NativeIndex {
             .iter()
             .any(|b| matches!(b, FacetBy::Ext { .. } | FacetBy::Dir { .. }));
 
-        self.for_each_match(&inner, &req.query, |seg, row| {
-            let name = wants_name.then(|| seg.names.get(row).unwrap_or_default());
+        self.for_each_match(&inner, &req.query, |names, seg, row| {
+            let name = wants_name.then(|| names.of(seg, row).unwrap_or_default());
             for (i, by) in req.by.iter().enumerate() {
                 match by {
                     FacetBy::Kind => {
@@ -2913,13 +2931,13 @@ impl Index for NativeIndex {
                         *counts[i].entry(k.token().to_owned()).or_default() += 1;
                     }
                     FacetBy::Ext { .. } => {
-                        let ext = scour_core::ext_of(name.as_deref().unwrap_or_default());
+                        let ext = scour_core::ext_of(name.unwrap_or_default());
                         if !ext.is_empty() {
                             *counts[i].entry(ext).or_default() += 1;
                         }
                     }
                     FacetBy::Dir { .. } => {
-                        let path = seg.path(row, name.as_deref().unwrap_or_default());
+                        let path = seg.path(row, name.unwrap_or_default());
                         if let Some(rest) = path
                             .strip_prefix(parents[i].as_str())
                             .and_then(|r| r.strip_prefix('/'))
