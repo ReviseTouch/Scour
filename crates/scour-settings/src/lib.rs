@@ -133,6 +133,16 @@ pub struct Settings {
     /// The time ribbon under the list, put away.
     #[serde(default)]
     pub ribbon_hidden: bool,
+    /// A letter and the same letter with a mark are different letters to a
+    /// search: `sirket` does not find `şirket`. Off by default, where only a
+    /// word typed with a mark is that strict.
+    #[serde(default)]
+    pub accents_exact: bool,
+    /// What a search does about a word that may be mistyped: `""` says how many
+    /// files it nearly found when it finds none, `always` forgives every word
+    /// its mistakes, `off` does neither. Not validated here.
+    #[serde(default)]
+    pub typos: String,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -198,6 +208,9 @@ pub struct Change {
     pub tabs_off: Option<bool>,
     pub rail_hidden: Option<bool>,
     pub ribbon_hidden: Option<bool>,
+    pub accents_exact: Option<bool>,
+    /// `off`, `always`, or `""` to offer. See [`Settings::typos`].
+    pub typos: Option<String>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -298,6 +311,12 @@ impl Change {
         }
         if let Some(v) = self.ribbon_hidden {
             to.ribbon_hidden = v;
+        }
+        if let Some(v) = self.accents_exact {
+            to.accents_exact = v;
+        }
+        if let Some(v) = self.typos {
+            to.typos = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

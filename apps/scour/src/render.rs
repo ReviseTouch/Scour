@@ -113,6 +113,15 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             );
             complain(&r.misread, echo);
+            if let Some(similar) = &r.similar {
+                eprintln!(
+                    "{}: {}{} — scour '{}'",
+                    t("Similar"),
+                    similar.total,
+                    if similar.capped { "+" } else { "" },
+                    similar.query
+                );
+            }
         }
         Response::Count {
             total,

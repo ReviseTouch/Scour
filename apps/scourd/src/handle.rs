@@ -40,6 +40,11 @@ impl Kept {
         crate::disks::plan(&self.config, &scour_volumes::look(), &settings, &later)
     }
 
+    /// How queries are read now. See [`crate::wire::reading`].
+    pub fn reading(&self) -> scour_engine::Reading {
+        crate::wire::reading(&self.settings.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
     pub fn open(dir: PathBuf, config: scour_config::Config) -> Kept {
         Kept {
             settings: Mutex::new(scour_settings::Settings::load(&dir)),
@@ -172,6 +177,9 @@ fn run(
             // the engine takes the new set. Compared rather than assumed: this
             // is also the request a window sends for a column drag.
             let after = rules_of(&held);
+            // How words are read is the engine's to know: every question
+            // that takes a query parses it there.
+            engine.set_reading(crate::wire::reading(&held));
             if before != after {
                 let was = engine.scan_options();
                 let now = crate::wire::scan_options_with(&kept.config, &held);

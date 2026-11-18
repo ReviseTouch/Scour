@@ -170,6 +170,7 @@ impl Live {
             &plan.sources,
             revision,
         ));
+        new.set_reading(kept.reading());
         *self.engine.write().unwrap_or_else(|p| p.into_inner()) = Arc::clone(&new);
         scour_core::note!(
             "scourd: the disks changed · {} sources now",
@@ -198,6 +199,7 @@ impl Live {
             &plan.sources,
             revision,
         ));
+        new.set_reading(kept.reading());
         *self.engine.write().unwrap_or_else(|p| p.into_inner()) = Arc::clone(&new);
         start(new, Walk::All);
     }

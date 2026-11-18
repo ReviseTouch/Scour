@@ -40,6 +40,14 @@ pub fn human(r: &Response) -> String {
             if (s.hits.len() as u64) < s.total {
                 out.push_str(" Ask for a later offset, or narrow the query.");
             }
+            if let Some(similar) = &s.similar {
+                out.push_str(&format!(
+                    "\nNothing has exactly that name. {}{} files are named nearly so — search for `{}` to see them.",
+                    similar.total,
+                    if similar.capped { "+" } else { "" },
+                    similar.query
+                ));
+            }
             out
         }
         Response::Count {
@@ -523,6 +531,7 @@ mod tests {
             rows_visited: 0,
             rows_built: 0,
             misread: Vec::new(),
+            similar: None,
         }));
         assert!(out.contains("1 shown of 500"), "{out}");
         assert!(out.contains("narrow the query"), "{out}");

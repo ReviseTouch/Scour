@@ -152,6 +152,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
         Err(e) => return Err(e),
     };
     let engine = wire::engine(&config, Arc::clone(&index), &plan.sources, 0);
+    engine.set_reading(kept.reading());
 
     #[cfg(feature = "memory-trace")]
     if let Some(path) = std::env::var_os("SCOUR_MEMORY_RESCAN") {

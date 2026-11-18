@@ -48,6 +48,36 @@ pub fn parse_in(input: &str, now: i64, home: Option<&str>) -> Ast {
     }
 }
 
+/// The query with every plain word long enough to be forgiven written `fuzzy:` —
+/// what [`Ast::forgiving`] makes of it, as text a person can read and change.
+/// `None` when no word is.
+pub fn forgiving(input: &str) -> Option<String> {
+    let mut changed = false;
+    let mut out: Vec<String> = Vec::new();
+    for token in join_parens(join_operators(split_bangs(split_semicolons(join_lists(
+        tokenize(input),
+    )))))
+    .into_iter()
+    .flat_map(|t| expand(&t))
+    {
+        let alts: Vec<String> = split_outside_quotes(&token, '|')
+            .into_iter()
+            .filter(|a| !a.is_empty())
+            .map(|a| match parse_alt(a, 0, None) {
+                Some((false, Match::NameContains(t))) if scour_core::mistakes_allowed(&t) > 0 => {
+                    changed = true;
+                    format!("fuzzy:{a}")
+                }
+                _ => a.to_owned(),
+            })
+            .collect();
+        if !alts.is_empty() {
+            out.push(alts.join("|"));
+        }
+    }
+    changed.then(|| out.join(" "))
+}
+
 /// The home directory as the index spells paths: forward slashes, no trailing one.
 fn home() -> Option<String> {
     let h = std::env::home_dir()?;
@@ -766,6 +796,47 @@ mod tests {
         assert_eq!(
             m("letters:"),
             vec![(false, Match::NameContains("letters:".into()))]
+        );
+    }
+
+    #[test]
+    fn the_forgiven_text_reads_as_the_forgiven_query() {
+        for q in [
+            "raporr",
+            "istanbul raporr 2024",
+            "raporr ext:pdf !taslak",
+            "raporr|belgee kind:doc",
+            "(raporr | belgee) ankara",
+            "\"yillik raporr\" *.pdf",
+            "boyut:1mb muhasebe",
+            "size:abcdef",
+            "Projeler/Scour deneme",
+            "fuzzy:raporr tutanak",
+            "a;b;cdefgh",
+            "!raporr ŞİRKETLER",
+            "letters:scrgui dilekce",
+        ] {
+            let text = forgiving(q).unwrap_or_else(|| panic!("{q:?} has a word to forgive"));
+            assert_eq!(
+                Some(parse_at(&text, 0)),
+                parse_at(q, 0).forgiving(),
+                "{q:?} became {text:?}"
+            );
+        }
+        for q in [
+            "",
+            "main",
+            "ext:pdf size:>1mb",
+            "!raporr",
+            "fuzzy:raporr",
+            "*.rs a/b",
+        ] {
+            assert_eq!(forgiving(q), None, "{q:?}");
+            assert_eq!(parse_at(q, 0).forgiving(), None, "{q:?}");
+        }
+        assert_eq!(
+            forgiving("raporr ext:pdf").as_deref(),
+            Some("fuzzy:raporr ext:pdf")
         );
     }
 

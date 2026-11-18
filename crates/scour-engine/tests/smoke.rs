@@ -1524,6 +1524,61 @@ fn a_term_the_parser_could_not_read_is_reported_with_the_answer() {
     assert!(!grouped.misread.is_empty(), "a facet dropped the warning");
 }
 
+/// A mistyped word finds nothing and says what it nearly found; forgiven, it
+/// finds it — in a search, a count by kind and the sentence read back alike.
+#[test]
+fn a_search_reads_its_words_the_way_a_person_chose() {
+    use scour_engine::{Reading, Typos};
+    let f = fixture(2_000);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+    let ask = |q: &str| {
+        f.engine
+            .search(q, SortKey::Modified, true, Page::new(0, 5))
+            .expect("search")
+    };
+    let kinds = |q: &str| -> u64 {
+        let found = f.engine.facets(q, vec![FacetBy::Kind]).expect("facets");
+        found.total
+    };
+
+    let right = ask("rapor");
+    assert!(right.total > 0 && right.similar.is_none(), "{right:?}");
+    let wrong = ask("rapxor");
+    assert_eq!(wrong.total, 0);
+    let similar = wrong.similar.expect("a near miss is offered");
+    assert_eq!(similar.query, "fuzzy:rapxor");
+    assert!(similar.total >= right.total, "{similar:?}");
+    assert_eq!(ask(&similar.query).total, similar.total);
+    assert!(ask("zzqqxxyy").similar.is_none(), "nothing is near nothing");
+    let before = f.engine.status().revision;
+
+    f.engine.set_reading(Reading {
+        typos: Typos::Off,
+        ..Reading::default()
+    });
+    assert!(ask("rapxor").similar.is_none());
+    assert!(
+        f.engine.status().revision > before,
+        "a waiting window is told"
+    );
+
+    f.engine.set_reading(Reading {
+        typos: Typos::Always,
+        ..Reading::default()
+    });
+    let forgiven = ask("rapxor");
+    assert_eq!(forgiven.total, similar.total);
+    assert!(forgiven.similar.is_none());
+    assert_eq!(
+        kinds("rapxor"),
+        similar.total,
+        "a facet reads the query as a search does"
+    );
+    let said = f.engine.explain("rapxor", None).description;
+    assert!(said.contains("typing mistake"), "{said}");
+}
+
 /// An index whose *ordering* walk is expensive, and a note of when each one began.
 /// Page and preparation costs are controlled separately, so the test below is about
 /// speculation: an ordering asks for twenty thousand hits, a page for a screenful.

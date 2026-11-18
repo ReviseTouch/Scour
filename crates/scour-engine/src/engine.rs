@@ -1,7 +1,7 @@
 //! The orchestrator.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,51 @@ pub struct Explained {
     pub completions: Vec<Completion>,
 }
 
+/// How a query's words are read, which a person chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Reading {
+    /// A letter and the same letter with a mark are different letters.
+    pub exact_accents: bool,
+    pub typos: Typos,
+}
+
+/// What is done about a word that may be mistyped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Typos {
+    /// Nothing: a word finds what it spells.
+    Off,
+    /// A search that finds nothing says how many files it nearly found.
+    #[default]
+    Suggest,
+    /// Every word long enough is forgiven its mistakes, in every search.
+    Always,
+}
+
+impl Reading {
+    fn bits(self) -> u8 {
+        u8::from(self.exact_accents) | (self.typos as u8) << 1
+    }
+
+    fn of(bits: u8) -> Reading {
+        Reading {
+            exact_accents: bits & 1 != 0,
+            typos: match bits >> 1 {
+                0 => Typos::Off,
+                1 => Typos::Suggest,
+                _ => Typos::Always,
+            },
+        }
+    }
+}
+
+/// The most near-matches a search that found nothing counts before saying
+/// "at least": the number is an offer, not an answer.
+const SIMILAR_CAP: u32 = 1_000;
+
+/// How long the count of near-matches for one query stands: a window asks
+/// again each time the index moves, and the count is a walk.
+const SIMILAR_STANDS: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
     /// What the walk and the watchers skip, to begin with. Taken by [`Engine::new`]
@@ -36,6 +81,8 @@ pub struct EngineOptions {
     pub rebuild_threshold: u64,
     /// Rows a page may hold, whatever a caller asks for.
     pub result_limit: u32,
+    /// How words are read, to begin with; [`Engine::set_reading`] replaces it.
+    pub reading: Reading,
     /// How many unordered segments may accumulate before they are merged. Every
     /// query pays a fixed cost per segment; only a rebuild shrinks the tail.
     pub compact_segments: u32,
@@ -89,6 +136,7 @@ impl Default for EngineOptions {
             commit_interval: Duration::from_millis(1_000),
             rebuild_threshold: 200_000,
             result_limit: 1_000,
+            reading: Reading::default(),
             commit_batch: 64,
             commit_idle: Duration::from_secs(15),
             // The burst clock exactly: `commit_interval` floors how often a segment is written.
@@ -156,6 +204,11 @@ struct Shared {
     /// bump is owed, not dropped. See [`EngineOptions::await_hold`].
     wake_at: Mutex<Instant>,
     wake_owed: AtomicBool,
+    /// [`Reading`], as its bits.
+    read_as: AtomicU8,
+    /// The last query that found nothing, when it was counted, and what it
+    /// nearly found. See [`SIMILAR_STANDS`].
+    similar: Mutex<Option<(String, Instant, Option<scour_core::Similar>)>>,
     /// The ordered hits of whichever query was asked for last.
     prepared: RwLock<Option<Prepared>>,
     /// When one was last asked for, so misses cannot queue one each.
@@ -238,6 +291,21 @@ fn misread(query: &str) -> Vec<scour_core::Span> {
 }
 
 impl Shared {
+    fn read_as(&self) -> Reading {
+        Reading::of(self.read_as.load(Ordering::Relaxed))
+    }
+
+    /// A query as it is answered: parsed, and read the way a person chose.
+    fn ast(&self, query: &str) -> scour_core::Ast {
+        let read = self.read_as();
+        let mut ast = scour_query::parse(query);
+        ast.exact_accents = read.exact_accents;
+        match read.typos {
+            Typos::Always => ast.forgiving().unwrap_or(ast),
+            _ => ast,
+        }
+    }
+
     /// A query is reading the index: the release clock starts again.
     fn reading(&self) {
         *self.last_read.lock() = Instant::now();
@@ -328,6 +396,7 @@ impl Engine {
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let source_count = sources.len();
         let await_hold = opts.await_hold;
+        let reading = opts.reading;
         let first_revision = opts.first_revision;
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
@@ -358,6 +427,8 @@ impl Engine {
             ),
             wake_owed: AtomicBool::new(false),
             watchers: AtomicU32::new(0),
+            read_as: AtomicU8::new(reading.bits()),
+            similar: Mutex::new(None),
             prepared: RwLock::new(None),
             prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
             prepare_floor: AtomicU64::new(PREPARE_EVERY.as_micros() as u64),
@@ -627,6 +698,15 @@ impl Engine {
         }
     }
 
+    /// Read every query's words this way from now on, and tell whoever is
+    /// waiting that a search run again could answer differently.
+    pub fn set_reading(&self, reading: Reading) {
+        if self.shared.read_as.swap(reading.bits(), Ordering::Relaxed) != reading.bits() {
+            *self.shared.similar.lock() = None;
+            self.shared.touched_now();
+        }
+    }
+
     /// Throw out everything the rules in force would now skip. No walk: excluding
     /// only removes, and removal is by subtree — 1.3 µs for 378,100 rows.
     pub fn apply_rules(&self) -> Result<u64> {
@@ -695,9 +775,50 @@ impl Engine {
         let mut res = self.page_of(query, sort, descending, page)?;
         // On every path, cached included: a warning that comes and goes teaches nothing.
         res.misread = misread(query);
+        if res.total == 0 && page.offset == 0 {
+            res.similar = self.similar(query);
+        }
         self.weigh_folders(&mut res);
         res.took_us = started.elapsed().as_micros() as u64;
         Ok(res)
+    }
+
+    /// What a query that found nothing nearly found, when that is to be offered.
+    /// A count and no rows; kept a while, since a waiting window asks again
+    /// every time the index moves.
+    fn similar(&self, query: &str) -> Option<scour_core::Similar> {
+        if self.shared.read_as().typos != Typos::Suggest {
+            return None;
+        }
+        if let Some((asked, at, found)) = &*self.shared.similar.lock()
+            && asked == query
+            && at.elapsed() < SIMILAR_STANDS
+        {
+            return found.clone();
+        }
+        let forgiven = self.shared.ast(query).forgiving()?;
+        let text = scour_query::forgiving(query)?;
+        let counted = self
+            .shared
+            .index
+            .search(&SearchRequest {
+                query: forgiven,
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 0,
+                    count_cap: SIMILAR_CAP,
+                },
+            })
+            .ok()?;
+        let found = (counted.total > 0).then(|| scour_core::Similar {
+            total: counted.total,
+            capped: counted.capped,
+            query: text,
+        });
+        *self.shared.similar.lock() = Some((query.to_owned(), Instant::now(), found.clone()));
+        found
     }
 
     /// Fill in what each folder on this page holds, in one batched call outside the
@@ -750,14 +871,14 @@ impl Engine {
             || self.shared.prepared_at.lock().elapsed() < floor
         {
             return self.shared.index.search(&SearchRequest {
-                query: scour_query::parse(query),
+                query: self.shared.ast(query),
                 sort,
                 descending,
                 page,
             });
         }
         let res = self.shared.index.search(&SearchRequest {
-            query: scour_query::parse(query),
+            query: self.shared.ast(query),
             sort,
             descending,
             page,
@@ -798,7 +919,7 @@ impl Engine {
             || ready.count_cap != page.count_cap
             || ready.revision != self.shared.revision.load(Ordering::Acquire)
             // Relative time windows change even while the index is quiet.
-            || ready.parsed != scour_query::parse(query)
+            || ready.parsed != self.shared.ast(query)
         {
             return None;
         }
@@ -822,6 +943,7 @@ impl Engine {
             rows_built: 0,
             // Stamped by `search` for every path alike.
             misread: Vec::new(),
+            similar: None,
         })
     }
 
@@ -862,7 +984,7 @@ impl Engine {
         let mut wrote = 0u64;
         let scanned = self.shared.index.scan(
             &scour_core::ScanRequest {
-                query: scour_query::parse(query),
+                query: self.shared.ast(query),
             },
             &mut |hit| {
                 sheet.row(hit, &mut buf);
@@ -885,7 +1007,7 @@ impl Engine {
     pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
         self.shared.reading();
         let mut res = self.shared.index.facets(&FacetRequest {
-            query: scour_query::parse(query),
+            query: self.shared.ast(query),
             by,
         })?;
         res.misread = misread(query);
@@ -895,7 +1017,7 @@ impl Engine {
     /// Read a query back without running it: what it means, what its pieces are, and
     /// what could follow the caret — one call, so the three answers agree.
     pub fn explain(&self, query: &str, cursor: Option<u32>) -> Explained {
-        let ast = scour_query::parse(query);
+        let ast = self.shared.ast(query);
         Explained {
             description: scour_query::describe(&ast),
             needs_content: ast.needs_content(),
@@ -941,7 +1063,7 @@ impl Engine {
         self.shared.index.usage(&scour_core::UsageRequest {
             path: path.to_owned(),
             top,
-            query: scour_query::parse(query),
+            query: self.shared.ast(query),
         })
     }
 
@@ -1104,7 +1226,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>
         }
         let at = shared.revision.load(Ordering::Acquire);
         let began = Instant::now();
-        let parsed = scour_query::parse(&job.query);
+        let parsed = shared.ast(&job.query);
         let found = shared.index.search(&SearchRequest {
             query: parsed.clone(),
             sort: job.sort,

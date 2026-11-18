@@ -101,6 +101,19 @@ pub fn engine(
     )
 }
 
+/// How queries are read, as a person set it: [`scour_settings::Settings`]'s
+/// two search fields, in the engine's words. An unknown word offers.
+pub fn reading(kept: &scour_settings::Settings) -> scour_engine::Reading {
+    scour_engine::Reading {
+        exact_accents: kept.accents_exact,
+        typos: match kept.typos.as_str() {
+            "off" => scour_engine::Typos::Off,
+            "always" => scour_engine::Typos::Always,
+            _ => scour_engine::Typos::Suggest,
+        },
+    }
+}
+
 /// Open the index, rebuilding it from nothing if an older Scour wrote it or it
 /// is damaged. The decision is here because only this file knows every source
 /// is a filesystem that can be read again, and a cold index is scanned on

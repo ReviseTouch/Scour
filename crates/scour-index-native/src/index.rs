@@ -1728,6 +1728,7 @@ fn reach(
         rows_visited: visited,
         rows_built: 0,
         misread: Vec::new(),
+        similar: None,
     };
     if offset >= counted {
         return Some(empty(0));
@@ -2904,6 +2905,7 @@ impl Index for NativeIndex {
             // An index is handed a parsed query and never sees the text. The
             // engine stamps this on the way out.
             misread: Vec::new(),
+            similar: None,
         })
     }
 

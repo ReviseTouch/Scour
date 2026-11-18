@@ -245,6 +245,20 @@ pub struct SearchResponse {
     /// which reads as a query that matched nothing. Warning roles only; empty is usual.
     #[serde(default)]
     pub misread: Vec<crate::Span>,
+    /// What a search that found nothing would find were its words forgiven their
+    /// typing mistakes. Only when it found nothing, and only when asked to offer.
+    #[serde(default)]
+    pub similar: Option<Similar>,
+}
+
+/// Files a query did not find and nearly did. See [`SearchResponse::similar`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Similar {
+    pub total: u64,
+    /// True when counting stopped early, so `total` is a floor.
+    pub capped: bool,
+    /// The query that finds them: the one sent, its words written `fuzzy:`.
+    pub query: String,
 }
 
 /// What to group a facet count by.
