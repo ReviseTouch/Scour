@@ -492,6 +492,107 @@ cargo run --release -p scour-index-native --example transplant -- replace /tmp/r
 cargo run --release -p scour-index-native --example commit_cost -- /tmp/copy/native 0 <eight paths in it>
 ```
 
+## Accents set aside, and a word forgiven its mistakes (2026-11-18)
+
+A name is now folded without its marks as well as its case, so the arena a
+search walks, the trigrams and the name order all changed value: format 13.
+The same 7,391,323 rows carried into both formats (`examples/transplant`) and
+rebuilt into one segment, each build twice, turn about:
+
+| | format 12 | format 13 |
+|---|---:|---:|
+| load in ten commits | 12.46, 12.64 s | 12.80, 12.63 s |
+| rebuild into one segment | 22.38, 23.04 s | 22.95, 22.39 s |
+| the index | 487.59 MB | 486.99 MB |
+| names folded | 181.49 MB | 180.93 MB |
+| trigram postings | 75.96 MB | 75.56 MB |
+| names as spelled (the difference from the fold) | 9.13 MB | 9.52 MB |
+
+`ş ç ğ ö ü â é ñ` and their capitals are a two-bit code against the letter
+they fold to, as `ı` and `İ` were; a name with any other marked letter is
+stored whole.
+
+`examples/querycost` on the two indexes, each query once to warm and nine
+times, four rounds with the order swapped each round; the median of the
+rounds' medians and their spread. Load average 5–10: another build was
+running. Every page compared by digest and the same.
+
+| query, count cap 1,000 | before | after |
+|---|---:|---:|
+| everything by date | 1.11 (1.04–1.14) ms | 1.10 (1.05–1.16) ms |
+| `rapor` by date | 0.64 (0.60–0.66) | 0.66 (0.66–0.73) |
+| `rapor`, counted to 100,000 | 7.16 (6.82–7.40) | 7.54 (7.35–7.64) |
+| `rapor` by name, by relevance | 7.46, 8.03 | 7.74, 8.25 |
+| `a`, `ab` by relevance | 69.2, 34.0 | 69.2, 34.7 |
+| `main`, `scour` | 0.59, 0.26 | 0.64, 0.26 |
+| `ext:pdf` by date, by size | 0.56, 1.04 | 0.60, 1.06 |
+| `*.rs` by date, by path | 0.31, 15.5 | 0.32, 15.3 |
+| `kind:image`, `kind:code dm:7d`, `size:>10mb` | 4.88, 2.24, 2.10 | 5.04, 2.29, 2.10 |
+| `path:Projeler` by date, by name | 43.2, 74.8 | 42.3, 75.4 |
+| `Projeler/Scour` | 41.6 | 40.7 |
+| `case:README` | 0.95 | 0.97 |
+| `regex:^ab.*\.rs$`, `zq`, `len:>60` by name | 67.3, 30.2, 50.2 | 69.1, 30.8, 51.2 |
+| `sirket` | 0.39, 129 files | 0.56, 241 files |
+| `şirket` | 0.73, 112 files | 0.66, the same 112 |
+| `dilekçe` | 0.70 (0.67–0.73) | **1.93 (1.75–2.25)** |
+| `dilekçe`, counted to 100,000 | 8.10 (7.43–8.22) | **19.4 (19.1–19.8)** |
+
+A run earlier the same hour put `rapor` at 0.64 → 0.61 and its count at 7.21 →
+6.98: the plain rows are inside what the machine does between runs. The two
+in bold are not. A term typed with a mark is asked of the fold first and then
+of each matching name with its marks, which is a read from the block's start
+— 0.6 µs a name, for the 18,958 that match and the ones beside them that do
+not. Written from the fold's two-bit codes instead of respelled and folded
+again it went from 23.2 to 19.4 ms.
+
+With accents not ignored every term is asked that way (`SCOUR_EXACT_ACCENTS=1`):
+`rapor` 0.80 ms and 13.0 counted to 100,000; `sirket` 0.63 ms, the 129 files
+it found before.
+
+**A word forgiven its mistakes** — a letter wrong, missing, extra, or two
+swapped; one mistake from five letters, two from eleven. A name near the term
+still holds most of the term's trigrams, so only blocks holding enough are
+read: every window but those over one character, or one of the term's
+swapped spellings whole. Five letters and one mistake leave no window that
+must survive, and every name is read. A name is first asked for the term's
+byte pairs (a load a byte, nothing carried), then for the edit distance kept
+as bit columns (Myers; Hyyrö for the swap) — 58 ns a name alone, 16 with the
+pairs in front.
+
+| query, count cap 1,000 | ms | rows read |
+|---|---:|---:|
+| `fuzzy:raporr` | 14.2 | 1.10 M |
+| `fuzzy:raporr`, counted to 100,000 (15,881) | 21.8 | 1.51 M |
+| `fuzzy:rapor` — five letters, common | 19.9 | 0.43 M |
+| `fuzzy:kitap` — five letters, rarer | 95.9 | 7.23 M |
+| `fuzzy:xqzvw` — five letters, 27 files | 56.8 | 7.39 M |
+| `fuzzy:xqzvwk` — six, nothing | 0.66 | 14,208 |
+| `fuzzy:sirket` (255) | 16.0 | 0.90 M |
+| `fuzzy:dilekce`, `fuzzy:dilkece` | 1.41, 0.98 | 9,661, 8,093 |
+| `fuzzy:istanbul`, `fuzzy:itsanbul` | 6.76, 1.74 | 130,188, 20,779 |
+| `fuzzy:muhasebe`, `fuzzy:mahkmeesi` | 3.08, 1.96 | 37,376, 28,808 |
+| `fuzzy:durusmatutanagi` — two mistakes | 14.4 | 268,928 |
+| `letters:scrgui` (8,688) | 49.9 | 5.73 M |
+| `letters:xqzvwk` (37) | 41.2 | 7.39 M |
+| `letters:scrgui ext:rs` | 6.34 | 546,848 |
+
+Before the swapped spellings and the pairs, `fuzzy:raporr` read 6.1 M rows in
+130 ms, and `fuzzy:xqzvw` took 142 ms (553 on one thread, 215 with the pairs).
+A whole-index walk is made in parts on eight threads, as a regular expression
+is; `letters:` is always one.
+
+What the default costs: a search that finds nothing counts its near matches
+once, to 1,000, and the count stands ten seconds — the `fuzzy:` row above for
+the same word, so 14 ms after `raporr` and 57 after a five-letter word nothing
+resembles. A search that finds anything pays nothing. With typing mistakes
+always forgiven every plain word of five letters or more is a `fuzzy:` row.
+
+```sh
+cargo run --release -p scour-index-native --example transplant -- dump /tmp/old/native /tmp/rows.bin   # the old build
+cargo run --release -p scour-index-native --example transplant -- load /tmp/rows.bin /tmp/new/native   # each build
+cargo run --release -p scour-index-native --example querycost -- /tmp/new/native 9 < queries.txt       # each build, turn about
+```
+
 ## Reproducing
 
 ```sh
