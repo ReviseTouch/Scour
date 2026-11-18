@@ -204,6 +204,21 @@ pub const FEATURES: &[Feature] = &[
         faces: [Has, Has, Has, Never("no pointer")],
     },
     Feature {
+        id: "accents",
+        what: "a letter found without its accent, unless typed with one or switched off",
+        faces: [Has, Has, Has, Has],
+    },
+    Feature {
+        id: "typos",
+        what: "a mistyped word offered its near matches, or forgiven always; `fuzzy:` for one word",
+        faces: [Has, Has, Has, Has],
+    },
+    Feature {
+        id: "letters",
+        what: "`letters:scrgui` finds scour-gui: letters in order, anything between",
+        faces: [Has, Has, Has, Has],
+    },
+    Feature {
         id: "index-upkeep",
         what: "where the index is kept, and emptying it to scan again",
         faces: [

@@ -15,7 +15,7 @@ use crate::link::Deed;
 pub const MAP: &[(&str, &str)] = &[
     ("type", "search"),
     ("↑ ↓ · PgUp PgDn · Home End", "move through the list"),
-    ("Enter", "open"),
+    ("Enter", "open · or show the similar files a search offers"),
     ("Shift+Enter", "open the folder"),
     ("Insert · Ctrl+Space", "pick · Shift+↑↓ for a run"),
     ("click the ✓ column", "pick that row"),
@@ -139,6 +139,8 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             KeyCode::BackTab => return settings_opened(app, -1),
             KeyCode::Left if app.panel == Panel::General => return app.general_side(-1),
             KeyCode::Right if app.panel == Panel::General => return app.general_side(1),
+            KeyCode::Left if app.panel == Panel::Searching => return app.searching_side(-1),
+            KeyCode::Right if app.panel == Panel::Searching => return app.searching_side(1),
             KeyCode::Left if app.panel == Panel::Later => return app.later_side(-1, false),
             KeyCode::Right if app.panel == Panel::Later => return app.later_side(1, false),
             _ => {}
@@ -293,6 +295,10 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         KeyCode::End => return app.go(usize::MAX),
         // One key, two places: the cursor says which, as with the arrows.
         KeyCode::Enter if app.in_rail => return app.rail_press(),
+        // Nothing to open, and something nearly found: Enter shows it.
+        KeyCode::Enter if app.similar.is_some() && app.pages.total() == 0 => {
+            return app.show_similar();
+        }
         KeyCode::Enter => return open(app, shift),
         _ => {}
     }
@@ -410,6 +416,7 @@ fn panel_press(app: &mut App) -> Want {
             _ => app.general_side(1),
         },
         Panel::Later => app.later_side(1, true),
+        Panel::Searching => app.searching_side(1),
         Panel::Keys | Panel::About | Panel::None => Want::Nothing,
     }
 }

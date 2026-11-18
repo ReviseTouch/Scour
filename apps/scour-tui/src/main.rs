@@ -95,6 +95,8 @@ fn main() -> Result<()> {
     state.removable = kept.removable.clone();
     state.network = kept.network.clone();
     state.folders = kept.folders.clone();
+    state.accents_exact = kept.accents_exact;
+    state.typos = kept.typos.clone();
 
     if let Some(size) = args.once.clone() {
         let outcome = snap(

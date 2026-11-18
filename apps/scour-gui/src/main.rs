@@ -134,6 +134,9 @@ const CHEAP_PAGE_US: u64 = 20_000;
 const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
+    /// The query that shows what the search in sight nearly found, when it
+    /// found nothing and the service offered. See `SearchResponse::similar`.
+    similar: String,
     /// Where the volumes are: `Accessed` on `noatime` is the creation time.
     mounts: Vec<scour_places::Mount>,
     /// When somebody last did something here. See [`AWAKE_FOR`].
@@ -615,6 +618,8 @@ fn main() -> Result<()> {
     window.set_grid_lines(kept.grid_lines);
     window.set_grid_columns(kept.grid_columns);
     window.set_tabs_on(!kept.tabs_off);
+    window.set_accents_ignored(!kept.accents_exact);
+    window.set_typos_choice(typos_choice(&kept.typos).into());
     window.set_rail_shown(!kept.rail_hidden);
     window.set_ribbon_shown(!kept.ribbon_hidden);
     trace(&format!("history: {} past searches", kept.history.len()));
@@ -642,6 +647,7 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
+        similar: String::new(),
         mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
         stirred: std::time::Instant::now(),
@@ -1158,6 +1164,54 @@ fn main() -> Result<()> {
                 trace(&format!("dispatch {generation}"));
                 dispatch(&state, &link, &model, rows);
             });
+        });
+    }
+
+    // --- how words are read ------------------------------------------------
+    // Kept by the service, which reads every query: the answer in sight changes
+    // when the service says its index would answer differently.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_accents_picked(move |ignored| {
+            if let Some(w) = weak.upgrade() {
+                w.set_accents_ignored(ignored);
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    accents_exact: Some(!ignored),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_typos_picked(move |choice| {
+            if let Some(w) = weak.upgrade() {
+                w.set_typos_choice(choice.clone());
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    typos: Some(choice.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_similar_clicked(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let text = state.borrow().similar.clone();
+            if text.is_empty() {
+                return;
+            }
+            w.set_query(text.as_str().into());
+            w.invoke_query_changed(text.into());
+            w.invoke_caret_to_end();
         });
     }
 
@@ -4321,6 +4375,24 @@ fn apply(
                 w.set_busy(false);
                 return;
             };
+            // What a first page that found nothing nearly found, or nothing.
+            if offset == 0 {
+                let offered = r.similar.as_ref().filter(|_| r.total == 0);
+                w.set_similar_said(match offered {
+                    Some(similar) => t(cat, "Similar: {n} files —")
+                        .replace(
+                            "{n}",
+                            &format!(
+                                "{}{}",
+                                grouped(similar.total),
+                                if similar.capped { "+" } else { "" }
+                            ),
+                        )
+                        .into(),
+                    None => slint::SharedString::new(),
+                });
+                state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
+            }
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
             // Read once: a page is two hundred rows and the catalogue is a lookup.
@@ -5229,6 +5301,16 @@ fn answer_the_next_start(
 /// The plain text terms of a query, for highlighting and for nothing else: a
 /// `kind:` term matched a *column*, a negated term matched nothing, and quotes
 /// hold a phrase together. What a term **means** stays `explain`'s answer.
+/// [`scour_settings::Settings::typos`] as the settings row's value: an
+/// unknown word is the offer, as the service reads it.
+fn typos_choice(kept: &str) -> &'static str {
+    match kept {
+        "off" => "off",
+        "always" => "always",
+        _ => "",
+    }
+}
+
 fn terms_of(query: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
@@ -5308,6 +5390,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_section_labels(list(&[
         "General",
         "List and look",
+        "Searching",
         "Disks scanned",
         "Folders scanned",
         "Skipped",
@@ -5318,6 +5401,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_section_leads(list(&[
         "The same for every face: the window, the browser and the terminal read these.",
         "How the list is drawn, and what it shows.",
+        "How the words you type are read. The same in every face.",
         "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan.",
         "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched.",
         "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
@@ -5401,6 +5485,22 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_grid_columns(t(cat, "Column lines"));
     w.set_set_grid_columns_note(t(cat, "A line between the list's columns."));
     w.set_grid_labels(list(&["On", "Off"]));
+    w.set_set_accents(t(cat, "Ignore accents"));
+    w.set_set_accents_note(t(
+        cat,
+        "cafe also finds café. A word typed with an accent still finds only that spelling.",
+    ));
+    w.set_set_typos(t(cat, "Typing mistakes"));
+    w.set_set_typos_note(t(
+        cat,
+        "A letter wrong, missing, extra or swapped, in a word of five letters or more.",
+    ));
+    w.set_typos_labels(list(&["Off", "When nothing is found", "Always"]));
+    w.set_set_search_hint(t(
+        cat,
+        "letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes.",
+    ));
+    w.set_similar_show(t(cat, "show"));
     w.set_set_later(t(cat, "Disks that come later"));
     w.set_set_removable(t(cat, "A disk plugged in"));
     w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));
@@ -6702,6 +6802,7 @@ mod tests {
     #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
+            similar: String::new(),
             mounts: Vec::new(),
             indexed: 0,
             stirred: std::time::Instant::now(),
@@ -6775,6 +6876,7 @@ mod tests {
     #[test]
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
+            similar: String::new(),
             mounts: Vec::new(),
             stirred: std::time::Instant::now(),
             refresh: std::time::Duration::from_secs(2),

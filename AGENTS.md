@@ -64,7 +64,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 
 | op | writes | |
 |---|---|---|
-| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` → rows, `rows_visited`, `rows_built` |
+| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` → rows, `rows_visited`, `rows_built`; a first page that found nothing may carry `similar{total,capped,query}` — what its words nearly name, and the `fuzzy:` query that shows them |
 | `count` | | `query`, `cap` — a floor when `capped` |
 | `facets` | | `query`, `by`: a list of `kind`/`ext{top}`/`dir{path,top}`/`age{edges}`, one walk for all of them; any `age` group lifts the 200,000-row sampling cap |
 | `tree` | | `path`, `depth`, `limit` — bounded per level |
@@ -76,7 +76,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual` |
 | `choose` | ✓ | `volume`, `index` → a yes or a lasting no; kept in the settings as `volumes_on` / `volumes_off` |
 | `postpone` | ✓ | `volume` (a disk's id) → not asked about again until the service starts again |
-| `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, which face opens. A change names only what it touches |
+| `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, which face opens, and how words are read: `accents_exact`, `typos` (`""` offers, `always`, `off`). A change names only what it touches |
 | `await` | | `since`, `timeout_ms` → a `Status` when the index would answer differently. One blocked thread instead of a poll; also what tells the service somebody is looking |
 | `thumbnails` | ✓ | starts the desktop's own thumbnailers, at most four at once — bounded here because the bound is the machine's |
 | `rescan`, `maintain`, `shutdown` | ✓ | `maintain` is `flush` / `idle` / `compact` / `rebuild` |
@@ -84,12 +84,20 @@ fields, never a bare string; `every_response_round_trips` guards it.
 `took_us` covers parsing, cache lookup, the index call and folder-size
 enrichment; not transport or rendering.
 
+**The service reads the words, not the face.** Every request that takes a
+query is parsed by the engine under the two settings above, so a search, its
+facets, its export and its sentence read back agree: accents are set aside
+unless a term carries one or `accents_exact` is on, and `typos: always`
+forgives every plain word as `fuzzy:` would.
+
 ### Command line — `scour`
 
 A client only. On the bare form everything after the query is the query, flags
 included; `-n` and `-s` go before it. `--json` prints the protocol type as the
 service sent it; `--socket` picks another service. `where`, `mcp-config` and
-`hotkey` reach no service. At a terminal five rows are shown, into a pipe forty,
+`hotkey` reach no service. `words` says how a search reads its words, and
+`words --accents ignore|exact --typos off|offer|always` changes it for every
+face. At a terminal five rows are shown, into a pipe forty,
 and the summary says how to get more. At a terminal `du` and `facets` draw their
 shares as bars — `scour-chart`'s numbers, the palette's colours, plain under
 `NO_COLOR`; the age legend names every band over a percent that the terminal's

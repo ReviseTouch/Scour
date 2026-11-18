@@ -579,6 +579,8 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     "capped": r.capped,
                     "took_us": r.took_us,
                     "rows_visited": r.rows_visited,
+                    // Only on a search that found nothing: what it nearly found.
+                    "similar": r.similar,
                 }),
             );
         }

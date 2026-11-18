@@ -108,6 +108,8 @@ pub enum Panel {
     /// What happens to a disk plugged in or on the network, and folders
     /// indexed on their own.
     Later,
+    /// How words are read: accents, and typing mistakes.
+    Searching,
     /// The keys, as a section to read.
     Keys,
     /// What is running.
@@ -117,7 +119,7 @@ pub enum Panel {
 /// The settings screen's sections, in order: the panel that is each one's
 /// content, its title and the line under it, as msgids. One screen for what
 /// were separate panels, as in the window and the page.
-pub const SECTIONS: [(Panel, &str, &str); 7] = [
+pub const SECTIONS: [(Panel, &str, &str); 8] = [
     (
         Panel::General,
         "General",
@@ -127,6 +129,11 @@ pub const SECTIONS: [(Panel, &str, &str); 7] = [
         Panel::Columns,
         "List and look",
         "Which columns the table shows.",
+    ),
+    (
+        Panel::Searching,
+        "Searching",
+        "How the words you type are read. The same in every face.",
     ),
     (
         Panel::Disks,
@@ -324,6 +331,11 @@ pub struct App {
     pub removable: String,
     pub network: String,
     pub folders: Vec<String>,
+    /// How the service reads words: `Settings::accents_exact` and `typos`.
+    pub accents_exact: bool,
+    pub typos: String,
+    /// What the search in sight nearly found, when it found nothing.
+    pub similar: Option<scour_core::Similar>,
     /// What the menu is about: the row's name, or how many are picked; and
     /// where it is and what it weighs, or what the selection comes to.
     pub menu_title: String,
@@ -463,6 +475,9 @@ impl Default for App {
             removable: String::new(),
             network: String::new(),
             folders: Vec::new(),
+            accents_exact: false,
+            typos: String::new(),
+            similar: None,
             menu_title: String::new(),
             menu_detail: String::new(),
             pending: None,
@@ -720,6 +735,9 @@ impl App {
         // backwards under somebody's hands.
         if generation != self.generation {
             return Want::Nothing;
+        }
+        if offset == 0 {
+            self.similar = reply.similar.clone().filter(|_| reply.total == 0);
         }
         self.took_us = reply.took_us;
         self.rows_visited = reply.rows_visited;
@@ -1626,11 +1644,12 @@ impl App {
     pub fn section_of(panel: Panel) -> usize {
         match panel {
             Panel::Columns => 1,
-            Panel::Disks => 2,
-            Panel::Later | Panel::Ask => 3,
-            Panel::Rules => 4,
-            Panel::Keys => 5,
-            Panel::About => 6,
+            Panel::Searching => 2,
+            Panel::Disks => 3,
+            Panel::Later | Panel::Ask => 4,
+            Panel::Rules => 5,
+            Panel::Keys => 6,
+            Panel::About => 7,
             _ => 0,
         }
     }
@@ -1754,6 +1773,63 @@ impl App {
         }
         lines.push((format!("{}…", self.say("Add a folder")), String::new()));
         lines
+    }
+
+    /// How words are read: what each choice is, and what it is set to.
+    pub fn searching_lines(&self) -> Vec<(String, String)> {
+        let typos = match self.typos.as_str() {
+            "off" => "Off",
+            "always" => "Always",
+            _ => "When nothing is found",
+        };
+        let accents = if self.accents_exact { "Off" } else { "On" };
+        vec![
+            (
+                self.say("Ignore accents").into_owned(),
+                format!("‹ {} ›", self.say(accents)),
+            ),
+            (
+                self.say("Typing mistakes").into_owned(),
+                format!("‹ {} ›", self.say(typos)),
+            ),
+        ]
+    }
+
+    /// Left or right on one of them; a press is right.
+    pub fn searching_side(&mut self, by: isize) -> Want {
+        let change = match self.panel_at {
+            0 => {
+                self.accents_exact = !self.accents_exact;
+                scour_settings::Change {
+                    accents_exact: Some(self.accents_exact),
+                    ..Default::default()
+                }
+            }
+            _ => {
+                let now = match self.typos.as_str() {
+                    "off" | "always" => self.typos.clone(),
+                    _ => String::new(),
+                };
+                self.typos = Self::cycle(&["off", "", "always"], &now, by);
+                scour_settings::Change {
+                    typos: Some(self.typos.clone()),
+                    ..Default::default()
+                }
+            }
+        };
+        self.dirty = true;
+        Want::Remember(change)
+    }
+
+    /// The query that shows what the search in sight nearly found, in place
+    /// of the one that found nothing.
+    pub fn show_similar(&mut self) -> Want {
+        let Some(similar) = self.similar.take() else {
+            return Want::Nothing;
+        };
+        self.query = similar.query;
+        self.caret = self.query.len();
+        self.typed()
     }
 
     /// Left or right on a rule; a press is right, and on a folder takes it out,
@@ -2263,6 +2339,7 @@ impl App {
             Panel::General => 5,
             // The two rules, a line a folder, and the one that adds.
             Panel::Later => 3 + self.folders.len(),
+            Panel::Searching => 2,
             Panel::Keys | Panel::About | Panel::None => 0,
         }
     }

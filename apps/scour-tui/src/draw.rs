@@ -876,6 +876,26 @@ fn panel_content(app: &App, wrap: usize) -> Option<(std::borrow::Cow<'_, str>, V
                     .collect(),
             )
         }
+        // Two to walk, and a line to read under them.
+        Panel::Searching => (
+            app.say("Searching"),
+            app.searching_lines()
+                .into_iter()
+                .map(|(text, key)| PanelLine {
+                    text,
+                    key,
+                    dimmed: false,
+                    careful: false,
+                    rule: false,
+                })
+                .chain([(String::new(), true).into()])
+                .chain(wrapped(
+                    &app.say("letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes."),
+                    wrap,
+                    true,
+                ))
+                .collect(),
+        ),
         // Read, not walked: `panel_lines` is zero.
         Panel::Keys => (
             app.say("KEYS"),
@@ -1365,6 +1385,30 @@ fn when_of(secs: i64, width: u16) -> String {
 
 fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
     let total = app.pages.total();
+    // Nothing found and something nearly: one line where the rows would be.
+    if let (0, Some(similar)) = (total, &app.similar) {
+        let count = format!(
+            "{}{}",
+            format::grouped(similar.total, mark.0),
+            if similar.capped { "+" } else { "" }
+        );
+        let said = app.say("Similar: {n} files —").replace("{n}", &count);
+        let line = Line::from(vec![
+            Span::styled(format!(" {said} "), Style::new().fg(theme.ink_2())),
+            Span::styled(similar.query.clone(), Style::new().fg(theme.key())),
+            Span::styled(
+                format!("  · Enter {}", app.say("show")),
+                Style::new().fg(theme.ink_3()),
+            ),
+        ]);
+        let at = Rect {
+            y: area.y + 1.min(area.height.saturating_sub(1)),
+            height: 1.min(area.height),
+            ..area
+        };
+        f.render_widget(Paragraph::new(line), at);
+        return;
+    }
     // The scrollbar gets a column of its own: drawn over the list it sits in
     // the size column, where a stray character reads as part of the number.
     let scrolling = total > app.room;

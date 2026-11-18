@@ -189,6 +189,18 @@ enum Command {
         #[command(subcommand)]
         action: Option<HotkeyAction>,
     },
+    /// How a search reads its words: accents, and typing mistakes.
+    ///
+    /// With nothing after it, how they are read now. Every face reads them
+    /// the same way: the service keeps the answer.
+    Words {
+        /// `ignore`: `cafe` also finds `café`. `exact`: a letter is only itself.
+        #[arg(long, value_enum)]
+        accents: Option<Accents>,
+        /// `offer` near matches when a search finds nothing, forgive `always`, or `off`.
+        #[arg(long, value_enum)]
+        typos: Option<Typos>,
+    },
     /// Print the MCP configuration to paste into a client.
     McpConfig {
         /// Which client: `claude-desktop`, `claude-code`, `codex`, `cursor`, `gemini`, `vscode`.
@@ -197,6 +209,30 @@ enum Command {
     },
     /// Where the settings and the index live.
     Where,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Accents {
+    Ignore,
+    Exact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Typos {
+    Off,
+    Offer,
+    Always,
+}
+
+impl Typos {
+    /// The word `scour_settings::Settings::typos` keeps: empty is the offer.
+    fn kept(self) -> &'static str {
+        match self {
+            Typos::Off => "off",
+            Typos::Offer => "",
+            Typos::Always => "always",
+        }
+    }
 }
 
 /// What to do about that key.
@@ -345,6 +381,28 @@ fn main() -> Result<()> {
     let reply = client.call(request)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&reply)?);
+        return Ok(());
+    }
+    // The flags' own words, so what is printed can be typed back.
+    if let (Some(Command::Words { .. }), scour_proto::Response::Settings(kept)) =
+        (&args.command, &reply)
+    {
+        println!(
+            "accents  {}",
+            if kept.accents_exact {
+                "exact"
+            } else {
+                "ignore"
+            }
+        );
+        println!(
+            "typos    {}",
+            match kept.typos.as_str() {
+                "off" => "off",
+                "always" => "always",
+                _ => "offer",
+            }
+        );
         return Ok(());
     }
     render::human(&reply, echo.as_deref())
@@ -507,6 +565,17 @@ fn build(args: &Args) -> Result<Request> {
                 index: false,
             },
             _ => Request::Volumes {},
+        },
+        Some(Command::Words {
+            accents: None,
+            typos: None,
+        }) => Request::Settings {},
+        Some(Command::Words { accents, typos }) => Request::SetSettings {
+            change: scour_settings::Change {
+                accents_exact: accents.map(|a| a == Accents::Exact),
+                typos: typos.map(|t| t.kept().to_owned()),
+                ..Default::default()
+            },
         },
         Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
         Some(Command::Syntax) => Request::Syntax {},

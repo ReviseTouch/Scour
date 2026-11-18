@@ -58,7 +58,8 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
     if terms.is_empty() {
         return (name, "", "");
     }
-    let folder = scour_core::text::DefaultFolder;
+    // As a name is searched: `sirket` marks its run in `Şirket`.
+    let folder = scour_core::text::Unaccented;
     let (folded, back) = folder.fold_indexed(name);
     let mut best: Option<(usize, usize)> = None;
     for term in terms {

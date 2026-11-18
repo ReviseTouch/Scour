@@ -2307,3 +2307,41 @@ msgstr "Kenar çubuğunu gizle"
 
 msgid "Hide the time ribbon"
 msgstr "Zaman çubuğunu gizle"
+
+# --- how words are read: Settings → Searching ---
+
+msgid "Searching"
+msgstr "Arama"
+
+msgid "How the words you type are read. The same in every face."
+msgstr "Yazdığınız kelimelerin nasıl okunacağı. Her yüzde aynıdır."
+
+msgid "Ignore accents"
+msgstr "Aksanları yok say"
+
+msgid "cafe also finds café. A word typed with an accent still finds only that spelling."
+msgstr "sirket yazınca şirket de bulunur. Aksanlı yazılan kelime yine yalnız o yazılışı bulur."
+
+msgid "Typing mistakes"
+msgstr "Yazım hataları"
+
+msgid "A letter wrong, missing, extra or swapped, in a word of five letters or more."
+msgstr "Beş harf ve üstü kelimede yanlış, eksik, fazla ya da yer değiştirmiş bir harf."
+
+msgid "When nothing is found"
+msgstr "Sonuç yoksa öner"
+
+msgid "Always"
+msgstr "Her zaman"
+
+msgid "letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes."
+msgstr "letters:scrgui yazınca scour-gui bulunur: harfler o sırayla, aralarında ne olursa olsun. fuzzy:kelime tek bir kelimenin yazım hatasını hoş görür."
+
+msgid "Similar: {n} files —"
+msgstr "Benzer: {n} dosya —"
+
+msgid "Similar"
+msgstr "Benzer"
+
+msgid "open · or show the similar files a search offers"
+msgstr "aç · ya da aramanın önerdiği benzer dosyaları göster"

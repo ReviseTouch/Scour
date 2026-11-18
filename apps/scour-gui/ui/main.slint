@@ -1632,7 +1632,24 @@ export component MainWindow inherits Window {
     in-out property <string> settings-section: "general";
     in property <string> settings-title;
     in property <string> settings-foot;
-    in property <[string]> section-ids: ["general", "view", "disks", "rules", "keys", "index", "about"];
+    in property <[string]> section-ids: ["general", "view", "search", "disks", "folders", "rules", "keys", "index", "about"];
+    // How words are read, which the service keeps: `Settings::accents_exact`
+    // and `Settings::typos`.
+    in property <bool> accents-ignored: true;
+    in property <string> typos-choice;
+    in property <string> set-accents;
+    in property <string> set-accents-note;
+    in property <string> set-typos;
+    in property <string> set-typos-note;
+    in property <[string]> typos-labels;
+    in property <string> set-search-hint;
+    callback accents-picked(bool);
+    callback typos-picked(string);
+    // What a search that found nothing nearly found; empty when nothing is
+    // offered. The press writes the query that shows them.
+    in property <string> similar-said;
+    in property <string> similar-show;
+    callback similar-clicked();
     // The index, in Settings: where it is, what it holds, and the two ways to
     // build it again.
     in property <string> index-dir;
@@ -4894,37 +4911,43 @@ export component MainWindow inherits Window {
                         }
                         NavRow {
                             label: root.section-labels[2];
+                            icon: @image-url("icons/tools/search.svg");
+                            on: root.settings-section == "search";
+                            clicked => { root.settings-picked("search"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[3];
                             icon: @image-url("icons/tools/disks.svg");
                             on: root.settings-section == "disks";
                             badge: root.disk-question != "" ? "1" : "";
                             clicked => { root.settings-picked("disks"); }
                         }
                         NavRow {
-                            label: root.section-labels[3];
+                            label: root.section-labels[4];
                             icon: @image-url("icons/tools/folder.svg");
                             on: root.settings-section == "folders";
                             clicked => { root.settings-picked("folders"); }
                         }
                         NavRow {
-                            label: root.section-labels[4];
+                            label: root.section-labels[5];
                             icon: @image-url("icons/tools/rules.svg");
                             on: root.settings-section == "rules";
                             clicked => { root.settings-picked("rules"); }
                         }
                         NavRow {
-                            label: root.section-labels[5];
+                            label: root.section-labels[6];
                             icon: @image-url("icons/tools/settings-keys.svg");
                             on: root.settings-section == "keys";
                             clicked => { root.settings-picked("keys"); }
                         }
                         NavRow {
-                            label: root.section-labels[6];
+                            label: root.section-labels[7];
                             icon: @image-url("icons/tools/index.svg");
                             on: root.settings-section == "index";
                             clicked => { root.settings-picked("index"); }
                         }
                         NavRow {
-                            label: root.section-labels[7];
+                            label: root.section-labels[8];
                             icon: @image-url("icons/tools/settings-about.svg");
                             on: root.settings-section == "about";
                             clicked => { root.settings-picked("about"); }
@@ -4956,11 +4979,12 @@ export component MainWindow inherits Window {
                         text: root.section-labels[root.section-ids.length > 0 ? (
                             root.settings-section == "general" ? 0
                             : root.settings-section == "view" ? 1
-                            : root.settings-section == "disks" ? 2
-                            : root.settings-section == "folders" ? 3
-                            : root.settings-section == "rules" ? 4
-                            : root.settings-section == "keys" ? 5
-                            : root.settings-section == "index" ? 6 : 7) : 0];
+                            : root.settings-section == "search" ? 2
+                            : root.settings-section == "disks" ? 3
+                            : root.settings-section == "folders" ? 4
+                            : root.settings-section == "rules" ? 5
+                            : root.settings-section == "keys" ? 6
+                            : root.settings-section == "index" ? 7 : 8) : 0];
                         color: Theme.ink;
                         font-size: 18px;
                         font-weight: 600;
@@ -4969,11 +4993,12 @@ export component MainWindow inherits Window {
                         text: root.section-leads[
                             root.settings-section == "general" ? 0
                             : root.settings-section == "view" ? 1
-                            : root.settings-section == "disks" ? 2
-                            : root.settings-section == "folders" ? 3
-                            : root.settings-section == "rules" ? 4
-                            : root.settings-section == "keys" ? 5
-                            : root.settings-section == "index" ? 6 : 7];
+                            : root.settings-section == "search" ? 2
+                            : root.settings-section == "disks" ? 3
+                            : root.settings-section == "folders" ? 4
+                            : root.settings-section == "rules" ? 5
+                            : root.settings-section == "keys" ? 6
+                            : root.settings-section == "index" ? 7 : 8];
                         color: Theme.ink-2;
                         font-size: 12.5px;
                         wrap: word-wrap;
@@ -5323,6 +5348,40 @@ export component MainWindow inherits Window {
                                             picked(v) => { root.grid-columns-picked(v == "on"); }
                                         }
                                     }
+                                }
+                            }
+
+                            if root.settings-section == "search": VerticalLayout {
+                                spacing: 6px;
+                                Card {
+                                    SettingRow {
+                                        label: root.set-accents;
+                                        note: root.set-accents-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.accents-ignored ? "on" : "off";
+                                            picked(v) => { root.accents-picked(v == "on"); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-typos;
+                                        note: root.set-typos-note;
+                                        Choice {
+                                            labels: root.typos-labels;
+                                            values: ["off", "", "always"];
+                                            value: root.typos-choice;
+                                            picked(v) => { root.typos-picked(v); }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: 6px; }
+                                Text {
+                                    text: root.set-search-hint;
+                                    color: Theme.ink-3;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -5779,6 +5838,34 @@ export component MainWindow inherits Window {
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
+                }
+            }
+        }
+    }
+
+    // A search that found nothing, and what it nearly found: one line where
+    // the first rows would have been, the word at its end a press.
+    if root.similar-said != "" && root.panel == "": Rectangle {
+        x: list.absolute-position.x + (list.width - self.width) / 2;
+        y: list.absolute-position.y + 72px;
+        width: similar-line.preferred-width;
+        height: 24px;
+        similar-line := HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.similar-said;
+                color: Theme.ink-2;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.similar-show;
+                color: Theme.q-key;
+                font-size: 13px;
+                vertical-alignment: center;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.similar-clicked(); }
                 }
             }
         }

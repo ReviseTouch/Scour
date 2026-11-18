@@ -565,6 +565,13 @@
   td.kind { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
   .empty { padding: calc(var(--u) * 12); text-align: center; color: var(--ink-3); font-size: 13px; }
   .empty code { font-family: var(--mono); color: var(--ink-2); }
+  .similar { text-align: center; color: var(--ink-2); font-size: 13px; }
+  .similar[hidden] { display: none; }
+  .similar button {
+    margin-left: 6px; border: 0; background: none; padding: 0; font: inherit;
+    color: var(--q-key); cursor: pointer;
+  }
+  .similar button:hover { text-decoration: underline; }
 
   /* The grid is the same list, `PER_ROW` to a line. The tile height and
    * `TILE[…].h` are one number, guarded by a test; the heading row stays as
@@ -1597,6 +1604,7 @@
   .set-push:disabled { opacity: .45; }
   .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
   .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
+  .set-hint { margin-top: 12px; }
   ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
   ul.folders li { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
   ul.folders .fw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1769,6 +1777,7 @@
           <h2 data-t="Settings"></h2>
         <button type="button" data-sec="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-t="General"></span></button>
         <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List and look"></span></button>
+        <button type="button" data-sec="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg><span data-t="Searching"></span></button>
         <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks scanned"></span><span class="badge" id="set-badge" hidden>1</span></button>
         <button type="button" data-sec="folders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 18.5V7a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9z"/></svg><span data-t="Folders scanned"></span></button>
         <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
@@ -1800,6 +1809,13 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
             </div>
+          </section>
+          <section data-sec="search" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Ignore accents"></div><div class="desc" data-t="cafe also finds café. A word typed with an accent still finds only that spelling."></div></div><div class="seg" id="seg-accents"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Typing mistakes"></div><div class="desc" data-t="A letter wrong, missing, extra or swapped, in a word of five letters or more."></div></div><div class="seg" id="seg-typos"></div></div>
+            </div>
+            <p class="set-note set-hint" data-t="letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes."></p>
           </section>
           <section data-sec="disks" hidden>
             <div id="set-disks"></div>
@@ -1874,6 +1890,7 @@
           </table>
           <div class="empty" id="empty" hidden
                data-t-html="No matches. Two letters like &lt;code&gt;ab&lt;/code&gt; work too — the trigram index does not refuse them, it scans."></div>
+          <div class="similar" id="similar" hidden><span id="similar-said"></span><button type="button" id="similar-show" data-t="show"></button></div>
         </div>
 
         <div class="selbar" id="selbar" hidden></div>
@@ -2877,13 +2894,32 @@
     td.append(name.slice(0, at[0]), mark, name.slice(at[0] + at[1]));
   }
 
+  /* Text as a name is searched — case and marks set aside — and where each
+     character of it stood. Plain ASCII, nearly every name, is only lowered. */
+  function bare(s) {
+    if (/^[\x00-\x7f]*$/.test(s)) return [s.toLowerCase(), null];
+    let out = "";
+    const at = [];
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace("\u0131", "i");
+      for (let k = 0; k < c.length; k++) at.push(i);
+      out += c;
+    }
+    at.push(s.length);
+    return [out, at];
+  }
+
   function span(name, terms) {
     if (!terms.length) return null;
-    const lower = name.toLowerCase();
+    const [text, at] = bare(name);
     let best = null;
     for (const t of terms) {
-      const i = lower.indexOf(t);
-      if (i >= 0 && (!best || i < best[0])) best = [i, t.length];
+      const want = bare(t)[0];
+      const i = want ? text.indexOf(want) : -1;
+      if (i < 0) continue;
+      const from = at ? at[i] : i;
+      const to = at ? at[i + want.length] : i + want.length;
+      if (!best || from < best[0]) best = [from, to - from];
     }
     return best;
   }
@@ -3202,11 +3238,29 @@
     LIST.total = total;
     LIST.exact = exact;
     empty.hidden = LIST.total !== 0;
+    if (LIST.total !== 0) similarBox.hidden = true;
     dropBeyond();
     dropShort();
   }
 
   const scrollEl = document.querySelector(".scroll");
+
+  /* What a search that found nothing nearly found, when the service offers
+     it: a count, and the query that shows them — its words written `fuzzy:`. */
+  const similarBox = document.getElementById("similar");
+  let SIMILAR = "";
+  function offerSimilar(similar) {
+    similarBox.hidden = !similar;
+    if (!similar) return;
+    SIMILAR = similar.query;
+    document.getElementById("similar-said").textContent =
+      T("Similar: {n} files —", { n: fmt(similar.total) + (similar.capped ? "+" : "") });
+  }
+  document.getElementById("similar-show").addEventListener("click", () => {
+    q.value = SIMILAR;
+    render();
+    q.focus();
+  });
 
   /* Not how many matched: a capped count is a floor, and sizing by it moved
    * the scrollbar 620,004 → 31,005 → 620,005 px in two tenths of a second.
@@ -3934,6 +3988,7 @@
         LIST.pending.clear();
         /* Before `putRows`: `clearRows` has just emptied `LIST.at`. */
         if (!keepExact) setTotal(res.total, !res.capped);
+        offerSimilar(res.total === 0 ? res.similar : null);
         LIST.since = Date.now();
         /* The first window, and the first word on what the rest would cost. */
         LIST.cost = res.took_us / 1000;
@@ -6846,6 +6901,7 @@
   const SECTIONS = {
     general: ["General", "The same for every face: the window, the browser and the terminal read these."],
     view: ["List and look", "How the list is drawn, and what it shows."],
+    search: ["Searching", "How the words you type are read. The same in every face."],
     disks: ["Disks scanned", "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."],
     folders: ["Folders scanned", "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched."],
     rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
@@ -6919,6 +6975,17 @@
       keep({ grid_columns: KEPT.grid_columns });
       drawSettings();
     });
+    seg("seg-accents", [["on", T("On")], ["off", T("Off")]], k.accents_exact ? "off" : "on", (v) => {
+      KEPT.accents_exact = v === "off";
+      keep({ accents_exact: KEPT.accents_exact });
+      drawSettings();
+    });
+    seg("seg-typos", [["off", T("Off")], ["", T("When nothing is found")], ["always", T("Always")]],
+      k.typos === "off" || k.typos === "always" ? k.typos : "", (v) => {
+        KEPT.typos = v;
+        keep({ typos: v });
+        drawSettings();
+      });
     seg("seg-removable", [["", T("Ask")], ["always", T("Always scan")], ["never", T("Never")]],
       k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
     seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
