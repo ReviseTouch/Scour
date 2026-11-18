@@ -615,6 +615,8 @@ fn main() -> Result<()> {
     window.set_grid_lines(kept.grid_lines);
     window.set_grid_columns(kept.grid_columns);
     window.set_tabs_on(!kept.tabs_off);
+    window.set_rail_shown(!kept.rail_hidden);
+    window.set_ribbon_shown(!kept.ribbon_hidden);
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {
@@ -1277,6 +1279,22 @@ fn main() -> Result<()> {
             w.set_menu_x(x);
             w.set_menu_y(y);
             w.set_menu_open(true);
+        });
+    }
+
+    // The rail and the ribbon, put away or back: kept for every face.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_panes_changed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    rail_hidden: Some(!w.get_rail_shown()),
+                    ribbon_hidden: Some(!w.get_ribbon_shown()),
+                    ..Default::default()
+                },
+            });
         });
     }
 
@@ -5307,6 +5325,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong.",
         "What is running, and what it holds.",
     ]));
+    w.set_word_show_rail(t(cat, "Show the sidebar"));
+    w.set_word_show_ribbon(t(cat, "Show the time ribbon"));
     w.set_word_top(t(cat, "To the top"));
     w.set_word_new(t(cat, "new"));
     w.set_set_index_where(t(cat, "Kept in"));

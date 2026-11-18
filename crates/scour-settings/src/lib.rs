@@ -127,6 +127,12 @@ pub struct Settings {
     /// stay in [`Settings::tabs`] and come back with the switch.
     #[serde(default)]
     pub tabs_off: bool,
+    /// The kinds-and-places rail beside the list, put away.
+    #[serde(default)]
+    pub rail_hidden: bool,
+    /// The time ribbon under the list, put away.
+    #[serde(default)]
+    pub ribbon_hidden: bool,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -190,6 +196,8 @@ pub struct Change {
     pub grid_lines: Option<bool>,
     pub grid_columns: Option<bool>,
     pub tabs_off: Option<bool>,
+    pub rail_hidden: Option<bool>,
+    pub ribbon_hidden: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -284,6 +292,12 @@ impl Change {
         }
         if let Some(v) = self.tabs_off {
             to.tabs_off = v;
+        }
+        if let Some(v) = self.rail_hidden {
+            to.rail_hidden = v;
+        }
+        if let Some(v) = self.ribbon_hidden {
+            to.ribbon_hidden = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

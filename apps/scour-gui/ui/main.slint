@@ -1337,7 +1337,14 @@ export component MainWindow inherits Window {
     property <length> chrome: root.rail-w + 1px + 24px + 14px;
     /// The sidebar's width, which the header's mark matches so the field
     /// starts where the list does.
-    out property <length> rail-w: 180px;
+    out property <length> rail-w: root.rail-shown ? 180px : 0px;
+    /// The rail and the time ribbon, each put away or brought back by a person;
+    /// kept in the shared settings.
+    in-out property <bool> rail-shown: true;
+    in-out property <bool> ribbon-shown: true;
+    callback panes-changed();
+    in property <string> word-show-rail;
+    in property <string> word-show-ribbon;
     // One gap between each pair of headings, and one more before the picker.
     // Counted, because how many columns there are is a choice.
     property <length> gaps: 8px * max(1, root.heads.length);
@@ -1852,6 +1859,7 @@ export component MainWindow inherits Window {
     in property <bool> pick-asking;
     /// False past `scour_ui::OPEN_FOLDERS_MOST` folders.
     in property <bool> pick-folders-ok: true;
+    property <bool> sel-in-bar: root.picked > 0 && root.tab != "report";
     /// A row was picked: which, whether to add to the selection, and whether
     /// to take the run from the last one picked.
     callback pick(int, bool, bool);
@@ -2001,7 +2009,7 @@ export component MainWindow inherits Window {
                 mark := HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
-                    width: root.rail-w - 26px;
+                    width: 180px - 26px;
                     Image {
                         source: @image-url("../../../assets/scour.svg");
                         width: 20px;
@@ -3364,7 +3372,10 @@ export component MainWindow inherits Window {
 
             // The rail: what the matching set consists of. Clicking a row adds
             // its term to the query rather than filtering behind its back.
+            // Capped to nothing rather than put behind an `if`: `railview`
+            // inside a conditional is out of scope for `scroll-rail`.
             Rectangle {
+                visible: root.rail-shown;
                 // A fixed track: it carries counts that must not reflow while
                 // the list beside it does.
                 width: root.rail-w;
@@ -3396,7 +3407,7 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         padding-left: 12px;
-                        padding-right: 12px;
+                        padding-right: 8px;
                         Text {
                             text: root.scope-heading;
                             color: Theme.ink-3;
@@ -3404,6 +3415,24 @@ export component MainWindow inherits Window {
                             font-weight: 500;
                             overflow: elide;
                             height: 18px;
+                            horizontal-stretch: 1;
+                        }
+                        // Put the rail away; the status bar brings it back.
+                        rail-x := TouchArea {
+                            width: 22px;
+                            height: 18px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.rail-shown = false;
+                                root.panes-changed();
+                            }
+                            Text {
+                                text: "‹";
+                                color: rail-x.has-hover ? Theme.ink : Theme.ink-3;
+                                font-size: 15px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 
@@ -4220,103 +4249,13 @@ export component MainWindow inherits Window {
             }
         }
 
-        // What is selected, and what can be done with it. Absent when nothing
-        // is selected.
-        if root.picked > 0 && root.tab != "report": Rectangle {
-            height: 38px;
-            background: Theme.ground;
-
-            // The count on the left, the buttons on the right: one is read,
-            // the others are aimed at.
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 20px;
-                spacing: 8px;
-
-                // The way out first and apart: a frameless × and a rule, so it
-                // is not read as one more thing to do with the selection.
-                VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: "×  " + root.pick-drop;
-                        plain: true;
-                        clicked => {
-                            root.pick-dropped();
-                        }
-                    }
-                }
-                Rectangle {
-                    width: 1px;
-                    height: 18px;
-                    y: (parent.height - 18px) / 2;
-                    background: Theme.line;
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 1;
-                    min-width: 0px;
-                    HorizontalLayout {
-                        spacing: 0px;
-                        // Packed to the left: three texts of no stretch were
-                        // spread across the bar, "30" far from "selected".
-                        alignment: start;
-                        // One row selected: its path, which elides from the end.
-                        Text {
-                            text: root.picked-pre;
-                            color: root.picked-n == "" ? Theme.ink-2 : Theme.ink-3;
-                            font-size: Fonts.small;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: root.picked-n == "" ? 1 : 0;
-                        }
-                        Text {
-                            text: root.picked-n;
-                            color: Theme.ink;
-                            font-size: Fonts.small;
-                            font-weight: 650;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: root.picked-post;
-                            color: Theme.ink-3;
-                            font-size: Fonts.small;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.pick-copy;
-                        clicked => {
-                            root.pick-copied();
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.pick-folders;
-                        asking: root.pick-asking;
-                        enabled: root.pick-folders-ok;
-                        clicked => {
-                            root.pick-opened();
-                        }
-                    }
-                }
-            }
-        }
-
         // The time ribbon. Twenty-four bars on a logarithmic scale, so the last
         // day, week and year all have room on one screen. The edges are
         // `scour_ui::bar_edges`, shared with every other face.
         Rectangle {
-            visible: root.tab != "report";
-            min-height: root.tab == "report" ? 0px : 76px;
-            max-height: root.tab == "report" ? 0px : 76px;
+            visible: root.tab != "report" && root.ribbon-shown;
+            min-height: root.tab == "report" || !root.ribbon-shown ? 0px : 76px;
+            max-height: root.tab == "report" || !root.ribbon-shown ? 0px : 76px;
             background: Theme.panel;
 
             // `y` said: a rectangle with only a height is centred in its
@@ -4349,6 +4288,22 @@ export component MainWindow inherits Window {
                         color: Theme.ink-3;
                         font-size: 11px;
                         vertical-alignment: center;
+                    }
+                    ribbon-x := TouchArea {
+                        width: 22px;
+                        height: 18px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.ribbon-shown = false;
+                            root.panes-changed();
+                        }
+                        Text {
+                            text: "×";
+                            color: ribbon-x.has-hover ? Theme.ink : Theme.ink-3;
+                            font-size: 14px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 
@@ -4453,17 +4408,74 @@ export component MainWindow inherits Window {
                 padding-right: 20px;
                 spacing: 10px;
 
+                // What is selected, and what can be done with it, in place of
+                // the count while there is a selection: × first and apart.
+                if root.sel-in-bar: HorizontalLayout {
+                    spacing: 4px;
+                    VerticalLayout {
+                        alignment: center;
+                        Push {
+                            label: "×";
+                            plain: true;
+                            clicked => { root.pick-dropped(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Text {
+                            text: root.picked-pre;
+                            color: root.picked-n == "" ? Theme.ink-2 : Theme.ink-3;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            max-width: 420px;
+                        }
+                        Text {
+                            text: root.picked-n;
+                            color: Theme.ink;
+                            font-size: 12px;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.picked-post;
+                            color: Theme.ink-3;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle { width: 6px; }
+                    VerticalLayout {
+                        alignment: center;
+                        Push {
+                            label: root.pick-copy;
+                            plain: true;
+                            clicked => { root.pick-copied(); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Push {
+                            label: root.pick-folders;
+                            plain: true;
+                            asking: root.pick-asking;
+                            enabled: root.pick-folders-ok;
+                            clicked => { root.pick-opened(); }
+                        }
+                    }
+                }
+
                 // Three claims of different weight: the count is the answer,
                 // the cost wears the "today" hue, the walk stays quiet. `meter`
                 // holds the sentences that are not numbers; never both at once.
-                if root.notice != "": Text {
+                if !root.sel-in-bar && root.notice != "": Text {
                     text: root.notice;
                     color: Theme.ink-2;
                     font-size: 11.5px;
                     vertical-alignment: center;
                 }
 
-                if root.notice == "" && root.meter-count != "": HorizontalLayout {
+                if !root.sel-in-bar && root.notice == "" && root.meter-count != "": HorizontalLayout {
                     spacing: 6px;
 
                     Text {
@@ -4514,7 +4526,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.notice == "" && root.meter-count == "": Text {
+                if !root.sel-in-bar && root.notice == "" && root.meter-count == "": Text {
                     text: root.meter;
                     color: Theme.ink-3;
                     font-size: 11.5px;
@@ -4531,6 +4543,30 @@ export component MainWindow inherits Window {
                 }
 
                 Rectangle { }
+
+                // What was put away, and the way to bring it back.
+                if !root.rail-shown: VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.word-show-rail;
+                        plain: true;
+                        clicked => {
+                            root.rail-shown = true;
+                            root.panes-changed();
+                        }
+                    }
+                }
+                if !root.ribbon-shown && root.tab != "report": VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.word-show-ribbon;
+                        plain: true;
+                        clicked => {
+                            root.ribbon-shown = true;
+                            root.panes-changed();
+                        }
+                    }
+                }
 
                 if root.note != "": Text {
                     text: root.note;

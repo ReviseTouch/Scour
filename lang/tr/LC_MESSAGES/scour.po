@@ -2295,3 +2295,15 @@ msgstr "En üste"
 
 msgid "new"
 msgstr "yeni"
+
+msgid "Show the sidebar"
+msgstr "Kenar çubuğunu göster"
+
+msgid "Show the time ribbon"
+msgstr "Zaman çubuğunu göster"
+
+msgid "Hide the sidebar"
+msgstr "Kenar çubuğunu gizle"
+
+msgid "Hide the time ribbon"
+msgstr "Zaman çubuğunu gizle"

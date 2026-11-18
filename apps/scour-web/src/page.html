@@ -641,6 +641,22 @@
   .views button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
   /* ---------------- the time ribbon ---------------- */
+  /* The rail and the ribbon, put away: kept in the settings for every face.
+     The rail stays a grid item, emptied, so the columns do not shift. */
+  .body.no-rail { grid-template-columns: 0 minmax(0, 1fr); }
+  .body.no-rail.peeking { grid-template-columns: 0 minmax(0, 1fr) var(--peek-w); }
+  .body.no-rail .rail { visibility: hidden; padding: 0; border: 0; overflow: hidden; }
+  .body.no-ribbon .ribbon { display: none; }
+  .pane-x {
+    float: right; border: 0; background: none; color: var(--ink-3); cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0 2px; margin-left: 8px;
+  }
+  .pane-x:hover { color: var(--ink); }
+  .ribbon-head .grow { flex: 1; }
+  .restore { display: flex; gap: 12px; padding: 4px 16px; border-top: 1px solid var(--line); background: var(--ground); }
+  .restore[hidden] { display: none; }
+  .restore button { border: 0; background: none; color: var(--ink-3); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 0; }
+  .restore button:hover { color: var(--ink); }
   .ribbon {
     border-top: 1px solid var(--line);
     background: var(--panel);
@@ -1831,7 +1847,7 @@
 
     <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
       <nav class="rail" data-t-aria="Filters">
-        <h2 data-t="Scope"></h2>
+        <h2><span data-t="Scope"></span><button type="button" class="pane-x" id="rail-x" data-t-title="Hide the sidebar" data-t-aria="Hide the sidebar">‹</button></h2>
         <div id="scopes"></div>
         <h2 data-t="Kind"></h2>
         <div id="kinds"></div>
@@ -1861,11 +1877,17 @@
         </div>
 
         <div class="selbar" id="selbar" hidden></div>
+        <div class="restore" id="restore" hidden>
+          <button type="button" id="rail-back" data-t="Show the sidebar" hidden></button>
+          <button type="button" id="ribbon-back" data-t="Show the time ribbon" hidden></button>
+        </div>
 
         <div class="ribbon">
           <div class="ribbon-head">
             <span style="font-weight:500" data-t="Time distribution"></span>
+            <span class="grow"></span>
             <span id="ribbon-note" data-t="by when the results last changed — click to filter to a range"></span>
+            <button type="button" class="pane-x" id="ribbon-x" data-t-title="Hide the time ribbon" data-t-aria="Hide the time ribbon">×</button>
           </div>
           <div class="bars" id="bars"></div>
           <div class="scale">
@@ -4496,6 +4518,29 @@
 
   /* Applied to a window that has already drawn itself with defaults. */
   /* Lines between rows and columns, when the settings ask for them. */
+  /* The rail and the ribbon as the settings hold them. */
+  function applyPanes() {
+    const body = document.querySelector(".body");
+    const railOff = !!(KEPT && KEPT.rail_hidden);
+    const ribbonOff = !!(KEPT && KEPT.ribbon_hidden);
+    if (body) {
+      body.classList.toggle("no-rail", railOff);
+      body.classList.toggle("no-ribbon", ribbonOff);
+    }
+    document.getElementById("rail-back").hidden = !railOff;
+    document.getElementById("ribbon-back").hidden = !ribbonOff;
+    document.getElementById("restore").hidden = !railOff && !ribbonOff;
+  }
+  function setPanes(change) {
+    KEPT = { ...(KEPT || {}), ...change };
+    applyPanes();
+    keep(change);
+  }
+  document.getElementById("rail-x").addEventListener("click", () => setPanes({ rail_hidden: true }));
+  document.getElementById("ribbon-x").addEventListener("click", () => setPanes({ ribbon_hidden: true }));
+  document.getElementById("rail-back").addEventListener("click", () => setPanes({ rail_hidden: false }));
+  document.getElementById("ribbon-back").addEventListener("click", () => setPanes({ ribbon_hidden: false }));
+
   function applyGrid() {
     document.body.classList.toggle("lines", !!(KEPT && KEPT.grid_lines));
     document.body.classList.toggle("vlines", !!(KEPT && KEPT.grid_columns));
@@ -4504,6 +4549,7 @@
   function applySettings(s) {
     KEPT = s;
     applyGrid();
+    applyPanes();
     applyTheme(s.theme || "");
     const oldSort = sortKey;
     const oldDescending = sortDesc;
