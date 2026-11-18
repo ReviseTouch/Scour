@@ -5,6 +5,7 @@
 //!
 //!   cargo run --release -p scour-index-native --example transplant -- dump /tmp/idx/native /tmp/rows.bin
 //!   cargo run --release -p scour-index-native --example transplant -- load /tmp/rows.bin /tmp/new/native
+//!   cargo run --release -p scour-index-native --example transplant -- again /tmp/rows.bin /tmp/new/native
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::time::Instant;
@@ -49,8 +50,14 @@ fn dump(index_dir: &str, file: &str) {
     println!("dumped {rows} rows");
 }
 
-fn load(file: &str, index_dir: &str) {
+/// `load` into an empty index and rebuild it. Into one that holds the rows
+/// already: `again` inside a pass, as a walk that finds nothing changed, and
+/// `replace` outside one, where every row is written and its old one retired.
+fn load(file: &str, index_dir: &str, mode: &str) {
     let index = NativeIndex::open_or_create(std::path::Path::new(index_dir)).expect("open");
+    if mode == "again" {
+        index.begin_generation().expect("generation");
+    }
     let mut input = BufReader::new(std::fs::File::open(file).expect("open dump"));
     let began = Instant::now();
     let mut rows = 0u64;
@@ -89,6 +96,9 @@ fn load(file: &str, index_dir: &str) {
     index.apply(&mut batch.drain(..)).expect("apply");
     index.commit().expect("commit");
     println!("loaded {rows} rows in {:.2?}", began.elapsed());
+    if mode != "load" {
+        return;
+    }
     let began = Instant::now();
     index.maintain(Maintenance::Rebuild).expect("rebuild");
     println!("rebuilt in {:.2?}", began.elapsed());
@@ -98,7 +108,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["dump", index, file] => dump(index, file),
-        ["load", file, index] => load(file, index),
-        _ => panic!("transplant dump <index> <file> | transplant load <file> <index>"),
+        [mode @ ("load" | "again" | "replace"), file, index] => load(file, index, mode),
+        _ => {
+            panic!("transplant dump <index> <file> | transplant load|again|replace <file> <index>")
+        }
     }
 }
