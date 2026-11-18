@@ -357,3 +357,88 @@ fn kde_is_only_kde_when_the_session_says_so() {
     };
     assert_eq!(tools.desktop(), Desktop::Kde);
 }
+
+#[test]
+fn a_windows_shortcut_carries_two_of_ctrl_alt_and_shift_and_never_the_windows_key() {
+    // The modifiers above the virtual-key code: Shift 1, Ctrl 2, Alt 4, and 8
+    // for a key of the cluster beside the letters.
+    for (ours, word) in [
+        ("ctrl+alt+f", 0x0646),
+        ("ctrl+shift+s", 0x0353),
+        ("ctrl+alt+shift+F5", 0x0774),
+        ("alt+shift+7", 0x0537),
+        ("ctrl+alt+space", 0x0620),
+        ("ctrl+alt+home", 0x0e24),
+        ("ctrl+alt+pageup", 0x0e21),
+    ] {
+        assert_eq!(key(ours).windows(), Some(word), "{ours}");
+        assert_eq!(Key::from_windows(word), Some(key(ours)), "{word:#06x}");
+    }
+    for refused in [
+        "super+f",
+        "ctrl+super+f",
+        "ctrl+f",
+        "f",
+        "F5",
+        "ctrl+alt+.",
+        "ctrl+alt+é",
+    ] {
+        assert_eq!(key(refused).windows(), None, "{refused}");
+    }
+    assert_eq!(Key::from_windows(0), None);
+    assert_eq!(key(scour_hotkey::WINDOWS_DEFAULT).windows(), Some(0x0646));
+
+    // Asked from another system, the refusal still comes before "not here".
+    let windows = Hotkey::new(Tools {
+        os: scour_hotkey::Os::Windows,
+        ..Tools::default()
+    });
+    assert_eq!(windows.desktop(), Desktop::Windows);
+    assert!(windows.can_bind());
+    assert_eq!(windows.tools().command(), "scour-gui.exe");
+    assert_eq!(windows.tools().os.examples()[0], "ctrl+alt+f");
+    if !cfg!(windows) {
+        assert_eq!(
+            windows.bind(&key("super+f")),
+            Err(Error::Refused(scour_hotkey::WINDOWS_REFUSED))
+        );
+        assert_eq!(windows.bind(&key("ctrl+alt+f")), Err(Error::Unsupported));
+    }
+}
+
+#[test]
+fn a_mac_keeps_its_key_in_a_file_and_comes_with_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("Scour").join("hotkey");
+    let mac = Hotkey::new(Tools {
+        os: scour_hotkey::Os::Mac,
+        kept: Some(file.clone()),
+        ..Tools::default()
+    });
+    assert_eq!(mac.desktop(), Desktop::Mac);
+    assert!(mac.can_bind());
+    // Nothing written yet: Command, Shift and F.
+    assert_eq!(mac.status(), Ok(Status::Bound(key("cmd+shift+f"))));
+    assert_eq!(key("cmd+shift+f").mac(), Some((0x03, 0x0100 | 0x0200)));
+    assert_eq!(key("ctrl+alt+space").mac(), Some((0x31, 0x1000 | 0x0800)));
+    assert_eq!(key("super+F12").mac(), Some((0x6f, 0x0100)));
+
+    assert_eq!(mac.bind(&key("ctrl+alt+s")), Ok(Applies::Now));
+    assert_eq!(mac.status(), Ok(Status::Bound(key("ctrl+alt+s"))));
+    assert_eq!(std::fs::read_to_string(&file).expect("kept"), "ctrl+alt+s");
+    // Shift alone would take a capital letter from every program.
+    for refused in ["shift+f", "f", "cmd+."] {
+        assert_eq!(
+            mac.bind(&key(refused)),
+            Err(Error::Refused(scour_hotkey::MAC_REFUSED)),
+            "{refused}"
+        );
+    }
+    assert_eq!(mac.status(), Ok(Status::Bound(key("ctrl+alt+s"))));
+
+    // Cleared is none, and stays none: the file is there and empty.
+    assert_eq!(mac.clear(), Ok(()));
+    assert_eq!(mac.status(), Ok(Status::Unbound));
+    std::fs::write(&file, "what is this").expect("write");
+    assert_eq!(mac.status(), Err(Error::Unreadable("what is this".into())));
+}

@@ -66,5 +66,10 @@ windows-sys = { workspace = true, features = [
     "Win32_Security_Authorization",
 ] }
 
+# A Mac has nowhere to write a global key, so the one process of Scour's that
+# stays holds it. See `hold_key` in `main.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+scour-hotkey = { workspace = true }
+
 [build-dependencies]
 scour-icon = { workspace = true }

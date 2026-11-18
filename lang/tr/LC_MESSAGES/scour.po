@@ -1562,8 +1562,14 @@ msgstr "{n} dosya çöp kutusuna taşınsın mı? {path} altındaki kalır."
 msgid "{gone} moved to trash · {n} stayed: {which}"
 msgstr "{gone} tanesi çöp kutusuna taşındı · {n} tanesi kaldı: {which}"
 
-msgid "for example super+f or ctrl+alt+s"
-msgstr "örneğin super+f ya da ctrl+alt+s"
+msgid "for example {a} or {b}"
+msgstr "örneğin {a} ya da {b}"
+
+msgid "Windows opens a shortcut on two of Ctrl, Alt and Shift with a letter, a digit, a function key or a named key. The Windows key cannot be used."
+msgstr "Windows bir kısayolu Ctrl, Alt ve Shift'ten ikisiyle birlikte bir harf, rakam, işlev tuşu ya da adlı bir tuşla açar. Windows tuşu kullanılamaz."
+
+msgid "A key here needs Command, Control or Option with it, and has to be a letter, a digit, a function key or a named key such as space."
+msgstr "Buradaki tuş Command, Control ya da Option ile birlikte olmalı; bir harf, rakam, işlev tuşu ya da space gibi adlı bir tuş olmalı."
 
 msgid "Keyboard shortcut"
 msgstr "Klavye kısayolu"

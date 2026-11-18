@@ -35,6 +35,9 @@ pub enum Error {
     Tool(String),
     /// A binding in a spelling this crate does not read.
     Unreadable(String),
+    /// A combination this system cannot take, and why — a msgid, which is the
+    /// sentence a face shows: Windows has no shortcut on the Windows key.
+    Refused(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -44,6 +47,7 @@ impl fmt::Display for Error {
             Error::Sandboxed => write!(f, "a sandboxed program cannot bind a key"),
             Error::Tool(why) => write!(f, "{why}"),
             Error::Unreadable(s) => write!(f, "a binding in a spelling not read here: {s}"),
+            Error::Refused(why) => write!(f, "{why}"),
         }
     }
 }
@@ -74,7 +78,10 @@ impl Hotkey {
 
     /// Can this program write a binding here at all?
     pub fn can_bind(&self) -> bool {
-        matches!(self.desktop(), Desktop::Gnome | Desktop::Kde)
+        matches!(
+            self.desktop(),
+            Desktop::Gnome | Desktop::Kde | Desktop::Windows | Desktop::Mac
+        )
     }
 
     /// What the key runs, or would run.
@@ -86,6 +93,8 @@ impl Hotkey {
         let bound = match self.desktop() {
             Desktop::Gnome => gnome::current(self.gsettings()?)?,
             Desktop::Kde => kde::current(self.kreadconfig()?)?,
+            Desktop::Windows => windows_current()?,
+            Desktop::Mac => crate::kept::current(self.kept()?)?,
             Desktop::Flatpak | Desktop::Other => {
                 return Ok(Status::CannotBind {
                     command: self.command(),
@@ -110,6 +119,14 @@ impl Hotkey {
                 kde::bind(self.kwriteconfig()?, key)?;
                 Ok(Applies::AfterLogin)
             }
+            Desktop::Windows => {
+                windows_bind(key, std::path::Path::new(&self.command()))?;
+                Ok(Applies::Now)
+            }
+            Desktop::Mac => {
+                crate::kept::bind(self.kept()?, key)?;
+                Ok(Applies::Now)
+            }
             Desktop::Flatpak => Err(Error::Sandboxed),
             Desktop::Other => Err(Error::Unsupported),
         }
@@ -119,9 +136,15 @@ impl Hotkey {
         match self.desktop() {
             Desktop::Gnome => gnome::clear(self.gsettings()?),
             Desktop::Kde => kde::clear(self.kwriteconfig()?),
+            Desktop::Windows => windows_clear(),
+            Desktop::Mac => crate::kept::clear(self.kept()?),
             Desktop::Flatpak => Err(Error::Sandboxed),
             Desktop::Other => Err(Error::Unsupported),
         }
+    }
+
+    fn kept(&self) -> Result<&std::path::Path, Error> {
+        self.tools.kept.as_deref().ok_or(Error::Unsupported)
     }
 
     fn gsettings(&self) -> Result<&std::path::Path, Error> {
@@ -136,3 +159,32 @@ impl Hotkey {
         self.tools.kreadconfig.as_deref().ok_or(Error::Unsupported)
     }
 }
+
+#[cfg(windows)]
+use crate::windows::{bind as windows_bind, clear as windows_clear, current as windows_current};
+
+/// Asked about Windows from somewhere else: nothing here can answer.
+#[cfg(not(windows))]
+fn windows_current() -> Result<Option<Key>, Error> {
+    Err(Error::Unsupported)
+}
+
+#[cfg(not(windows))]
+fn windows_bind(key: &Key, _target: &std::path::Path) -> Result<(), Error> {
+    // What a shortcut cannot carry is the same question on any system.
+    key.windows()
+        .map(|_| ())
+        .ok_or(Error::Refused(WINDOWS_REFUSED))
+        .and(Err(Error::Unsupported))
+}
+
+#[cfg(not(windows))]
+fn windows_clear() -> Result<(), Error> {
+    Err(Error::Unsupported)
+}
+
+/// The key the Start menu shortcut is given when Scour is installed.
+pub const WINDOWS_DEFAULT: &str = "ctrl+alt+f";
+
+/// Why a combination cannot be a Windows shortcut's. A msgid.
+pub const WINDOWS_REFUSED: &str = "Windows opens a shortcut on two of Ctrl, Alt and Shift with a letter, a digit, a function key or a named key. The Windows key cannot be used.";

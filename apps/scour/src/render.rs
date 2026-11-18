@@ -968,12 +968,7 @@ fn tool_error(e: &scour_hotkey::Error) -> String {
 /// GNOME and KDE are names, not words, so none of these is translated. The
 /// `--json` spelling is this one in lower case: one table, two readers.
 fn desktop_word(d: scour_hotkey::Desktop) -> &'static str {
-    match d {
-        scour_hotkey::Desktop::Gnome => "GNOME",
-        scour_hotkey::Desktop::Kde => "KDE",
-        scour_hotkey::Desktop::Flatpak => "Flatpak",
-        scour_hotkey::Desktop::Other => "other",
-    }
+    d.name()
 }
 
 fn hotkey_said(hk: &scour_hotkey::Hotkey, deed: Deed<'_>, json: bool) -> Said {

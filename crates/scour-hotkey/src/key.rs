@@ -261,6 +261,143 @@ impl Key {
     }
 }
 
+/// Windows' modifier bits in a shortcut's key, and the one that marks a key
+/// of the cluster between the letters and the number pad.
+const HOTKEYF_SHIFT: u16 = 0x01;
+const HOTKEYF_CONTROL: u16 = 0x02;
+const HOTKEYF_ALT: u16 = 0x04;
+const HOTKEYF_EXT: u16 = 0x08;
+
+/// Named keys as Windows' virtual-key code, whether it is of the extended
+/// cluster, and Carbon's key code. Positions, not characters, on a Mac.
+const CODES: &[(&str, u8, bool, u32)] = &[
+    ("space", 0x20, false, 0x31),
+    ("tab", 0x09, false, 0x30),
+    ("return", 0x0d, false, 0x24),
+    ("escape", 0x1b, false, 0x35),
+    ("backspace", 0x08, false, 0x33),
+    ("delete", 0x2e, true, 0x75),
+    ("home", 0x24, true, 0x73),
+    ("end", 0x23, true, 0x77),
+    ("pageup", 0x21, true, 0x74),
+    ("pagedown", 0x22, true, 0x79),
+    ("left", 0x25, true, 0x7b),
+    ("up", 0x26, true, 0x7e),
+    ("right", 0x27, true, 0x7c),
+    ("down", 0x28, true, 0x7d),
+];
+
+/// Carbon's key codes for the letters and the digits, `a`–`z` then `0`–`9`,
+/// and for F1–F12.
+const MAC_LETTERS: [u32; 26] = [
+    0x00, 0x0b, 0x08, 0x02, 0x0e, 0x03, 0x05, 0x04, 0x22, 0x26, 0x28, 0x25, 0x2e, 0x2d, 0x1f, 0x23,
+    0x0c, 0x0f, 0x01, 0x11, 0x20, 0x09, 0x0d, 0x07, 0x10, 0x06,
+];
+const MAC_DIGITS: [u32; 10] = [0x1d, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1a, 0x1c, 0x19];
+const MAC_F: [u32; 12] = [
+    0x7a, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6d, 0x67, 0x6f,
+];
+
+/// Carbon's modifier bits.
+const MAC_CMD: u32 = 0x0100;
+const MAC_SHIFT: u32 = 0x0200;
+const MAC_OPTION: u32 = 0x0800;
+const MAC_CONTROL: u32 = 0x1000;
+
+impl Key {
+    /// A letter, a digit, F1–F12 or a named key: what both Windows and a Mac
+    /// can be told by code. `(Windows' code, extended, Carbon's code)`.
+    fn codes(&self) -> Option<(u8, bool, u32)> {
+        let mut chars = self.key.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            return match c {
+                'a'..='z' => Some((
+                    c.to_ascii_uppercase() as u8,
+                    false,
+                    MAC_LETTERS[(c as u8 - b'a') as usize],
+                )),
+                '0'..='9' => Some((c as u8, false, MAC_DIGITS[(c as u8 - b'0') as usize])),
+                _ => None,
+            };
+        }
+        if let Some(n) = self
+            .key
+            .strip_prefix('F')
+            .and_then(|n| n.parse::<u8>().ok())
+        {
+            return (1..=12)
+                .contains(&n)
+                .then(|| (0x70 + n - 1, false, MAC_F[usize::from(n - 1)]));
+        }
+        CODES
+            .iter()
+            .find(|(name, ..)| *name == self.key)
+            .map(|&(_, vk, ext, mac)| (vk, ext, mac))
+    }
+
+    /// The word a Windows shortcut keeps its key as: the virtual-key code, and
+    /// the modifiers above it. `None` for what a shortcut cannot carry — the
+    /// Windows key, fewer than two of Ctrl, Alt and Shift, or a key with no
+    /// code of its own.
+    pub fn windows(&self) -> Option<u16> {
+        if self.mods.contains(&Modifier::Super) || self.mods.len() < 2 {
+            return None;
+        }
+        let (vk, ext, _) = self.codes()?;
+        let mut flags = if ext { HOTKEYF_EXT } else { 0 };
+        for m in &self.mods {
+            flags |= match m {
+                Modifier::Ctrl => HOTKEYF_CONTROL,
+                Modifier::Alt => HOTKEYF_ALT,
+                Modifier::Shift => HOTKEYF_SHIFT,
+                Modifier::Super => 0,
+            };
+        }
+        Some(flags << 8 | u16::from(vk))
+    }
+
+    /// Read a shortcut's word back. `None` for no key, or one not written here.
+    pub fn from_windows(word: u16) -> Option<Key> {
+        let (vk, flags) = ((word & 0xff) as u8, word >> 8);
+        let key = match vk {
+            b'A'..=b'Z' => (vk as char).to_ascii_lowercase().to_string(),
+            b'0'..=b'9' => (vk as char).to_string(),
+            0x70..=0x7b => format!("F{}", vk - 0x70 + 1),
+            _ => (*CODES.iter().find(|(_, code, ..)| *code == vk)?)
+                .0
+                .to_owned(),
+        };
+        let mut mods = Vec::new();
+        for (bit, m) in [
+            (HOTKEYF_CONTROL, Modifier::Ctrl),
+            (HOTKEYF_ALT, Modifier::Alt),
+            (HOTKEYF_SHIFT, Modifier::Shift),
+        ] {
+            if flags & bit != 0 {
+                mods.push(m);
+            }
+        }
+        Some(Key { mods, key })
+    }
+
+    /// Carbon's key code and modifiers, for a hot key registered on a Mac —
+    /// where `super` is Command. `None` without Command, Control or Option, or
+    /// for a key with no code of its own.
+    pub fn mac(&self) -> Option<(u32, u32)> {
+        let (_, _, code) = self.codes()?;
+        let mut mods = 0;
+        for m in &self.mods {
+            mods |= match m {
+                Modifier::Super => MAC_CMD,
+                Modifier::Ctrl => MAC_CONTROL,
+                Modifier::Alt => MAC_OPTION,
+                Modifier::Shift => MAC_SHIFT,
+            };
+        }
+        (mods & !MAC_SHIFT != 0).then_some((code, mods))
+    }
+}
+
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for m in &self.mods {

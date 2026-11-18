@@ -6570,7 +6570,7 @@
       `</p><form class="add hk-set">` +
       `<input type="text" class="hk-key" value="${esc(bound)}"` +
       ` aria-label="${esc(T("Keyboard shortcut"))}"` +
-      ` placeholder="${esc(T("for example super+f or ctrl+alt+s"))}" />` +
+      ` placeholder="${esc(T("for example {a} or {b}", { a: (h.examples || [])[0] || "super+f", b: (h.examples || [])[1] || "ctrl+alt+s" }))}" />` +
       `<button type="submit">${esc(bound ? T("Change") : T("Bind"))}</button>` +
       (bound ? `<button type="button" class="hk-clear">${esc(T("Remove"))}</button>` : "") +
       `</form><p class="hk-said" role="status"></p>`;
@@ -6606,7 +6606,7 @@
         if (h.applies === "after_login") drawHotkey(T("It takes effect after the next login."));
         else drawHotkey(h.error, true);
       })
-      .catch((e) => hotkeySaid(e.message || String(e), true));
+      .catch((e) => hotkeySaid(T(e.message || String(e)), true));
 
   hotkeyBody.addEventListener("submit", (e) => {
     e.preventDefault();

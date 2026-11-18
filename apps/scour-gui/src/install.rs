@@ -3,7 +3,8 @@
 //! where a per-user program goes and nowhere else —
 //!
 //! - the files, to `%LOCALAPPDATA%\Programs\Scour`;
-//! - a Start menu shortcut to the window;
+//! - a Start menu shortcut to the window, which carries the key that opens
+//!   Scour from anywhere: Ctrl+Alt+F until somebody chooses another;
 //! - that folder on the account's PATH, so `scour` answers in a terminal.
 //!
 //! Then the installed window opens, and asks once whether to start with
@@ -105,6 +106,18 @@ mod imp {
         if let Some(parent) = at.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        // The key is the entry's own, and the entry is written anew below:
+        // what it had is read first. A new entry gets Scour's own key, and
+        // one somebody took the key off keeps none.
+        let keys = scour_hotkey::Hotkey::detect();
+        let key = if at.is_file() {
+            match keys.status() {
+                Ok(scour_hotkey::Status::Bound(key)) => Some(key),
+                _ => None,
+            }
+        } else {
+            scour_hotkey::Key::parse(scour_hotkey::WINDOWS_DEFAULT).ok()
+        };
         // SAFETY: COM on this thread, one object, released when it drops.
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -116,8 +129,13 @@ mod imp {
                 let file: IPersistFile = link.cast()?;
                 file.Save(&HSTRING::from(at.as_os_str()), true)
             })();
-            made.map_err(|e| format!("Start menu shortcut: {e}"))
+            made.map_err(|e| format!("Start menu shortcut: {e}"))?;
         }
+        // Not worth failing an installation over: Settings can set it.
+        if let Some(key) = key {
+            let _ = keys.bind(&key);
+        }
+        Ok(())
     }
 
     /// Add the folder to the account's PATH, or take it off, and tell running

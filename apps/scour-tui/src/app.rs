@@ -2422,7 +2422,9 @@ impl App {
         self.key_can = can_bind;
         self.key_bad = !trouble.is_empty();
         self.key_note = if self.key_bad {
-            trouble
+            // A refusal that is a sentence of the catalogue's; a tool's own
+            // words come back as they are.
+            scour_core::Catalog::get(&self.words, &trouble).into_owned()
         } else if later {
             self.say("It takes effect after the next login.")
                 .into_owned()

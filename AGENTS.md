@@ -95,7 +95,9 @@ forgives every plain word as `fuzzy:` would.
 A client only. On the bare form everything after the query is the query, flags
 included; `-n` and `-s` go before it. `--json` prints the protocol type as the
 service sent it; `--socket` picks another service. `where`, `mcp-config` and
-`hotkey` reach no service. `words` says how a search reads its words, and
+`hotkey` reach no service: `hotkey` asks the desktop itself — GNOME's or KDE's
+settings, the Start menu shortcut's own key on Windows (two of Ctrl, Alt and
+Shift; never the Windows key), a file the service reads on a Mac. `words` says how a search reads its words, and
 `words --accents ignore|exact --typos off|offer|always` changes it for every
 face. At a terminal five rows are shown, into a pipe forty,
 and the summary says how to get more. At a terminal `du` and `facets` draw their

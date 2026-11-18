@@ -226,25 +226,72 @@ pub(crate) fn run(args: Args) -> Result<()> {
     let handler_live = Arc::clone(&live);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();
-    server.serve(
-        move |req, emit| {
-            if matches!(req, scour_proto::Request::Shutdown {}) {
-                handler_stop.store(true, Ordering::Relaxed);
-                // The accept loop only reads the flag when a connection
-                // arrives, so one is made. From another thread and after a
-                // moment, so this reply is written before the tear-down.
-                let addr = wake_addr.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(50));
-                    let _ = scour_ipc::Client::connect(&addr);
-                });
-            }
-            handle::dispatch(&handler_live, &kept, req, emit)
-        },
-        Arc::clone(&stop),
-    );
-    live.shutdown();
+    let serve = move || {
+        server.serve(
+            move |req, emit| {
+                if matches!(req, scour_proto::Request::Shutdown {}) {
+                    handler_stop.store(true, Ordering::Relaxed);
+                    // The accept loop only reads the flag when a connection
+                    // arrives, so one is made. From another thread and after a
+                    // moment, so this reply is written before the tear-down.
+                    let addr = wake_addr.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(50));
+                        let _ = scour_ipc::Client::connect(&addr);
+                    });
+                }
+                handle::dispatch(&handler_live, &kept, req, emit)
+            },
+            Arc::clone(&stop),
+        );
+        live.shutdown();
+    };
+    // A Mac's key is held on the main thread, where Carbon delivers it, so
+    // the accept loop takes another; when that ends, so does the process.
+    #[cfg(target_os = "macos")]
+    {
+        let serving = std::thread::spawn(move || {
+            serve();
+            std::process::exit(0);
+        });
+        hold_key();
+        let _ = serving.join();
+    }
+    #[cfg(not(target_os = "macos"))]
+    serve();
     Ok(())
+}
+
+/// Hold the key that opens Scour, for as long as this process lives: nothing
+/// else of Scour's stays running, and a Mac keeps no list of keys a program
+/// may add to. Pressed, it opens the face somebody last switched to. Returns
+/// at once where there is no session to hold a key in.
+#[cfg(target_os = "macos")]
+fn hold_key() {
+    let keys = scour_hotkey::Hotkey::detect();
+    let Some(file) = keys.tools().kept.clone() else {
+        return;
+    };
+    let launcher = keys.command();
+    let window = keys
+        .tools()
+        .exe
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .map(|dir| dir.join("scour-gui"));
+    scour_hotkey::listen(&file, move || {
+        let started = std::process::Command::new(&launcher).spawn().or_else(|e| {
+            // No launcher beside this program: the window is what there is.
+            window
+                .as_ref()
+                .map_or(Err(e), |gui| std::process::Command::new(gui).spawn())
+        });
+        match started {
+            // Waited for, on a thread of its own, or it stays a zombie.
+            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+            Err(e) => scour_core::note!("scourd: the key was pressed and nothing opened: {e}"),
+        }
+    });
 }
 
 #[cfg(feature = "memory-trace")]

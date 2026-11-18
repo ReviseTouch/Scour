@@ -7,7 +7,7 @@
 
 use std::net::TcpStream;
 
-use scour_hotkey::{Applies, Desktop, Hotkey, Key, Status};
+use scour_hotkey::{Applies, Hotkey, Key, Status};
 
 use crate::http;
 
@@ -76,12 +76,9 @@ fn state(hk: &Hotkey, applies: Option<Applies>) -> serde_json::Value {
         Err(e) => (None, Some(e.to_string())),
     };
     let mut out = serde_json::json!({
-        "desktop": match hk.desktop() {
-            Desktop::Gnome => "gnome",
-            Desktop::Kde => "kde",
-            Desktop::Flatpak => "flatpak",
-            Desktop::Other => "other",
-        },
+        "desktop": hk.desktop().name().to_ascii_lowercase(),
+        // What the field shows before anything is typed, for this system.
+        "examples": hk.tools().os.examples(),
         "can_bind": hk.can_bind(),
         "key": key,
         "command": hk.command(),

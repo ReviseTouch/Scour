@@ -316,7 +316,7 @@ fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
 /// Ask the desktop about its key, or change it. Every decision is
 /// `scour-hotkey`'s; this turns the answer into an event.
 fn hotkey(deed: &Deed) -> Got {
-    use scour_hotkey::{Applies, Desktop, Hotkey, Key, Status};
+    use scour_hotkey::{Applies, Hotkey, Key, Status};
     let hk = Hotkey::detect();
     let mut trouble = String::new();
     let mut later = false;
@@ -349,13 +349,7 @@ fn hotkey(deed: &Deed) -> Got {
     };
     Got::Hotkey {
         // Names, not words: nothing here goes through the catalogue.
-        desktop: match hk.desktop() {
-            Desktop::Gnome => "GNOME",
-            Desktop::Kde => "KDE",
-            Desktop::Flatpak => "Flatpak",
-            Desktop::Other => "other",
-        }
-        .to_owned(),
+        desktop: hk.desktop().name().to_owned(),
         key,
         command: hk.command(),
         can_bind: hk.can_bind(),

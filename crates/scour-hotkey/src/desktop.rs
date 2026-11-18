@@ -10,9 +10,61 @@ pub const FLATPAK_APP: &str = "com.revisetouch.Scour";
 pub enum Desktop {
     Gnome,
     Kde,
+    /// The key is the Start menu shortcut's.
+    Windows,
+    /// The key is held by Scour's own service.
+    Mac,
     /// A sandbox: its `gsettings` reach nobody's desktop.
     Flatpak,
     Other,
+}
+
+impl Desktop {
+    /// A name, not a word: no catalogue translates GNOME.
+    pub fn name(self) -> &'static str {
+        match self {
+            Desktop::Gnome => "GNOME",
+            Desktop::Kde => "KDE",
+            Desktop::Windows => "Windows",
+            Desktop::Mac => "macOS",
+            Desktop::Flatpak => "Flatpak",
+            Desktop::Other => "other",
+        }
+    }
+}
+
+/// Which system this is. A field rather than a `cfg`, so a test on one can
+/// ask about another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Os {
+    /// Linux and the BSDs: the desktop decides.
+    #[default]
+    Unix,
+    Windows,
+    Mac,
+}
+
+impl Os {
+    /// Two combinations this system can take, in the neutral spelling: what a
+    /// field shows before anything is typed. The first is the one Scour
+    /// offers, and on Windows and a Mac the one it comes with.
+    pub fn examples(self) -> [&'static str; 2] {
+        match self {
+            Os::Windows => [crate::hotkey::WINDOWS_DEFAULT, "ctrl+shift+s"],
+            Os::Mac => [crate::kept::MAC_DEFAULT, "ctrl+alt+s"],
+            Os::Unix => ["super+f", "ctrl+alt+s"],
+        }
+    }
+
+    pub fn this() -> Os {
+        if cfg!(windows) {
+            Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::Mac
+        } else {
+            Os::Unix
+        }
+    }
 }
 
 /// What was found on this machine. Built by [`Tools::detect`], or by hand in a
@@ -34,6 +86,9 @@ pub struct Tools {
     /// Scour's GNOME Shell extension is where the shell looks for one: what
     /// lets the key bring an open window forward.
     pub shell_extension: bool,
+    pub os: Os,
+    /// The file a Mac's key is kept in. See [`crate::kept`].
+    pub kept: Option<PathBuf>,
 }
 
 impl Tools {
@@ -56,12 +111,20 @@ impl Tools {
             sandboxed,
             exe: std::env::current_exe().ok(),
             shell_extension: !sandboxed && shell_extension_installed(),
+            os: Os::this(),
+            kept: std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join("Library/Application Support/Scour/hotkey")),
         }
     }
 
     /// KDE when the session says so and its tools are there; GNOME when its
     /// schema answers; the sandbox before either.
     pub fn desktop(&self) -> Desktop {
+        match self.os {
+            Os::Windows => return Desktop::Windows,
+            Os::Mac => return Desktop::Mac,
+            Os::Unix => {}
+        }
         if self.sandboxed {
             return Desktop::Flatpak;
         }
@@ -84,10 +147,9 @@ impl Tools {
         if self.sandboxed {
             return format!("flatpak run {FLATPAK_APP}");
         }
-        let name = if cfg!(windows) {
-            "scour-gui.exe"
-        } else {
-            "scour-open"
+        let name = match self.os {
+            Os::Windows => "scour-gui.exe",
+            _ => "scour-open",
         };
         self.exe
             .as_deref()

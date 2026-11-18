@@ -238,7 +238,9 @@ impl Typos {
 /// What to do about that key.
 #[derive(Debug, Subcommand)]
 enum HotkeyAction {
-    /// Bind this combination: `super+f`, `ctrl+alt+s`, `super+space`.
+    /// Bind this combination: `super+f`, `ctrl+alt+s`, `super+space`. Windows
+    /// takes two of Ctrl, Alt and Shift (`ctrl+alt+f`), never the Windows
+    /// key; on a Mac `super` is Command (`cmd+shift+f`).
     Set { key: String },
     /// Take the binding off again.
     Clear,

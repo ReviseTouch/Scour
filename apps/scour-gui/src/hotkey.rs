@@ -100,7 +100,13 @@ pub fn words(w: &MainWindow, cat: &Catalogue) {
     w.set_key_title(t(cat, "Keyboard shortcut"));
     w.set_key_copy(t(cat, "Copy"));
     w.set_key_remove(t(cat, "Remove"));
-    w.set_key_hint(t(cat, "for example super+f or ctrl+alt+s"));
+    let [first, second] = scour_hotkey::Os::this().examples();
+    w.set_key_hint(
+        cat.get("for example {a} or {b}")
+            .replace("{a}", first)
+            .replace("{b}", second)
+            .into(),
+    );
     // On Windows the first-run line asks the other thing worth asking once:
     // nothing here can bind a key there, and a service that starts with the
     // system is what keeps the index current between windows.
@@ -382,6 +388,8 @@ fn why(cat: &Catalogue, e: &Error) -> String {
         Error::Sandboxed => cat
             .get("a sandboxed program cannot bind a key")
             .into_owned(),
+        // A sentence of the catalogue's: what this system's keys can be.
+        Error::Refused(why) => cat.get(why).into_owned(),
         other => other.to_string(),
     }
 }
@@ -475,7 +483,7 @@ mod tests {
     /// Every msgid this row can show, in every language that is translated.
     #[test]
     fn the_keyboard_row_has_a_word_in_every_translated_language() {
-        const SAID: [&str; 15] = [
+        const SAID: [&str; 17] = [
             "Keyboard shortcut",
             "not bound",
             "Bind",
@@ -490,7 +498,9 @@ mod tests {
             "no key given",
             "a key has to follow the modifiers",
             "modifiers alone are not a key",
-            "for example super+f or ctrl+alt+s",
+            "for example {a} or {b}",
+            scour_hotkey::WINDOWS_REFUSED,
+            scour_hotkey::MAC_REFUSED,
         ];
         let translated: Vec<Catalogue> = scour_i18n::LANGUAGES
             .iter()

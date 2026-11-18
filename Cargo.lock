@@ -5142,6 +5142,7 @@ name = "scour-hotkey"
 version = "0.2.0-alpha.12"
 dependencies = [
  "tempfile",
+ "windows",
 ]
 
 [[package]]
@@ -5411,6 +5412,7 @@ dependencies = [
  "scour-core",
  "scour-dupes",
  "scour-engine",
+ "scour-hotkey",
  "scour-icon",
  "scour-index-native",
  "scour-ipc",
