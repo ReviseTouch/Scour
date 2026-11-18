@@ -1,13 +1,10 @@
 //! Finding a row by its path, the only thing that identifies it: the top half
 //! of a path digest paired with a row number, sorted. Not an inode — a careful
-//! save renames a temporary over the target, so the path survives and the inode
-//! does not. A probe returns *candidates*, which the caller confirms against
-//! the directory number and name the row carries.
+//! save renames a temporary over the target. A probe returns *candidates*,
+//! which the caller confirms against the directory and name the row carries.
 //!
-//! The table is in buckets by the digest's leading bits, about sixteen entries
-//! each, so an entry stores only the bits left and a row number as wide as the
-//! segment needs: 37 bits for five million rows where it was 64, and a probe
-//! reads one bucket rather than bisecting the whole table.
+//! In buckets by the digest's leading bits, about sixteen entries each: an
+//! entry is the bits left and a packed row, 37 bits for five million rows.
 
 use scour_core::SourceId;
 
@@ -208,33 +205,34 @@ impl<'a> IdMap<'a> {
 
     /// Every `(row, j)` where the table's entry and the `j`-th of `n` keys are
     /// the same half-digest; the keys ascending, as [`IdMap::key_of`] sorts.
-    /// One pass over both: what a walk of two million paths asks of a segment.
+    /// A merge inside each bucket the keys name, and no read of any other: a
+    /// walk of two million paths costs a small segment what its keys cost.
     pub fn join(&self, n: usize, key: impl Fn(usize) -> u32, mut found: impl FnMut(u32, usize)) {
-        let mut entries = self.iter().peekable();
+        let low = low_mask(32 - self.bits);
         let mut j = 0usize;
         while j < n {
-            let Some(&(h, _)) = entries.peek() else {
-                return;
-            };
-            match h.cmp(&key(j)) {
-                std::cmp::Ordering::Less => {
-                    entries.next();
+            let bucket = bucket_of(key(j), self.bits);
+            let end = self.start(bucket as usize + 1);
+            let mut i = self.start(bucket as usize);
+            let entry = |i: usize| self.entry(i).filter(|_| i < end);
+            let mut at = entry(i);
+            while j < n && bucket_of(key(j), self.bits) == bucket {
+                let h = key(j);
+                // A run of equal hashes each side: both are tiny, so the cross
+                // product is cheap.
+                let run = (j..n).take_while(|&w| key(w) == h).count();
+                while at.is_some_and(|(l, _)| l < h & low) {
+                    i += 1;
+                    at = entry(i);
                 }
-                std::cmp::Ordering::Greater => j += 1,
-                std::cmp::Ordering::Equal => {
-                    // A run of equal hashes each side: both are tiny, so the
-                    // cross product is cheap.
-                    let mut j2 = j;
-                    while j2 < n && key(j2) == h {
-                        j2 += 1;
+                while let Some((_, row)) = at.filter(|&(l, _)| l == h & low) {
+                    for w in j..j + run {
+                        found(row, w);
                     }
-                    while let Some((_, row)) = entries.next_if(|&(h2, _)| h2 == h) {
-                        for w in j..j2 {
-                            found(row, w);
-                        }
-                    }
-                    j = j2;
+                    i += 1;
+                    at = entry(i);
                 }
+                j += run;
             }
         }
     }
@@ -343,17 +341,27 @@ mod tests {
             keys.extend([0, 7, u32::MAX]);
             keys.extend(pairs.first().map(|p| p.0));
             keys.sort_unstable();
-            let mut got = Vec::new();
-            map.join(keys.len(), |j| keys[j], |row, j| got.push((row, j)));
-            let mut want = Vec::new();
-            for &(h, row) in &pairs {
-                for (j, &k) in keys.iter().enumerate() {
-                    if k == h {
-                        want.push((row, j));
+            // And against many times as many keys, where the table is walked.
+            let mut many: Vec<u32> = (0..n as u32 * 5 + 9)
+                .map(|i| i.wrapping_mul(0x9e37_79b9))
+                .collect();
+            many.extend(keys.iter().copied());
+            many.sort_unstable();
+            for keys in [keys, many] {
+                let mut got = Vec::new();
+                map.join(keys.len(), |j| keys[j], |row, j| got.push((row, j)));
+                got.sort_unstable();
+                let mut want = Vec::new();
+                for &(h, row) in &pairs {
+                    for (j, &k) in keys.iter().enumerate() {
+                        if k == h {
+                            want.push((row, j));
+                        }
                     }
                 }
+                want.sort_unstable();
+                assert_eq!(got, want, "{n} entries, {} keys", keys.len());
             }
-            assert_eq!(got, want, "{n} entries");
         }
     }
 

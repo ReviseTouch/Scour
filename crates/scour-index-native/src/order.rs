@@ -46,6 +46,7 @@ impl<'a> PathOrder<'a> {
 
     /// The row whose path is `i`-th in ascending order. A row number this
     /// segment does not hold answers `None` rather than reaching a column read.
+    #[inline]
     pub fn at(&self, i: usize) -> Option<u32> {
         // The last byte's spare bits are not a position.
         if i >= self.rows {

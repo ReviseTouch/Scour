@@ -50,6 +50,7 @@ impl<'a> NameOrder<'a> {
     }
 
     /// The row whose folded name is `i`-th in ascending order.
+    #[inline]
     pub fn at(&self, i: usize) -> Option<u32> {
         // The last byte's spare bits are not a position.
         if i >= self.rows {

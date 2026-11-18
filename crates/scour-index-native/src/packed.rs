@@ -39,10 +39,11 @@ pub(crate) fn pack(values: impl IntoIterator<Item = u64>, width: u32, out: &mut 
 }
 
 /// The `i`-th value, or nothing where the bytes end before it does.
-#[inline]
+#[inline(always)]
 pub(crate) fn get(bytes: &[u8], width: u32, i: usize) -> Option<u64> {
-    let bit = i.checked_mul(width as usize)?;
-    let (at, shift) = (bit / 8, bit % 8);
+    // Sixty-four bits of bit offset, whatever a pointer is: no overflow to ask.
+    let bit = i as u64 * u64::from(width);
+    let (at, shift) = ((bit / 8) as usize, (bit % 8) as u32);
     let mask = (1u64 << width) - 1;
     if let Some(word) = bytes.get(at..at + 8) {
         let word = u64::from_le_bytes([
@@ -52,7 +53,7 @@ pub(crate) fn get(bytes: &[u8], width: u32, i: usize) -> Option<u64> {
     }
     // The last few values: the file ends with the value, not with padding.
     let tail = bytes.get(at..)?;
-    if tail.len() * 8 < shift + width as usize {
+    if tail.len() * 8 < (shift + width) as usize {
         return None;
     }
     let mut word = [0u8; 8];

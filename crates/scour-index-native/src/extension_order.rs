@@ -2,12 +2,9 @@
 //!
 //! Eligibility comes from the spelling — one to twelve bytes after the last dot,
 //! before folding — while the key comes from the folded arena and may be longer.
-//! Grouped as [`crate::NameOrder`]; within a group: newest first, then path.
-//!
-//! Newest first is row order, and a few extensions hold most rows, so inside a
-//! group the row numbers climb in small steps. Stored thirty-two positions at
-//! a time as a first row and the steps after it: 3.7 MB for five million rows
-//! where a packed row number each is 15.2.
+//! Grouped as [`crate::NameOrder`]; within a group newest first, which is row
+//! order, so the rows climb in small steps and are stored as those: 4.4 MB for
+//! five million rows where a packed row number each is 15.2.
 
 use crate::packed;
 
