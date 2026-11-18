@@ -1605,6 +1605,9 @@
   .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
   .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
   .set-hint { margin-top: 12px; }
+  .set-pad { padding: 12px 14px; }
+  /* The help was a dialog of its own: here the section is its title. */
+  #set-keys .help-head { display: none; }
   ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
   ul.folders li { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
   ul.folders .fw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1747,15 +1750,14 @@
          data-t-aria="how to run it">
       <h2 data-t="how to run it"></h2>
       <div id="faces-body"></div>
-      <!-- The desktop's own key, which is the other way to run it. -->
-      <h3 data-t="Keyboard shortcut"></h3>
+      <!-- The desktop's own key: shown in the settings' Keyboard section. -->
       <div id="hotkey-body"></div>
     </div>
 
     <div id="rules-panel" class="sheet" hidden role="dialog" aria-modal="false"
          data-t-aria="what is skipped">
       <h2 data-t="What is skipped"></h2>
-      <p class="why" data-t="These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."></p>
+      <p class="why" data-t="These decide what never reaches the index."></p>
       <div id="rules-body"></div>
       <p class="why" data-t="Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."></p>
       <p class="why" data-t="Switching a rule off does not delete it — that is how the two groups nobody can edit are still yours to turn off."></p>
@@ -1776,10 +1778,9 @@
         <nav class="set-nav">
           <h2 data-t="Settings"></h2>
         <button type="button" data-sec="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-t="General"></span></button>
-        <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List and look"></span></button>
         <button type="button" data-sec="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg><span data-t="Searching"></span></button>
-        <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks scanned"></span><span class="badge" id="set-badge" hidden>1</span></button>
-        <button type="button" data-sec="folders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 18.5V7a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9z"/></svg><span data-t="Folders scanned"></span></button>
+        <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List"></span></button>
+        <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks and folders"></span><span class="badge" id="set-badge" hidden>1</span></button>
         <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
         <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
         <button type="button" data-sec="index"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg><span data-t="Index"></span></button>
@@ -1805,7 +1806,6 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Refresh the list every"></div><div class="desc" data-t="While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."></div></div><div class="seg" id="seg-refresh"></div></div>
-              <div class="srow"><div class="t"><div class="lab" data-t="Search tabs"></div><div class="desc" data-t="Several searches side by side. Alt+T opens one."></div></div><div class="seg" id="seg-tabs"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
             </div>
@@ -1814,6 +1814,7 @@
             <div class="set-card">
               <div class="srow"><div class="t"><div class="lab" data-t="Ignore accents"></div><div class="desc" data-t="cafe also finds café. A word typed with an accent still finds only that spelling."></div></div><div class="seg" id="seg-accents"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Typing mistakes"></div><div class="desc" data-t="A letter wrong, missing, extra or swapped, in a word of five letters or more."></div></div><div class="seg" id="seg-typos"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Search tabs"></div><div class="desc" data-t="Several searches side by side. Alt+T opens one."></div></div><div class="seg" id="seg-tabs"></div></div>
             </div>
             <p class="set-note set-hint" data-t="letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes."></p>
           </section>
@@ -1822,10 +1823,10 @@
             <div class="shead" data-t="Disks that come later"></div>
             <div class="set-card">
               <div class="srow"><div class="t"><div class="lab" data-t="A disk plugged in"></div><div class="desc" data-t="A stick, an external disk, a card."></div></div><div class="seg" id="seg-removable"></div></div>
-              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Walked again as often as the folders page says."></div></div><div class="seg" id="seg-network"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Walked again as often as the folders below."></div></div><div class="seg" id="seg-network"></div></div>
             </div>
-          </section>
-          <section data-sec="folders" hidden>
+            <div class="shead" data-t="Folders added"></div>
+            <p class="set-note" data-t="One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing."></p>
             <ul class="folders" id="folders"></ul>
             <form class="folder" id="folder-form">
               <input type="text" spellcheck="false" autocomplete="off" data-t-ph="/a/folder or ~/a/folder">
@@ -1837,7 +1838,12 @@
             </div>
           </section>
           <section data-sec="rules" hidden><div id="set-rules"></div></section>
-          <section data-sec="keys" hidden><div id="set-keys"></div></section>
+          <section data-sec="keys" hidden>
+            <div class="shead" data-t="Keyboard shortcut"></div>
+            <div class="set-card set-pad" id="set-hotkey"></div>
+            <div class="shead" data-t="Keys and the query"></div>
+            <div id="set-keys"></div>
+          </section>
           <section data-sec="index" hidden>
             <div class="set-card">
               <div class="srow"><div class="t"><div class="lab" data-t="Kept in"></div><div class="desc" id="index-where"></div></div><button type="button" class="set-push" id="index-open" data-t="Open the folder"></button></div>
@@ -2405,6 +2411,8 @@
     { name: "dc",      alias: ["created"],                 takes: "time",  about: "when it was created",                            eg: "dc:2026-01-31" },
     { name: "da",      alias: ["accessed"],                takes: "time",  about: "when it was last read",                          eg: "da:>2026-01-01" },
     { name: "content", alias: ["text", "icerik", "içerik"],takes: "text",  about: "the document's contents contain this (if contents are indexed)", eg: "content:invoice" },
+    { name: "fuzzy",   alias: ["typo", "benzer"],          takes: "text",  about: "the name contains this, give or take a typing mistake", eg: "fuzzy:raporr" },
+    { name: "letters", alias: ["harfler"],                 takes: "text",  about: "the name has these letters in this order, with anything between", eg: "letters:scrgui" },
   ];
   /* `Kind::OFFERED`, which is what `/api/kinds` sends. `parse` and `without`
    * both go through `accepts`, so a missing kind leaves the whole rail at
@@ -6898,14 +6906,14 @@
   document.getElementById("set-disks").appendChild(disksPanel);
   document.getElementById("set-rules").appendChild(rulesPanel);
   document.getElementById("set-keys").appendChild(helpBox);
+  document.getElementById("set-hotkey").appendChild(document.getElementById("hotkey-body"));
   const SECTIONS = {
     general: ["General", "The same for every face: the window, the browser and the terminal read these."],
-    view: ["List and look", "How the list is drawn, and what it shows."],
+    view: ["List", "How the list is drawn, and what it shows."],
     search: ["Searching", "How the words you type are read. The same in every face."],
-    disks: ["Disks scanned", "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."],
-    folders: ["Folders scanned", "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched."],
+    disks: ["Disks and folders", "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."],
     rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
-    keys: ["Keyboard", "What the keys do, and what the query understands."],
+    keys: ["Keyboard", "The key that opens Scour, what the keys do, and what the query understands."],
     index: ["Index", "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong."],
     about: ["About", "What is running, and what it holds."],
   };
@@ -7043,6 +7051,9 @@
   });
 
   function showSection(sec) {
+    /* A section that moved is still asked for by its old name. */
+    if (sec === "folders") sec = "disks";
+    if (!SECTIONS[sec]) sec = "general";
     SECTION = sec;
     for (const b of settingsBox.querySelectorAll(".set-nav button[data-sec]")) {
       b.classList.toggle("on", b.dataset.sec === sec);
@@ -7053,9 +7064,9 @@
     facesPanel.hidden = sec !== "general";
     rulesPanel.hidden = sec !== "rules";
     disksPanel.hidden = sec !== "disks";
-    if (sec === "folders") loadDisks();
     helpBox.hidden = sec !== "keys";
-    if (sec === "general") { ARMED = ""; drawFaces(); loadHotkey(); }
+    if (sec === "general") { ARMED = ""; drawFaces(); }
+    if (sec === "keys") loadHotkey();
     if (sec === "rules") loadRules();
     if (sec === "disks") { drawDisks(); loadDisks(); }
     if (sec === "index") { INDEX_SURE = false; loadIndex(); }

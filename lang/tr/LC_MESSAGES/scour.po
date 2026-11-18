@@ -940,8 +940,8 @@ msgstr "dosyaları indeksin dışında tutan kurallar"
 msgid "What is skipped"
 msgstr "Neler atlanıyor"
 
-msgid "These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."
-msgstr "Bunlar indekse hiç ulaşmayanı belirler. Bu makinedeki iki kökte 4.786.967 dosya var, indekste 2.240.000; farkın neredeyse tamamı burada."
+msgid "These decide what never reaches the index."
+msgstr "Bunlar indekse hiç ulaşmayanı belirler."
 
 msgid "Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."
 msgstr "Bir değişikliği kaydetmek taramayı başlatır; indeks kendiliğinden yetişir. Tarama sürerken arama çalışmayı sürdürür."
@@ -1475,8 +1475,14 @@ msgstr "  dc: da:         oluşturulma, açılma"
 msgid "  under:/home/a   inside that folder"
 msgstr "  under:/home/a   o klasörün içinde"
 
-msgid "  is:dir          folders only"
-msgstr "  is:dir          yalnız klasörler"
+msgid "  folder:  file:  folders only, files only"
+msgstr "  folder:  file:  yalnız klasörler, yalnız dosyalar"
+
+msgid "  fuzzy:raporr    give or take a typing mistake"
+msgstr "  fuzzy:raporr    bir yazım hatasına kadar"
+
+msgid "  letters:scrgui  those letters in that order: scour-gui"
+msgstr "  letters:scrgui  harfler o sırayla: scour-gui"
 
 msgid "  Enter           open        Ctrl+Enter   open its folder"
 msgstr "  Enter           aç          Ctrl+Enter   klasörünü aç"
@@ -2014,8 +2020,8 @@ msgstr "Hep tara"
 msgid "Network disks"
 msgstr "Ağ diskleri"
 
-msgid "SMB, NFS, SSHFS. Walked again as often as the folders page says."
-msgstr "SMB, NFS, SSHFS. Taranan klasörler sayfasındaki aralıkla yeniden taranır."
+msgid "SMB, NFS, SSHFS. Walked again as often as the folders below."
+msgstr "SMB, NFS, SSHFS. Aşağıdaki klasörlerle aynı aralıkla yeniden taranır."
 
 msgid "Folders added"
 msgstr "Eklenen klasörler"
@@ -2351,3 +2357,23 @@ msgstr "Benzer"
 
 msgid "open · or show the similar files a search offers"
 msgstr "aç · ya da aramanın önerdiği benzer dosyaları göster"
+
+# --- the settings, regrouped ---
+
+msgid "List"
+msgstr "Liste"
+
+msgid "Disks and folders"
+msgstr "Diskler ve klasörler"
+
+msgid "Keys and the query"
+msgstr "Tuşlar ve sorgu"
+
+msgid "The key that opens Scour, what the keys do, and what the query understands."
+msgstr "Scour'u açan tuş, tuşların ne yaptığı ve sorgunun neyi anladığı."
+
+msgid "the name contains this, give or take a typing mistake"
+msgstr "ad bunu içerir, bir yazım hatasına kadar"
+
+msgid "the name has these letters in this order, with anything between"
+msgstr "adda bu harfler bu sırayla geçer, aralarında ne olursa olsun"

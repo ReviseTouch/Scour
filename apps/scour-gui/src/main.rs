@@ -252,23 +252,6 @@ impl State {
     }
 }
 
-/// A catalogue string without the page's markup, which this window cannot style.
-fn plain(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut inside = false;
-    for c in text.chars() {
-        match c {
-            '<' => inside = true,
-            '>' => inside = false,
-            _ if !inside => out.push(c),
-            _ => {}
-        }
-    }
-    out.replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
-}
-
 /// How many of a group's paths are listed before the rest are counted.
 const SHOWN_PATHS: usize = 6;
 
@@ -1279,8 +1262,10 @@ fn main() -> Result<()> {
                 other => {
                     let section = match other {
                         "faces" | "language" | "general" => "general",
+                        "search" => "search",
                         "rules" => "rules",
-                        "disks" => "disks",
+                        // The folders are on the disks' page.
+                        "disks" | "folders" => "disks",
                         "help" | "keys" => "keys",
                         "view" => "view",
                         "index" => "index",
@@ -1400,15 +1385,20 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         window.on_settings_picked(move |section| {
             let Some(w) = weak.upgrade() else { return };
+            // A section that moved is still asked for by its old name.
+            let section: slint::SharedString = match section.as_str() {
+                "folders" => "disks".into(),
+                _ => section,
+            };
             w.set_settings_section(section.clone());
             match section.as_str() {
                 "rules" => link.send(Ask::Rules),
-                "disks" | "folders" => link.send(Ask::Volumes),
+                "disks" => link.send(Ask::Volumes),
                 "about" => link.send(Ask::Status),
                 "index" => link.send(Ask::IndexFacts),
                 // The desktop may have been changed in its own settings since
                 // this window started; the row must not be stale.
-                "general" => hotkey::work(hotkey::Deed::Look),
+                "keys" => hotkey::work(hotkey::Deed::Look),
                 _ => {}
             }
         });
@@ -5389,23 +5379,22 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     ));
     w.set_section_labels(list(&[
         "General",
-        "List and look",
         "Searching",
-        "Disks scanned",
-        "Folders scanned",
+        "List",
+        "Disks and folders",
         "Skipped",
         "Keyboard",
         "Index",
         "About",
     ]));
+    w.set_set_help(t(cat, "Keys and the query"));
     w.set_section_leads(list(&[
         "The same for every face: the window, the browser and the terminal read these.",
-        "How the list is drawn, and what it shows.",
         "How the words you type are read. The same in every face.",
+        "How the list is drawn, and what it shows.",
         "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan.",
-        "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched.",
         "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
-        "What the keys do, and what the query understands.",
+        "The key that opens Scour, what the keys do, and what the query understands.",
         "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong.",
         "What is running, and what it holds.",
     ]));
@@ -5514,7 +5503,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_network(t(cat, "Network disks"));
     w.set_set_network_note(t(
         cat,
-        "SMB, NFS, SSHFS. Walked again as often as the folders page says.",
+        "SMB, NFS, SSHFS. Walked again as often as the folders below.",
     ));
     w.set_network_labels(list(&["Ask", "Never"]));
     w.set_set_folders(t(cat, "Folders added"));
@@ -5646,8 +5635,8 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     window.set_rules_hint(t(cat, "a directory name, or a path"));
     window.set_rules_add(t(cat, "add"));
     window.set_rules_off_word(t(cat, "off"));
-    // The page's own legend, stripped of the markup it carries. The terms, then
-    // the keys: both are what clicking cannot teach.
+    // The terms, then the keys: both are what clicking cannot teach. Text as
+    // it is — a `<` in `size:` is a comparison, not markup.
     window.set_help_body(
         [
             "A word matches the name. Several words mean all of them.",
@@ -5663,7 +5652,9 @@ fn words(window: &MainWindow, cat: &Catalogue) {
             "  dm:7d           changed in the last 7 days — h, w, m, y too",
             "  dc: da:         created, opened",
             "  under:/home/a   inside that folder",
-            "  is:dir          folders only",
+            "  folder:  file:  folders only, files only",
+            "  fuzzy:raporr    give or take a typing mistake",
+            "  letters:scrgui  those letters in that order: scour-gui",
             "",
             "Keys",
             "",
@@ -5677,7 +5668,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
             "The colour down the left of each row is how long ago it changed: warm for minutes, cold for years.",
         ]
         .iter()
-        .map(|line| if line.is_empty() { String::new() } else { plain(&t(cat, line)) })
+        .map(|line| if line.is_empty() { String::new() } else { t(cat, line).to_string() })
         .collect::<Vec<_>>()
         .join("\n")
         .into(),

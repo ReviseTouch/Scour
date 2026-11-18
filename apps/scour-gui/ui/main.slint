@@ -1632,7 +1632,18 @@ export component MainWindow inherits Window {
     in-out property <string> settings-section: "general";
     in property <string> settings-title;
     in property <string> settings-foot;
-    in property <[string]> section-ids: ["general", "view", "search", "disks", "folders", "rules", "keys", "index", "about"];
+    in property <[string]> section-ids: ["general", "search", "view", "disks", "rules", "keys", "index", "about"];
+    // Where the section in sight stands in that list: its title and its lead.
+    property <int> section-at: root.settings-section == "search" ? 1
+        : root.settings-section == "view" ? 2
+        : root.settings-section == "disks" ? 3
+        : root.settings-section == "rules" ? 4
+        : root.settings-section == "keys" ? 5
+        : root.settings-section == "index" ? 6
+        : root.settings-section == "about" ? 7 : 0;
+    // The heads inside a section: the folders under the disks, the keys'
+    // table under the key that opens Scour.
+    in property <string> set-help;
     // How words are read, which the service keeps: `Settings::accents_exact`
     // and `Settings::typos`.
     in property <bool> accents-ignored: true;
@@ -4905,15 +4916,15 @@ export component MainWindow inherits Window {
                         }
                         NavRow {
                             label: root.section-labels[1];
-                            icon: @image-url("icons/tools/detail.svg");
-                            on: root.settings-section == "view";
-                            clicked => { root.settings-picked("view"); }
-                        }
-                        NavRow {
-                            label: root.section-labels[2];
                             icon: @image-url("icons/tools/search.svg");
                             on: root.settings-section == "search";
                             clicked => { root.settings-picked("search"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[2];
+                            icon: @image-url("icons/tools/detail.svg");
+                            on: root.settings-section == "view";
+                            clicked => { root.settings-picked("view"); }
                         }
                         NavRow {
                             label: root.section-labels[3];
@@ -4924,30 +4935,24 @@ export component MainWindow inherits Window {
                         }
                         NavRow {
                             label: root.section-labels[4];
-                            icon: @image-url("icons/tools/folder.svg");
-                            on: root.settings-section == "folders";
-                            clicked => { root.settings-picked("folders"); }
-                        }
-                        NavRow {
-                            label: root.section-labels[5];
                             icon: @image-url("icons/tools/rules.svg");
                             on: root.settings-section == "rules";
                             clicked => { root.settings-picked("rules"); }
                         }
                         NavRow {
-                            label: root.section-labels[6];
+                            label: root.section-labels[5];
                             icon: @image-url("icons/tools/settings-keys.svg");
                             on: root.settings-section == "keys";
                             clicked => { root.settings-picked("keys"); }
                         }
                         NavRow {
-                            label: root.section-labels[7];
+                            label: root.section-labels[6];
                             icon: @image-url("icons/tools/index.svg");
                             on: root.settings-section == "index";
                             clicked => { root.settings-picked("index"); }
                         }
                         NavRow {
-                            label: root.section-labels[8];
+                            label: root.section-labels[7];
                             icon: @image-url("icons/tools/settings-about.svg");
                             on: root.settings-section == "about";
                             clicked => { root.settings-picked("about"); }
@@ -4976,29 +4981,14 @@ export component MainWindow inherits Window {
                     spacing: 4px;
 
                     Text {
-                        text: root.section-labels[root.section-ids.length > 0 ? (
-                            root.settings-section == "general" ? 0
-                            : root.settings-section == "view" ? 1
-                            : root.settings-section == "search" ? 2
-                            : root.settings-section == "disks" ? 3
-                            : root.settings-section == "folders" ? 4
-                            : root.settings-section == "rules" ? 5
-                            : root.settings-section == "keys" ? 6
-                            : root.settings-section == "index" ? 7 : 8) : 0];
+                        text: root.section-labels[root.section-at];
                         color: Theme.ink;
                         font-size: 18px;
                         font-weight: 600;
                     }
                     Text {
                         text: root.section-leads[
-                            root.settings-section == "general" ? 0
-                            : root.settings-section == "view" ? 1
-                            : root.settings-section == "search" ? 2
-                            : root.settings-section == "disks" ? 3
-                            : root.settings-section == "folders" ? 4
-                            : root.settings-section == "rules" ? 5
-                            : root.settings-section == "keys" ? 6
-                            : root.settings-section == "index" ? 7 : 8];
+                            root.section-at];
                         color: Theme.ink-2;
                         font-size: 12.5px;
                         wrap: word-wrap;
@@ -5077,6 +5067,17 @@ export component MainWindow inherits Window {
                                             picked(v) => { root.theme-picked(v); }
                                         }
                                     }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-zoom;
+                                        note: root.set-zoom-note;
+                                        Choice {
+                                            labels: root.zoom-labels;
+                                            values: ["0.9", "1", "1.1", "1.25", "1.5"];
+                                            value: root.zoom-choice;
+                                            picked(v) => { root.zoom-picked(v); }
+                                        }
+                                    }
                                 }
                                 SectionHead { text: root.set-switch; }
             VerticalLayout {
@@ -5108,152 +5109,6 @@ export component MainWindow inherits Window {
                     confirmed => { root.face-picked("browser"); }
                 }
 
-                Rectangle { height: 12px; }
-
-                // Not a face, but the same question: how Scour gets opened.
-                // The browser page keeps its own row here too.
-                Text {
-                    text: root.key-title;
-                    color: Theme.ink;
-                    font-size: 11px;
-                    font-weight: 650;
-                }
-
-                if root.key-bound: Text {
-                    text: root.key-state;
-                    color: Theme.q-key;
-                    font-family: Fonts.mono;
-                    font-size: 11.5px;
-                }
-                if !root.key-bound: Text {
-                    text: root.key-state;
-                    color: Theme.ink-3;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-
-                // Nothing here can write the binding, so the command is handed
-                // over instead: one line, selectable, and a button that copies.
-                if root.key-command != "": HorizontalLayout {
-                    spacing: 6px;
-                    height: 26px;
-
-                    Rectangle {
-                        border-width: Theme.hair;
-                        border-radius: 3px;
-                        border-color: Theme.line;
-                        background: Theme.panel;
-                        clip: true;
-
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-
-                            TextInput {
-                                text: root.key-command;
-                                read-only: true;
-                                color: Theme.ink-2;
-                                font-family: Fonts.mono;
-                                font-size: 11.5px;
-                                single-line: true;
-                                vertical-alignment: center;
-                                selection-background-color: Theme.selection;
-                                selection-foreground-color: Theme.ink;
-                            }
-                        }
-                    }
-
-                    Push {
-                        label: root.key-copy;
-                        clicked => { root.key-command-copied(); }
-                    }
-                }
-
-                if root.key-can-bind: HorizontalLayout {
-                    spacing: 6px;
-                    height: 26px;
-
-                    Rectangle {
-                        border-width: Theme.hair;
-                        border-radius: 3px;
-                        border-color: Theme.line;
-                        background: Theme.panel;
-                        // A combination is short, but the placeholder is a
-                        // sentence and a layout does not clip its children.
-                        clip: true;
-
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-
-                            combo := Field {
-                                text <=> root.key-typed;
-                                color: Theme.ink;
-                                font-family: Fonts.mono;
-                                font-size: 11.5px;
-                                single-line: true;
-                                vertical-alignment: center;
-                                selection-background-color: Theme.selection;
-                                selection-foreground-color: Theme.ink;
-                                // Capped like the rule field, and for the same
-                                // reason: the software renderer places glyphs
-                                // at `i16`. A combination is a dozen characters.
-                                edited => {
-                                    if (self.text.character-count > 64) {
-                                        self.text = root.key-kept;
-                                    } else {
-                                        root.key-kept = self.text;
-                                        root.key-typed-changed(self.text);
-                                    }
-                                }
-                                accepted => { root.key-bind-pressed(); }
-                            }
-                        }
-
-                        if combo.text == "": Text {
-                            text: root.key-hint;
-                            color: Theme.ink-3;
-                            font-family: Fonts.mono;
-                            font-size: 11.5px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            x: 8px;
-                            width: parent.width - 16px;
-                            height: parent.height;
-                        }
-                    }
-
-                    Push {
-                        label: root.key-bind;
-                        clicked => { root.key-bind-pressed(); }
-                    }
-
-                    if root.key-bound: Push {
-                        label: root.key-remove;
-                        clicked => { root.key-remove-pressed(); }
-                    }
-                }
-
-                if root.key-error != "": Text {
-                    text: root.key-error;
-                    color: Theme.q-not;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-
-                if root.key-preview != "": Text {
-                    text: "→ " + root.key-preview;
-                    color: Theme.ink-3;
-                    font-family: Fonts.mono;
-                    font-size: 11.5px;
-                }
-
-                if root.key-later != "": Text {
-                    text: root.key-later;
-                    color: Theme.ink-3;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
             }
         
                             }
@@ -5287,21 +5142,15 @@ export component MainWindow inherits Window {
                                     SettingRow {
                                         label: root.set-preview;
                                         note: root.set-preview-note;
-                                        Push {
-                                            label: root.preview-on ? "✓" : "—";
-                                            asking: root.preview-on;
-                                            clicked => { root.peek-toggled(); }
-                                        }
-                                    }
-                                    Rectangle { height: Theme.hair; background: Theme.line; }
-                                    SettingRow {
-                                        label: root.set-zoom;
-                                        note: root.set-zoom-note;
                                         Choice {
-                                            labels: root.zoom-labels;
-                                            values: ["0.9", "1", "1.1", "1.25", "1.5"];
-                                            value: root.zoom-choice;
-                                            picked(v) => { root.zoom-picked(v); }
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.preview-on ? "on" : "off";
+                                            picked(v) => {
+                                                if ((v == "on") != root.preview-on) {
+                                                    root.peek-toggled();
+                                                }
+                                            }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }
@@ -5313,17 +5162,6 @@ export component MainWindow inherits Window {
                                             values: ["1", "2", "5", "15", "60"];
                                             value: root.refresh-choice;
                                             picked(v) => { root.refresh-picked(v); }
-                                        }
-                                    }
-                                    Rectangle { height: Theme.hair; background: Theme.line; }
-                                    SettingRow {
-                                        label: root.set-tabs;
-                                        note: root.set-tabs-note;
-                                        Choice {
-                                            labels: root.grid-labels;
-                                            values: ["on", "off"];
-                                            value: root.tabs-on ? "on" : "off";
-                                            picked(v) => { root.tabs-picked(v == "on"); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }
@@ -5373,6 +5211,17 @@ export component MainWindow inherits Window {
                                             values: ["off", "", "always"];
                                             value: root.typos-choice;
                                             picked(v) => { root.typos-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-tabs;
+                                        note: root.set-tabs-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.tabs-on ? "on" : "off";
+                                            picked(v) => { root.tabs-picked(v == "on"); }
                                         }
                                     }
                                 }
@@ -5461,10 +5310,13 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                            }
-
-                            if root.settings-section == "folders": VerticalLayout {
-                                spacing: 6px;
+                                SectionHead { text: root.set-folders; }
+                                Text {
+                                    text: root.set-folders-note;
+                                    color: Theme.ink-3;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
                                 for f in root.folder-rows: Card {
                                     HorizontalLayout {
                                         padding: 10px;
@@ -5740,6 +5592,150 @@ export component MainWindow inherits Window {
                             }
 
                             if root.settings-section == "keys": VerticalLayout {
+                                spacing: 6px;
+                                SectionHead { text: root.key-title; }
+                                Card {
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 6px;
+                if root.key-bound: Text {
+                    text: root.key-state;
+                    color: Theme.q-key;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                }
+                if !root.key-bound: Text {
+                    text: root.key-state;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                // Nothing here can write the binding, so the command is handed
+                // over instead: one line, selectable, and a button that copies.
+                if root.key-command != "": HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+
+                    Rectangle {
+                        border-width: Theme.hair;
+                        border-radius: 3px;
+                        border-color: Theme.line;
+                        background: Theme.panel;
+                        clip: true;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+
+                            TextInput {
+                                text: root.key-command;
+                                read-only: true;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                            }
+                        }
+                    }
+
+                    Push {
+                        label: root.key-copy;
+                        clicked => { root.key-command-copied(); }
+                    }
+                }
+
+                if root.key-can-bind: HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+
+                    Rectangle {
+                        border-width: Theme.hair;
+                        border-radius: 3px;
+                        border-color: Theme.line;
+                        background: Theme.panel;
+                        // A combination is short, but the placeholder is a
+                        // sentence and a layout does not clip its children.
+                        clip: true;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+
+                            combo := Field {
+                                text <=> root.key-typed;
+                                color: Theme.ink;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                                // Capped like the rule field, and for the same
+                                // reason: the software renderer places glyphs
+                                // at `i16`. A combination is a dozen characters.
+                                edited => {
+                                    if (self.text.character-count > 64) {
+                                        self.text = root.key-kept;
+                                    } else {
+                                        root.key-kept = self.text;
+                                        root.key-typed-changed(self.text);
+                                    }
+                                }
+                                accepted => { root.key-bind-pressed(); }
+                            }
+                        }
+
+                        if combo.text == "": Text {
+                            text: root.key-hint;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                        }
+                    }
+
+                    Push {
+                        label: root.key-bind;
+                        clicked => { root.key-bind-pressed(); }
+                    }
+
+                    if root.key-bound: Push {
+                        label: root.key-remove;
+                        clicked => { root.key-remove-pressed(); }
+                    }
+                }
+
+                if root.key-error != "": Text {
+                    text: root.key-error;
+                    color: Theme.q-not;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                if root.key-preview != "": Text {
+                    text: "→ " + root.key-preview;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                }
+
+                if root.key-later != "": Text {
+                    text: root.key-later;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                                    }
+                                }
+                                SectionHead { text: root.set-help; }
             Text {
                 text: root.help-body;
                 color: Theme.ink-2;
