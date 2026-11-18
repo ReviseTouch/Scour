@@ -1437,6 +1437,9 @@ export component MainWindow inherits Window {
     /// How many slots the list wants: a screenful, a row half off the top, and
     /// one each way to spare. Read by Rust, which places them.
     out property <int> pool: Math.ceil(list.visible-height / Theme.row-height) + 3;
+    /// How far down the detail list is, for keeping the row being read in
+    /// place when rows arrive above it.
+    out property <length> list-down: 0px - list.viewport-y;
     // A resize changes how many slots there are, before any timer comes round.
     changed pool => { root.moved(); }
     /// How wide a row is, from the columns: as a `ListView` read it off the rows.

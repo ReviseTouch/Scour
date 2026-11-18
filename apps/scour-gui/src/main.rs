@@ -4298,6 +4298,18 @@ fn apply(
                     .measure(&page, w.get_name_advance(), w.get_cell_advance());
                 relayout(w, &table.borrow());
             }
+            // **The row being read stays put.** A re-read of the page in sight
+            // after the index moved shifts every row below a file that arrived
+            // or left above it; the list is moved by the same number of rows,
+            // found by the first visible row's path. Not at the top, where what
+            // arrives is what somebody is waiting to see, nor in the tiles.
+            let first = w.get_first_row().max(0) as usize;
+            let anchor = (!state.borrow().rewind
+                && !w.get_grid()
+                && first > 0
+                && (offset as usize..offset as usize + n).contains(&first))
+            .then(|| rows.path_at(first))
+            .flatten();
             let any_fresh = {
                 let mut s = state.borrow_mut();
                 let counted = s
@@ -4315,6 +4327,23 @@ fn apply(
                 arrived
             };
 
+            if let Some(path) = anchor
+                && rows.path_at(first).as_deref() != Some(path.as_str())
+            {
+                let from = offset as usize;
+                let moved_to = (from..from + n)
+                    .find(|&row| rows.path_at(row).as_deref() == Some(path.as_str()));
+                if let Some(to) = moved_to {
+                    let by = to as f32 - first as f32;
+                    let step = w.global::<Theme>().get_row_height();
+                    w.invoke_scroll_to((w.get_list_down() + by * step).max(0.0));
+                    let selected = w.get_selected();
+                    if selected >= 0 {
+                        w.set_selected((selected as f32 + by).max(0.0) as i32);
+                    }
+                    trace(&format!("kept {path:?} in place: {by:+} rows"));
+                }
+            }
             // Slint's `animate` interpolates when a property *changes*, and the
             // arrival wash is 1.6 s.
             if any_fresh {
