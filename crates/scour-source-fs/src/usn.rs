@@ -154,6 +154,29 @@ fn write_kept(path: &std::path::Path, journal: u64, usn: i64) {
     }
 }
 
+/// The longest a journal read on from the last run may stand in for a walk.
+/// The journal records only what Windows writes: another system writing the
+/// volume — Linux's ntfs3 on a machine that boots both — leaves no record, and
+/// neither does a change whose parent the reader could not place.
+const WALK_AT_LEAST: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Whether the source is owed a start walk whatever the journal says: no walk
+/// noted within [`WALK_AT_LEAST`], by the clock on the wall — an uptime clock
+/// starts again with every boot, and a machine shut down daily never got one.
+fn walk_due(stamp: &std::path::Path) -> bool {
+    std::fs::metadata(stamp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_none_or(|age| age >= WALK_AT_LEAST)
+}
+
+/// Noted as the start walk is queued. A walk cut short by a shutdown still
+/// counts, which bounds the cost to a day rather than closing the gap.
+fn walked_now(stamp: &std::path::Path) {
+    let _ = std::fs::write(stamp, b"");
+}
+
 #[cfg(windows)]
 pub(crate) use imp::try_start;
 
@@ -267,6 +290,13 @@ mod imp {
             }
             _ => (journal.NextUsn, false),
         };
+        let stamp = source
+            .journal_dir()
+            .map(|d| d.join(format!("walked-{}", source.source_id().0)));
+        let caught_up = caught_up && stamp.as_deref().is_some_and(|s| !super::walk_due(s));
+        if !caught_up && let Some(s) = &stamp {
+            super::walked_now(s);
+        }
         let name = scour_core::Source::describe(source).name;
         scour_core::note!(
             "scourd: {name} is watched through the NTFS change journal of {letter}{}",
@@ -564,6 +594,25 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_journal_stands_in_for_a_walk_for_a_day_at_most() {
+        let dir = std::env::temp_dir().join(format!("scour-usn-walk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stamp = dir.join("walked-1");
+        assert!(walk_due(&stamp), "never walked is due");
+        walked_now(&stamp);
+        assert!(!walk_due(&stamp), "just walked is not");
+        let old = std::time::SystemTime::now() - WALK_AT_LEAST - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&stamp)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(walk_due(&stamp), "a day old is due");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A version-2 record as the volume writes it.
     fn record(parent: u64, reason: u32, attrs: u32, name: &str) -> Vec<u8> {

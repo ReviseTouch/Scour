@@ -350,6 +350,15 @@ fn each_record(
             carry.drain(..whole);
         }
     }
+    // The extents ran out before the records did: `$MFT`'s run list spills into
+    // an extension record this does not follow. A read that stops here is
+    // partial, and a partial read vouched for sweeps every row it missed — so it
+    // fails, and the caller walks instead.
+    if number < total {
+        return Err(io::Error::other(format!(
+            "the MFT's extents end at record {number} of {total}"
+        )));
+    }
     Ok(())
 }
 
@@ -713,12 +722,21 @@ mod tests {
     /// A volume: a boot sector, and an MFT in two extents so a run list and a
     /// split are both read. Records by number; missing ones are empty.
     fn volume(records: &[(u64, Vec<u8>)]) -> Vec<u8> {
+        volume_listing(records, true)
+    }
+
+    /// The same volume, its run list naming the second extent or not: without
+    /// it, as when the list spills into an extension record, the records end
+    /// before the `$MFT`'s size says they do.
+    fn volume_listing(records: &[(u64, Vec<u8>)], both: bool) -> Vec<u8> {
         let count = 64u64;
         // Records 0..32 at cluster 16, 32..64 at cluster 40.
         let per_cluster = CLUSTER / RECORD as u64;
         let half = 32 / per_cluster;
         let mut runs = vec![0x11, half as u8, 16];
-        runs.extend([0x11, half as u8, 24]); // +24 from 16 → 40
+        if both {
+            runs.extend([0x11, half as u8, 24]); // +24 from 16 → 40
+        }
         runs.push(0);
         let mut mft = vec![0u8; (count as usize) * RECORD];
         let mut zero = record(
@@ -981,6 +999,41 @@ mod tests {
         // 4 clusters at 100, 2 sparse, 3 at 100 - 20 = 80.
         let data = [0x21, 4, 100, 0, 0x01, 2, 0x11, 3, 0xEC, 0];
         assert_eq!(runs(&data), vec![(Some(100), 4), (None, 2), (Some(80), 3)]);
+    }
+
+    #[test]
+    fn an_mft_whose_extents_end_early_is_not_read_as_whole() {
+        let t = 1_700_000_000;
+        let recs = [(
+            ROOT,
+            record(DIR, 0, &[standard(t, 0), file_name(ROOT, ".", 3)]),
+        )];
+        let mut sink = Rows::default();
+        let partial = volume_listing(&recs, false);
+        let got = read(
+            &partial,
+            SourceId(1),
+            "C:/",
+            &Rules::from_options(&Default::default()),
+            false,
+            &mut sink,
+        );
+        assert!(
+            got.is_err(),
+            "a partial read must fail, so the caller walks"
+        );
+        let whole = volume_listing(&recs, true);
+        assert!(
+            read(
+                &whole,
+                SourceId(1),
+                "C:/",
+                &Rules::from_options(&Default::default()),
+                false,
+                &mut Rows::default()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

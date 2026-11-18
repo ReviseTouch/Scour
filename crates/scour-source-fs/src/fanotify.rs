@@ -112,38 +112,57 @@ impl FsTag {
         }
         // SAFETY: `fsid_t` is two `c_int`s with a private name; same size and layout.
         let fsid: [i32; 2] = unsafe { std::mem::transmute(st.f_fsid) };
-        // `struct file_handle`: bytes u32, type i32, then the handle. As u32s, so
-        // the header is aligned.
-        let mut raw = [0u32; 2 + 32];
-        raw[0] = 128;
-        let mut mount_id: libc::c_int = 0;
-        // SAFETY: `raw` is a `file_handle` header with room for the 128 bytes it
-        // declares; `c` and `mount_id` outlive the call.
-        let rc = unsafe {
-            libc::syscall(
-                libc::SYS_name_to_handle_at,
-                libc::AT_FDCWD,
-                c.as_ptr(),
-                raw.as_mut_ptr(),
-                &mut mount_id as *mut libc::c_int,
-                0,
-            )
-        };
-        if rc != 0 {
-            return None;
-        }
-        let kind = raw[1] as i32;
-        let len = (raw[0] as usize).min(128);
-        let bytes: Vec<u8> = raw[2..]
-            .iter()
-            .flat_map(|w| w.to_ne_bytes())
-            .take(len)
-            .collect();
+        let (kind, bytes) = handle_of(&c)?;
         Some(FsTag {
             fsid: [fsid[0] as u32, fsid[1] as u32],
             root: btrfs_root(kind, &bytes),
         })
     }
+}
+
+/// The file handle the kernel gives `path`: its type and bytes, as an event
+/// would carry them for the same directory.
+fn handle_of(c: &std::ffi::CStr) -> Option<(i32, Vec<u8>)> {
+    // `struct file_handle`: bytes u32, type i32, then the handle. As u32s, so
+    // the header is aligned.
+    let mut raw = [0u32; 2 + 32];
+    raw[0] = 128;
+    let mut mount_id: libc::c_int = 0;
+    // SAFETY: `raw` is a `file_handle` header with room for the 128 bytes it
+    // declares; `c` and `mount_id` outlive the call.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_name_to_handle_at,
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            raw.as_mut_ptr(),
+            &mut mount_id as *mut libc::c_int,
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let kind = raw[1] as i32;
+    let len = (raw[0] as usize).min(128);
+    let bytes: Vec<u8> = raw[2..]
+        .iter()
+        .flat_map(|w| w.to_ne_bytes())
+        .take(len)
+        .collect();
+    Some((kind, bytes))
+}
+
+/// Whether events under `root` can be turned back into paths. A filesystem
+/// whose handles this cannot read (vfat, bcachefs, ZFS…) would take the mark
+/// and have every event dropped, while counting as watched — which also stops
+/// the pulse walks that would otherwise keep it fresh.
+fn decodable(root: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(root.as_os_str().as_bytes()) else {
+        return false;
+    };
+    handle_of(&c).is_some_and(|(kind, bytes)| handle_ino(kind, &bytes).is_some())
 }
 
 /// The subvolume a btrfs handle names: `u64` at 8, after the inode.
@@ -343,6 +362,8 @@ fn handle_ino(fh_type: i32, bytes: &[u8]) -> Option<u64> {
         (1, 12) => le64(4),
         // FILEID_INO32_GEN, what ntfs3 and most others use: ino u32 @0, generation @4.
         (1, 8) => le32(0),
+        // XFS with 64-bit inodes (its default): ino u64 @0, generation u32 @8.
+        (0x81, 12) => le64(0),
         _ => None,
     }
 }
@@ -1087,6 +1108,13 @@ pub fn try_start(
 ) -> Option<Result<Box<dyn WatchHandle>>> {
     // Marked or not: a group that cannot hear these roots watches nothing.
     if !crate::marks::covered(handed()?, source.roots()) {
+        return None;
+    }
+    if let Some(deaf) = source.roots().iter().find(|r| !decodable(r)) {
+        eprintln!(
+            "scourd: {} cannot be watched by fanotify on this filesystem; its changes are found by walking",
+            path::from_path(deaf)
+        );
         return None;
     }
     // The descriptor is taken once: two owners is a double close, and two readers
@@ -3369,6 +3397,10 @@ mod tests {
         tmp.extend_from_slice(&0x8f45_42b1u32.to_le_bytes());
         tmp.extend_from_slice(&99u64.to_le_bytes());
         assert_eq!(handle_ino(1, &tmp), Some(99));
+        // XFS, 64-bit inodes: ino u64 @0, generation u32 @8.
+        let mut xfs = vec![0u8; 12];
+        xfs[..8].copy_from_slice(&0x1_0000_0042u64.to_le_bytes());
+        assert_eq!(handle_ino(0x81, &xfs), Some(0x1_0000_0042));
     }
 
     #[test]
