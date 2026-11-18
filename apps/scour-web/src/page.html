@@ -650,9 +650,18 @@
   /* ---------------- the time ribbon ---------------- */
   /* The rail and the ribbon, put away: kept in the settings for every face.
      The rail stays a grid item, emptied, so the columns do not shift. */
-  .body.no-rail { grid-template-columns: 0 minmax(0, 1fr); }
-  .body.no-rail.peeking { grid-template-columns: 0 minmax(0, 1fr) var(--peek-w); }
-  .body.no-rail .rail { visibility: hidden; padding: 0; border: 0; overflow: hidden; }
+  .body.no-rail { grid-template-columns: 16px minmax(0, 1fr); }
+  .body.no-rail.peeking { grid-template-columns: 16px minmax(0, 1fr) var(--peek-w); }
+  .body.no-rail .rail { padding: 0; overflow: hidden; }
+  .body.no-rail .rail > :not(.rail-back) { display: none; }
+  /* The rail put away leaves its edge, which brings it back. */
+  .rail-back { display: none; }
+  .body.no-rail .rail-back {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%; border: 0; background: none; padding: 0;
+    color: var(--ink-3); font-size: 15px; cursor: pointer;
+  }
+  .body.no-rail .rail-back:hover { color: var(--ink); background: var(--hover); }
   .body.no-ribbon .ribbon { display: none; }
   .pane-x {
     float: right; border: 0; background: none; color: var(--ink-3); cursor: pointer;
@@ -1869,6 +1878,7 @@
 
     <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
       <nav class="rail" data-t-aria="Filters">
+        <button type="button" class="rail-back" id="rail-edge" data-t-title="Show the sidebar" data-t-aria="Show the sidebar">›</button>
         <h2><span data-t="Scope"></span><button type="button" class="pane-x" id="rail-x" data-t-title="Hide the sidebar" data-t-aria="Hide the sidebar">‹</button></h2>
         <div id="scopes"></div>
         <h2 data-t="Kind"></h2>
@@ -4590,9 +4600,10 @@
       body.classList.toggle("no-rail", railOff);
       body.classList.toggle("no-ribbon", ribbonOff);
     }
-    document.getElementById("rail-back").hidden = !railOff;
+    // The rail comes back from its own edge; only the ribbon needs the line.
+    document.getElementById("rail-back").hidden = true;
     document.getElementById("ribbon-back").hidden = !ribbonOff;
-    document.getElementById("restore").hidden = !railOff && !ribbonOff;
+    document.getElementById("restore").hidden = !ribbonOff;
   }
   function setPanes(change) {
     KEPT = { ...(KEPT || {}), ...change };
@@ -4602,6 +4613,7 @@
   document.getElementById("rail-x").addEventListener("click", () => setPanes({ rail_hidden: true }));
   document.getElementById("ribbon-x").addEventListener("click", () => setPanes({ ribbon_hidden: true }));
   document.getElementById("rail-back").addEventListener("click", () => setPanes({ rail_hidden: false }));
+  document.getElementById("rail-edge").addEventListener("click", () => setPanes({ rail_hidden: false }));
   document.getElementById("ribbon-back").addEventListener("click", () => setPanes({ ribbon_hidden: false }));
 
   function applyGrid() {
@@ -7191,6 +7203,8 @@
     /* One menu for the whole page: the report's duplicate rows open the very
        list the search rows do, and hand over what to redraw afterwards. */
     rowMenu: (event, path, row, after) => openRowMenu(event, path, row, after),
+    /* The tab strip says which view a tab is on, so switching views redraws it. */
+    drawTabs: () => drawTabs(),
     /* The reader's own spelling of a moment, from the one built formatter. */
     stamp: (at) => exact(at),
     // Both arrive from the service after this runs, so both are getters.
@@ -7958,7 +7972,7 @@
     document.getElementById("tab-search").setAttribute("aria-selected", String(s));
     document.getElementById("tab-report").setAttribute("aria-selected", String(!s));
     document.querySelector(".meter").style.display = s ? "" : "none";
-    drawTabs();
+    window.SCOUR.drawTabs();
     if (s) document.dispatchEvent(new Event("scour-search-shown"));
     else drawReport();
   }

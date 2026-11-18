@@ -1337,7 +1337,8 @@ export component MainWindow inherits Window {
     property <length> chrome: root.rail-w + 1px + 24px + 14px;
     /// The sidebar's width, which the header's mark matches so the field
     /// starts where the list does.
-    out property <length> rail-w: root.rail-shown ? 180px : 0px;
+    // Put away, the rail leaves a handle at the window's edge to bring it back.
+    out property <length> rail-w: root.rail-shown ? 180px : 16px;
     /// The rail and the time ribbon, each put away or brought back by a person;
     /// kept in the shared settings.
     in-out property <bool> rail-shown: true;
@@ -3403,7 +3404,6 @@ export component MainWindow inherits Window {
             // Capped to nothing rather than put behind an `if`: `railview`
             // inside a conditional is out of scope for `scroll-rail`.
             Rectangle {
-                visible: root.rail-shown;
                 // A fixed track: it carries counts that must not reflow while
                 // the list beside it does.
                 width: root.rail-w;
@@ -3415,9 +3415,31 @@ export component MainWindow inherits Window {
                     background: Theme.line;
                 }
 
+                // The rail put away: its whole edge brings it back.
+                rail-back := TouchArea {
+                    visible: !root.rail-shown;
+                    width: parent.width - 1px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.rail-shown = true;
+                        root.panes-changed();
+                    }
+                    Rectangle {
+                        background: rail-back.has-hover ? Theme.hover : transparent;
+                    }
+                    Text {
+                        text: "›";
+                        color: rail-back.has-hover ? Theme.ink : Theme.ink-3;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
                 // Scrolled: three sections and thirteen kinds do not fit at
                 // 700px, and a rail that grew would push the ribbon off.
                 railview := ScrollView {
+                    visible: root.rail-shown;
                     // Told how tall it is, or there is no overflow to scroll.
                     viewport-height: rail.preferred-height;
 
@@ -4572,18 +4594,8 @@ export component MainWindow inherits Window {
 
                 Rectangle { }
 
-                // What was put away, and the way to bring it back.
-                if !root.rail-shown: VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.word-show-rail;
-                        plain: true;
-                        clicked => {
-                            root.rail-shown = true;
-                            root.panes-changed();
-                        }
-                    }
-                }
+                // What was put away, and the way to bring it back. The rail
+                // has its own handle at the window's edge.
                 if !root.ribbon-shown && root.tab != "report": VerticalLayout {
                     alignment: center;
                     Push {

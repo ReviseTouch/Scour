@@ -324,15 +324,33 @@ fn run(
     // Which query has already been sent: a page of the one on screen does not
     // wait out the quiet.
     let mut asked = state.generation;
+    // When to ask the service to wake this face again. A deadline, not a
+    // sleep: sleeping here held every key and every frame for a quarter of a
+    // second each time the index moved, which on a busy machine is always.
+    let mut doze_at: Option<std::time::Instant> = None;
     loop {
-        let beat = match &pending {
-            Some((due, _)) => {
+        let due = match (&pending, doze_at) {
+            (Some((p, _)), Some(d)) => Some((*p).min(d)),
+            (Some((p, _)), None) => Some(*p),
+            (None, d) => d,
+        };
+        let beat = match due {
+            Some(due) => {
                 let left = due.saturating_duration_since(std::time::Instant::now());
                 match waiting.recv_timeout(left) {
                     Ok(beat) => beat,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if let Some((_, want)) = pending.take() {
+                        let now = std::time::Instant::now();
+                        if pending.as_ref().is_some_and(|(p, _)| *p <= now)
+                            && let Some((_, want)) = pending.take()
+                        {
                             act(want, link);
+                        }
+                        if doze_at.is_some_and(|d| d <= now) {
+                            doze_at = None;
+                            link.doze(Ask::Await {
+                                since: state.revision,
+                            });
                         }
                         continue;
                     }
@@ -461,10 +479,8 @@ fn run(
                 act(want, link);
                 // A beat before waiting again: during a scan the index moves
                 // several times a second. See `Settings::refresh_every`.
-                std::thread::sleep(state.refresh.max(Duration::from_millis(250)));
-                link.doze(Ask::Await {
-                    since: state.revision,
-                });
+                doze_at =
+                    Some(std::time::Instant::now() + state.refresh.max(Duration::from_millis(250)));
             }
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
