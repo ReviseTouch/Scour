@@ -107,8 +107,8 @@ pub fn picture(_: &std::path::Path, _: u32) -> Option<Picture> {
 /// A bitmap whose alpha is zero throughout has none: it is opaque.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn straighten(px: &mut [u8]) {
-    let opaque = px.chunks_exact(4).all(|p| p[3] == 0);
-    for p in px.chunks_exact_mut(4) {
+    let opaque = px.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
+    for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
         if opaque {
             p[3] = 255;
