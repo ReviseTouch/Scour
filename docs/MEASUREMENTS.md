@@ -593,6 +593,42 @@ cargo run --release -p scour-index-native --example transplant -- load /tmp/rows
 cargo run --release -p scour-index-native --example querycost -- /tmp/new/native 9 < queries.txt       # each build, turn about
 ```
 
+## The walker is surefoot (2026-11-19)
+
+The walk left `ignore` for `surefoot`, this project's own walker in a
+repository of its own. Same threads, same rules, same rows; what changed is
+that a file's `stat` goes through the open directory instead of its full path,
+and that idle walker threads wait instead of polling.
+
+The walk alone, `/home/hasan`, 5.61 M entries, cache warm, turn about, medians
+of three:
+
+| | 2 threads | 8 threads |
+|---|---|---|
+| `ignore`, `stat` by path | 3.73 s | 1.18 s |
+| surefoot, `stat` through the directory | 2.92 s | 0.98 s |
+| no `stat` | 1.4–1.6 s | 0.57 s |
+
+The service, `scourd --scan-only` into an empty index: three sources, 4.89 M
+entries, six rounds turn about, other builds running on the machine.
+
+| | before | surefoot |
+|---|---|---|
+| wall, median (mean) | 15.2 s (15.0) | 12.9 s (13.1) |
+| CPU, user + system, mean | 39.8 s | 36.6 s |
+| system time, mean | 16.5 s | 14.7 s |
+| rounds won | 1 | 5 |
+
+The binary is 465 kB smaller: `ignore`, `globset` and `bstr` are gone.
+
+surefoot can also choose the thread count while it walks (`Threads::Auto`).
+Here it lost: five rounds turn about against the fixed two threads, 14.0 s
+against 11.9 s at the median, four rounds of five. The indexing consumer is the
+limit, so every thread it tried was given back — 9 to 33 changes a source,
+down to one thread at times. The scan stays on its measured fixed numbers.
+
+Not measured: a cold cache, a spinning disk, Windows.
+
 ## Reproducing
 
 ```sh
