@@ -10,3 +10,6 @@ publish = false
 # would mean linking a Wayland or an X11 binding into two faces that have no
 # other reason to know which one they are running under.
 [dependencies]
+
+[lints]
+workspace = true

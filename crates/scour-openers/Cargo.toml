@@ -21,3 +21,6 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[lints]
+workspace = true

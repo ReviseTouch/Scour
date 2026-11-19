@@ -12,4 +12,9 @@ publish = false
 # trash directory, and the local time the specification asks to be written
 # down. Neither is a library so much as the operating system's own vocabulary.
 [dependencies]
+
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[lints]
+workspace = true

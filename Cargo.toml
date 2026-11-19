@@ -106,7 +106,6 @@ ratatui     = "0.30.2"
 # what the roots are standing on and reads through the open directory.
 surefoot    = { git = "https://github.com/ReviseTouch/surefoot", tag = "v0.1.0" }
 notify      = "8"
-notify-debouncer-full = "0.7"
 
 # Platform config/data directories. Replaces the hand-rolled XDG logic, which
 # put macOS config in ~/.config instead of ~/Library/Application Support.
@@ -119,7 +118,6 @@ crossbeam-channel = "0.5"
 ctrlc             = "3"
 parking_lot = "0.12"
 humansize   = "2"
-rustc-hash  = "2"
 memmap2     = "0.9"
 memchr      = "2"
 

@@ -10,3 +10,6 @@ publish = false
 # already names. This crate finds which of them are here and starts one; it has
 # never heard of Scour.
 [dependencies]
+
+[lints]
+workspace = true

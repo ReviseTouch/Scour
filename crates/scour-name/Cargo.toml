@@ -8,3 +8,6 @@ publish = false
 # Nothing. What a file may be called is a question about the filesystem, and
 # the standard library is where the filesystem is.
 [dependencies]
+
+[lints]
+workspace = true

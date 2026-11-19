@@ -4974,7 +4974,6 @@ version = "0.2.0-alpha.12"
 dependencies = [
  "anyhow",
  "clap",
- "humansize",
  "libc",
  "scour-chart",
  "scour-config",
@@ -5067,7 +5066,6 @@ dependencies = [
  "anyhow",
  "clap",
  "copypasta",
- "humansize",
  "i-slint-backend-winit",
  "rfd",
  "scour-chart",
