@@ -104,7 +104,7 @@ ratatui     = "0.30.2"
 # Filesystem traversal and watching. `surefoot` is this project's own walker,
 # kept in a repository of its own so that other programs can use it: it asks
 # what the roots are standing on and reads through the open directory.
-surefoot    = { path = "../surefoot" }
+surefoot    = { git = "https://github.com/ReviseTouch/surefoot", tag = "v0.1.0" }
 notify      = "8"
 notify-debouncer-full = "0.7"
 

@@ -5892,6 +5892,7 @@ dependencies = [
 [[package]]
 name = "surefoot"
 version = "0.1.0"
+source = "git+https://github.com/ReviseTouch/surefoot?tag=v0.1.0#8d6677b9f382b5d7b8c112714ffd277b911b0766"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
