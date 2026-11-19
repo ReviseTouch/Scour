@@ -46,8 +46,10 @@ pub(crate) fn parse(buf: &[u8]) -> Option<(i64, Vec<Record>)> {
             let name_at = u16::from_le_bytes(rec[58..60].try_into().ok()?) as usize;
             if name_at + name_len <= len {
                 let units: Vec<u16> = rec[name_at..name_at + name_len]
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
                     .collect();
                 out.push(Record {
                     parent,

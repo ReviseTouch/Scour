@@ -24,8 +24,10 @@ pub(crate) fn parse(buf: &[u8]) -> Vec<(u32, String)> {
             break;
         };
         let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         out.push((action, String::from_utf16_lossy(&units)));
         if next == 0 {
