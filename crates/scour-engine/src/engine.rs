@@ -1100,6 +1100,33 @@ impl Engine {
         ))
     }
 
+    /// Which of the files a query names hold a pattern, read now and newest
+    /// first. `enter` is what each reading thread does first: see
+    /// [`scour_grep::Enter`].
+    pub fn grep(
+        &self,
+        query: &str,
+        ask: &crate::GrepAsk,
+        enter: Option<scour_grep::Enter>,
+    ) -> Result<crate::Grepped> {
+        self.shared.reading();
+        let roots: Vec<String> = self
+            .shared
+            .sources
+            .iter()
+            .flat_map(|source| source.describe().roots)
+            .collect();
+        let index = self.shared.index.as_ref();
+        crate::grep::run(
+            index,
+            &roots,
+            self.shared.ast(query),
+            CANDIDATES,
+            ask,
+            enter,
+        )
+    }
+
     pub fn stats(&self) -> Result<IndexStats> {
         self.shared.index.stats()
     }

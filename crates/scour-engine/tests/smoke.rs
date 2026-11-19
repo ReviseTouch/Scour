@@ -2272,3 +2272,76 @@ fn different_disks_are_walked_at_once_and_swept_together() {
     assert_eq!(engine.status().entries, 530);
     assert_eq!(a.spans.read().len(), 3);
 }
+
+/// The query says which files and the pattern what they must hold: only those
+/// are read, the newest first, and an answer cut short says where to go on.
+#[test]
+fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
+    let files = tempfile::tempdir().expect("temp");
+    let entries: Vec<Entry> = (0..40)
+        .map(|i| {
+            let ext = if i % 2 == 0 { "rs" } else { "txt" };
+            let path = files.path().join(format!("f{i:02}.{ext}"));
+            std::fs::write(&path, format!("line one\nthe NEEDLE {i}\n")).expect("write");
+            let mut entry = row(&path.to_string_lossy());
+            entry.meta.size = 21;
+            entry.meta.mtime = 1_000 + i as i64;
+            entry
+        })
+        .collect();
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let source = MemSource::new(entries);
+    let opts = EngineOptions {
+        commit_interval: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let f = Fixture {
+        engine: Engine::new(vec![source.clone()], index, opts),
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| count(f, "ext:rs") == 20);
+
+    let mut ask = scour_engine::GrepAsk {
+        needle: scour_grep::Needle::Text("needle".into()),
+        exact_case: false,
+        binary: false,
+        offset: 0,
+        top: 8,
+        hits: 3,
+        read_budget: 0,
+        max_size: 0,
+        timeout: Duration::from_secs(20),
+    };
+    let first = f.engine.grep("ext:rs", &ask, None).expect("grep");
+    assert_eq!((first.candidates, first.files.len()), (20, 8));
+    // Newest first: the highest mtime is the last file written.
+    assert!(
+        first.files[0].path.ends_with("f38.rs"),
+        "{}",
+        first.files[0].path
+    );
+    assert_eq!(first.files[0].hits[0].line, Some(2));
+    assert_eq!(first.files[0].hits[0].text, "the NEEDLE 38");
+    assert_eq!(first.next, Some(8));
+
+    ask.offset = 8;
+    ask.top = 50;
+    let rest = f.engine.grep("ext:rs", &ask, None).expect("grep");
+    assert_eq!((rest.files.len(), rest.next), (12, None));
+    assert!(rest.files.iter().all(|file| file.path.ends_with(".rs")));
+
+    ask.needle = scour_grep::Needle::Text("needle".into());
+    ask.exact_case = true;
+    ask.offset = 0;
+    let none = f.engine.grep("ext:rs", &ask, None).expect("grep");
+    assert_eq!((none.files.len(), none.scanned, none.next), (0, 20, None));
+
+    ask.needle = scour_grep::Needle::Regex("(".into());
+    assert!(matches!(
+        f.engine.grep("", &ask, None),
+        Err(Error::QuerySyntax { .. })
+    ));
+}

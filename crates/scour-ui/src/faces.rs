@@ -139,6 +139,16 @@ pub const FEATURES: &[Feature] = &[
         faces: [Has, Has, Has, Has],
     },
     Feature {
+        id: "contents",
+        what: "which files hold a text: the query's files are read, newest first",
+        faces: [
+            Not("not yet: the command line has it, as `scour grep`"),
+            Not("not yet: the command line has it, as `scour grep`"),
+            Not("not yet: the command line has it, as `scour grep`"),
+            Has,
+        ],
+    },
+    Feature {
         id: "rules",
         what: "what the walk skips, in three groups, switchable",
         faces: [Has, Has, Has, Has],

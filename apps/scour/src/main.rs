@@ -124,6 +124,47 @@ enum Command {
         #[arg(long, short = 'q', default_value = "")]
         query: String,
     },
+    /// Which files hold this text: the query says which files to read.
+    ///
+    /// `scour grep TODO ext:rs /Projeler/` reads the newest first and stops at
+    /// `-n` files, a gigabyte or ten seconds; `--from` goes on where it stopped.
+    Grep {
+        /// What to look for.
+        pattern: String,
+        /// Which files, in the query language. Left out: every file indexed.
+        query: Vec<String>,
+        /// The pattern is a regular expression, read a line at a time.
+        #[arg(long, short = 'e', conflicts_with = "hex")]
+        regex: bool,
+        /// The pattern is bytes, in hex: `"DE AD BE EF"`. Implies `--binary`.
+        #[arg(long)]
+        hex: bool,
+        /// `a` is not `A`.
+        #[arg(long, short = 'c')]
+        case: bool,
+        /// Read what is not text too — programs, libraries, images' headers —
+        /// and look for the text as UTF-16 in it.
+        #[arg(long, short = 'b')]
+        binary: bool,
+        /// Stop at this many files with a find.
+        #[arg(long, short = 'n', default_value_t = 50)]
+        top: u32,
+        /// Lines shown from one file. Zero lists the files alone.
+        #[arg(long, default_value_t = 3)]
+        lines: u32,
+        /// How much may be read, in megabytes. Zero: as much as the time allows.
+        #[arg(long, default_value_t = 1024)]
+        budget_mb: u64,
+        /// Files larger than this many megabytes are not opened. Zero: none is.
+        #[arg(long, default_value_t = 64)]
+        max_mb: u64,
+        /// Give up after this many seconds, and say where.
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+        /// Go on from here: the number a shorter answer ended with.
+        #[arg(long, default_value_t = 0)]
+        from: u32,
+    },
     /// The same file, several times over — largest saving first.
     ///
     /// Works down from the biggest; `--budget-mb 0` reads nothing and answers from sizes alone.
@@ -534,6 +575,36 @@ fn build(args: &Args) -> Result<Request> {
         // `main` sends this itself. Unreachable rather than a silent fallback:
         // reaching it means the early return is gone and the request is wrong.
         Some(Command::Export { .. }) => unreachable!("an export is streamed in main"),
+        Some(Command::Grep {
+            pattern,
+            query,
+            regex,
+            hex,
+            case,
+            binary,
+            top,
+            lines,
+            budget_mb,
+            max_mb,
+            seconds,
+            from,
+        }) => Request::Grep {
+            query: join(query),
+            pattern: pattern.clone(),
+            mode: match (*regex, *hex) {
+                (true, _) => scour_proto::GrepMode::Regex,
+                (_, true) => scour_proto::GrepMode::Hex,
+                _ => scour_proto::GrepMode::Text,
+            },
+            exact_case: *case,
+            binary: *binary,
+            offset: *from,
+            top: *top,
+            hits: *lines,
+            read_budget: budget_mb.saturating_mul(1024 * 1024),
+            max_size: max_mb.saturating_mul(1024 * 1024),
+            timeout_ms: seconds.saturating_mul(1000),
+        },
         Some(Command::Dupes {
             under,
             min_mb,

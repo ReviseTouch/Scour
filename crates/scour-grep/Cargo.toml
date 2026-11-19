@@ -1,0 +1,27 @@
+[package]
+name        = "scour-grep"
+description = "Which of these files hold this text: read by what each disk can bear."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **Nothing of Scour's.** What arrives is a list of paths and what to look
+# for; what leaves is where it was found. The vectorised search is `regex`'s
+# and `memchr`'s own, and what a disk can bear is `surefoot`'s answer — the
+# same one the walk asks, so the two cannot disagree about a disk.
+[dependencies]
+regex    = { workspace = true }
+memchr   = { workspace = true }
+surefoot = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

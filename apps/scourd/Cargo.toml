@@ -30,6 +30,7 @@ scour-proto         = { workspace = true }
 scour-ipc           = { workspace = true }
 scour-config        = { workspace = true }
 scour-dupes         = { workspace = true }
+scour-grep          = { workspace = true }
 scour-engine        = { workspace = true }
 scour-index-native  = { workspace = true }
 scour-settings      = { workspace = true }

@@ -155,6 +155,77 @@ fn run(
                 unconfirmed: r.unconfirmed,
             }
         }
+        Request::Grep {
+            query,
+            pattern,
+            mode,
+            exact_case,
+            binary,
+            offset,
+            top,
+            hits,
+            read_budget,
+            max_size,
+            timeout_ms,
+        } => {
+            let needle = match mode {
+                scour_proto::GrepMode::Text => scour_grep::Needle::Text(pattern),
+                scour_proto::GrepMode::Regex => scour_grep::Needle::Regex(pattern),
+                scour_proto::GrepMode::Hex => {
+                    scour_grep::Needle::hex(&pattern).ok_or_else(|| {
+                        scour_core::Error::QuerySyntax {
+                            at: 0,
+                            expected: "pairs of hex digits".into(),
+                        }
+                    })?
+                }
+            };
+            let ask = scour_engine::GrepAsk {
+                needle,
+                exact_case,
+                // Bytes are looked for where bytes are.
+                binary: binary || mode == scour_proto::GrepMode::Hex,
+                offset,
+                top,
+                hits,
+                read_budget,
+                max_size,
+                timeout: std::time::Duration::from_millis(timeout_ms),
+            };
+            // Every reading thread reads as the person asking; see `preview`.
+            let enter: scour_grep::Enter = std::sync::Arc::new(crate::as_owner::for_a_read);
+            let r = engine.grep(&query, &ask, Some(enter))?;
+            Response::Grep(scour_proto::GrepResponse {
+                files: r
+                    .files
+                    .into_iter()
+                    .map(|f| scour_proto::GrepFile {
+                        path: f.path,
+                        more: f.more,
+                        hits: f
+                            .hits
+                            .into_iter()
+                            .map(|h| scour_proto::GrepHit {
+                                line: h.line,
+                                offset: h.offset,
+                                text: h.text,
+                                at: h.at,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                candidates: r.candidates,
+                capped: r.capped,
+                scanned: r.scanned,
+                read: r.read,
+                binary: r.binary,
+                too_big: r.too_big,
+                unreadable: r.unreadable,
+                next: r.next,
+                misread: r.misread,
+                took_us: r.took_us,
+            })
+        }
         Request::Settings {} => Response::Settings(Box::new(
             kept.settings
                 .lock()

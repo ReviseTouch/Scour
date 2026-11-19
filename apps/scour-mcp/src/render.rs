@@ -63,6 +63,47 @@ pub fn human(r: &Response) -> String {
                 format!("{total} matches.")
             }
         }
+        Response::Grep(g) => {
+            let mut out = String::new();
+            for file in &g.files {
+                out.push_str(&file.path);
+                out.push('\n');
+                for hit in &file.hits {
+                    match hit.line {
+                        Some(line) => out.push_str(&format!("  {line}: {}\n", hit.text)),
+                        None => out.push_str(&format!("  @{}: {}\n", hit.offset, hit.text)),
+                    }
+                }
+                if file.more {
+                    out.push_str("  … more in this file\n");
+                }
+            }
+            out.push_str(&format!(
+                "{} files with a find; {} of {}{} candidates read, {}.",
+                g.files.len(),
+                g.scanned,
+                g.candidates,
+                if g.capped { "+" } else { "" },
+                format_size(g.read, BINARY),
+            ));
+            // Said, because a file not read is not a file without it.
+            for (n, what) in [
+                (g.binary, "skipped as not text (pass binary to read them)"),
+                (g.too_big, "skipped as over 64 MB"),
+                (g.unreadable, "could not be read"),
+            ] {
+                if n > 0 {
+                    out.push_str(&format!(" {n} {what}."));
+                }
+            }
+            match g.next {
+                Some(next) => out.push_str(&format!(
+                    " Stopped early: call again with from={next} to go on."
+                )),
+                None => out.push_str(" Every candidate was looked at."),
+            }
+            out
+        }
         Response::Duplicates {
             groups,
             candidates,

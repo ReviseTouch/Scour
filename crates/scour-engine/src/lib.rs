@@ -5,7 +5,9 @@
 //! discover that either is a filesystem or a tantivy index; `scourd` picks both.
 
 mod engine;
+mod grep;
 mod reconcile;
 mod tree;
 
 pub use engine::{Engine, EngineOptions, Explained, Keeping, Reading, Typos};
+pub use grep::{GrepAsk, Grepped, GreppedFile};

@@ -629,6 +629,41 @@ down to one thread at times. The scan stays on its measured fixed numbers.
 
 Not measured: a cold cache, a spinning disk, Windows.
 
+## Reading the files a query names (2026-11-20)
+
+`scour grep` against a copy of the index on a socket of its own, a needle that
+is nowhere, so every file is read to its end. Eight reading threads on NVMe
+btrfs, the page cache warm, other builds running on the machine — a floor for
+what the code costs, not a claim about a cold disk.
+
+```sh
+scour --socket … --json grep -n 1 --budget-mb 0 --seconds 300 zzqqxx_absent_needle 'kind:code'
+```
+
+| query | files | read | first run | second run |
+|---|---|---|---|---|
+| `ext:rs` | 166,589 | 1.46 GiB | 2.03 s | 0.29 s |
+| `kind:code` | 882,362 | 9.73 GiB | 6.05 s | 3.71 s |
+
+**Asking the index for candidates was the cost, not reading them.** A page of
+candidates takes the index about 60 ms whatever its size and wherever it
+starts (67 ms at offset 800,000, the same with `count_cap` of one). In pages
+of 2,048 the 905,000 files of `kind:code` took 47.1 s and 47.8 s; in pages
+that grow to 65,536 the same binary otherwise takes the times above. Not
+alternated: the two were measured one after the other.
+
+What came first: `scour grep -n 20 unsafe kind:code` answered in 0.07 s after
+344 files and 37 MiB.
+
+Partly cold, one run each: 410,174 files under 1 MiB on `/mnt/depo` (ntfs3,
+NVMe), binary ones included, 23.7 GiB in the 60 s allowed — 6,800 files and
+404 MiB a second; every file under `/usr`, 949,084 of them and 57.1 GiB, in
+68.3 s.
+
+Not measured: a cold cache alone, a spinning disk, a network share, Windows;
+whether more than eight threads, or `io_uring`, reads a solid disk faster —
+the thread counts are the walk's until that is done.
+
 ## Reproducing
 
 ```sh

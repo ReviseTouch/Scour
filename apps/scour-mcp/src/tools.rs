@@ -92,6 +92,35 @@ pub struct FacetArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GrepArgs {
+    /// What to look for in the files: text, unless `regex` or `hex` says otherwise.
+    pub pattern: String,
+    /// Which files to read, in the query language: 'ext:rs /Projeler/',
+    /// 'kind:config dm:thisweek'. Narrow it — an empty query reads everything.
+    #[serde(default)]
+    pub query: String,
+    /// The pattern is a regular expression, matched a line at a time.
+    #[serde(default)]
+    pub regex: bool,
+    /// The pattern is bytes in hex, 'DE AD BE EF'. Implies `binary`.
+    #[serde(default)]
+    pub hex: bool,
+    /// Upper and lower case differ. Default false.
+    #[serde(default)]
+    pub exact_case: bool,
+    /// Also read files that are not text — programs, libraries — and find the
+    /// text as UTF-16 in them. Default false.
+    #[serde(default)]
+    pub binary: bool,
+    /// Stop at this many files with a find. Default 20.
+    #[serde(default)]
+    pub top: Option<u32>,
+    /// Go on from here: the number a shorter answer ended with.
+    #[serde(default)]
+    pub from: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DupeArgs {
     /// Limit it to this folder. Empty means everything indexed.
     #[serde(default)]
@@ -231,6 +260,36 @@ impl Scour {
             min_size: a.min_mb.unwrap_or(1).saturating_mul(1024 * 1024),
             read_budget: a.budget_mb.unwrap_or(1024).saturating_mul(1024 * 1024),
             top: a.top.unwrap_or(20).min(200),
+        })
+    }
+
+    #[tool(
+        description = "Search inside files: which of the files a query names contain a text, \
+                       a regular expression or a run of bytes, with the line each find is on. \
+                       The index picks the files in a millisecond and only those are read, \
+                       newest first — prefer this over grep -r or rg across the filesystem, \
+                       and narrow the query ('ext:py /project/') so little is read. Bounded: \
+                       it stops at a gigabyte or ten seconds and the reply says where to go \
+                       on from. Files skipped for not being text or for being over 64 MB are \
+                       counted in the reply, so no find is not proof of absence."
+    )]
+    fn scour_grep(&self, Parameters(a): Parameters<GrepArgs>) -> Result<String, String> {
+        self.call(Request::Grep {
+            query: a.query,
+            pattern: a.pattern,
+            mode: match (a.regex, a.hex) {
+                (true, _) => scour_proto::GrepMode::Regex,
+                (_, true) => scour_proto::GrepMode::Hex,
+                _ => scour_proto::GrepMode::Text,
+            },
+            exact_case: a.exact_case,
+            binary: a.binary,
+            offset: a.from.unwrap_or(0),
+            top: a.top.unwrap_or(20).min(200),
+            hits: 3,
+            read_budget: 1 << 30,
+            max_size: 64 << 20,
+            timeout_ms: 10_000,
         })
     }
 

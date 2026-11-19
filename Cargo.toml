@@ -13,6 +13,7 @@ members = [
     "crates/scour-i18n",
     "crates/scour-preview",
     "crates/scour-dupes",
+    "crates/scour-grep",
     "crates/scour-trash",
     "crates/scour-clip",
     "crates/scour-drag",
@@ -72,6 +73,7 @@ scour-config        = { path = "crates/scour-config" }
 scour-i18n          = { path = "crates/scour-i18n" }
 scour-preview       = { path = "crates/scour-preview" }
 scour-dupes         = { path = "crates/scour-dupes" }
+scour-grep          = { path = "crates/scour-grep" }
 scour-trash         = { path = "crates/scour-trash" }
 scour-clip           = { path = "crates/scour-clip" }
 scour-drag           = { path = "crates/scour-drag" }

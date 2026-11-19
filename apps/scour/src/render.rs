@@ -193,6 +193,34 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{}{q}", label("history"));
             }
         }
+        Response::Grep(g) => {
+            print!("{}", grep_said(g, in_colour()));
+            complain(&g.misread, echo);
+            // To stderr, so a pipe receives only what was found.
+            let mut said = format!(
+                "{} {} · {} / {}{} {} · {}",
+                g.files.len(),
+                t("files with a find"),
+                g.scanned,
+                g.candidates,
+                if g.capped { "+" } else { "" },
+                t("read"),
+                format_size(g.read, BINARY),
+            );
+            for (n, what) in [
+                (g.binary, "not text"),
+                (g.too_big, "too large"),
+                (g.unreadable, "unreadable"),
+            ] {
+                if n > 0 {
+                    said.push_str(&format!(" · {n} {}", t(what)));
+                }
+            }
+            eprintln!("{said}");
+            if let Some(next) = g.next {
+                eprintln!("{} --from {next}", t("stopped early; go on with"));
+            }
+        }
         Response::Preview(l) => {
             println!(
                 "{}{}",
@@ -500,6 +528,38 @@ const BANDS: [&str; scour_core::AGE_BANDS] = [
     "this year",
     "older",
 ];
+
+/// A path, then its finds indented under it with the line each is on — or
+/// the byte offset, in a file that has no lines. The find itself is bold red
+/// in colour, as `grep` shows it.
+fn grep_said(g: &scour_proto::GrepResponse, colour: bool) -> String {
+    let mut out = String::new();
+    for file in &g.files {
+        out.push_str(&shown(&file.path));
+        out.push('\n');
+        for hit in &file.hits {
+            let place = match hit.line {
+                Some(line) => line.to_string(),
+                None => format!("@{}", hit.offset),
+            };
+            let (from, len) = (hit.at.0 as usize, hit.at.1 as usize);
+            let cut = hit.text.get(from..from + len).filter(|_| colour);
+            let text = match cut {
+                Some(found) => format!(
+                    "{}\x1b[1;31m{found}\x1b[0m{}",
+                    &hit.text[..from],
+                    &hit.text[from + len..]
+                ),
+                None => hit.text.clone(),
+            };
+            out.push_str(&format!("{place:>8}: {text}\n"));
+        }
+        if file.more {
+            out.push_str(&format!("{:>8}  …\n", ""));
+        }
+    }
+    out
+}
 
 /// Is a person watching? The picture is drawn only then. Into a pipe every
 /// command prints what it printed before, because that is what is scripted

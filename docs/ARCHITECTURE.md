@@ -100,6 +100,12 @@ correct on the day it is written.
   the worst thing a search box can do.
 - **The answer carries the offset.** A page is written at the offset the
   **answer** names, not the one that was asked for.
+- **Reading files is not the index's job.** `content:` is still unanswered by
+  the index; what is inside a file is `grep`'s question. The engine asks the
+  index which files, newest first, and hands them to `scour-grep`, which knows
+  nothing of Scour: paths and a pattern in, lines out. It asks `surefoot` what
+  each root stands on, as the walk does, and reads a spinning disk on one
+  thread in path order, a solid one on up to eight, a network one on four.
 
 ---
 

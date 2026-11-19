@@ -2389,3 +2389,18 @@ msgstr "Scour şununla yeniden açılır:"
 
 msgid "Scour opens again as: {face}"
 msgstr "Scour şununla yeniden açılır: {face}"
+
+msgid "files with a find"
+msgstr "dosyada bulundu"
+
+msgid "not text"
+msgstr "metin değil"
+
+msgid "too large"
+msgstr "çok büyük"
+
+msgid "unreadable"
+msgstr "okunamadı"
+
+msgid "stopped early; go on with"
+msgstr "erken durdu; devam için"

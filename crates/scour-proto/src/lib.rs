@@ -152,6 +152,40 @@ pub enum Request {
         #[serde(default = "default_dupe_top")]
         top: u32,
     },
+    /// Read the files a query names and say which hold `pattern`. Bounded by
+    /// `read_budget` and `timeout_ms`; an answer that stopped short says where
+    /// to go on from, in `next`.
+    Grep {
+        /// Which files, in the query language. Empty is every file indexed.
+        #[serde(default)]
+        query: String,
+        pattern: String,
+        #[serde(default)]
+        mode: GrepMode,
+        /// `a` is not `A`. Off, the four Turkish i's are one letter too.
+        #[serde(default)]
+        exact_case: bool,
+        /// Read what is not text as well, looking for UTF-16 in it too.
+        #[serde(default)]
+        binary: bool,
+        /// Files of the query, newest first, already read by an earlier call.
+        #[serde(default)]
+        offset: u32,
+        /// Stop at this many files with a find.
+        #[serde(default = "default_grep_top")]
+        top: u32,
+        /// Finds shown from one file. Zero only says there is one.
+        #[serde(default = "default_grep_hits")]
+        hits: u32,
+        /// How many bytes may be read. Zero is no limit but the time.
+        #[serde(default = "default_dupe_budget")]
+        read_budget: u64,
+        /// Larger files are not opened. Zero is no limit.
+        #[serde(default = "default_grep_max_size")]
+        max_size: u64,
+        #[serde(default = "default_grep_timeout")]
+        timeout_ms: u64,
+    },
     /// What this person's frontends remember: columns, widths, order, the queries they
     /// have run. Held by the service, the only thing all the frontends talk to.
     Settings {},
@@ -271,6 +305,87 @@ fn default_dupe_budget() -> u64 {
 }
 fn default_dupe_top() -> u32 {
     50
+}
+fn default_grep_top() -> u32 {
+    50
+}
+fn default_grep_hits() -> u32 {
+    3
+}
+/// 64 MiB: a megabyte holds 98% of the files this was written against, and
+/// the 1,717 over a hundred hold nearly half the bytes.
+fn default_grep_max_size() -> u64 {
+    64 << 20
+}
+fn default_grep_timeout() -> u64 {
+    10_000
+}
+
+/// How a [`Request::Grep`] pattern is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrepMode {
+    /// The characters as typed.
+    #[default]
+    Text,
+    /// A regular expression over each line.
+    Regex,
+    /// Pairs of hex digits: those bytes, wherever they are.
+    Hex,
+}
+
+/// What reading the files found, and how far it got.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct GrepResponse {
+    /// Files with a find, newest first.
+    pub files: Vec<GrepFile>,
+    /// Entries the query names, a floor when `capped`.
+    pub candidates: u64,
+    #[serde(default)]
+    pub capped: bool,
+    /// Files opened and read by this call.
+    pub scanned: u64,
+    /// Bytes read by this call.
+    pub read: u64,
+    /// Left unread for not being text. Said, so that silence is not "no".
+    #[serde(default)]
+    pub binary: u64,
+    /// Left unread for being over `max_size`.
+    #[serde(default)]
+    pub too_big: u64,
+    /// Could not be opened or read: gone, or not this person's to read.
+    #[serde(default)]
+    pub unreadable: u64,
+    /// The `offset` to ask again with. None: every file the query names was read.
+    #[serde(default)]
+    pub next: Option<u32>,
+    /// Terms of `query` the parser could not read as written.
+    #[serde(default)]
+    pub misread: Vec<Span>,
+    #[serde(default)]
+    pub took_us: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrepFile {
+    pub path: String,
+    pub hits: Vec<GrepHit>,
+    /// There are finds past the ones shown.
+    #[serde(default)]
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrepHit {
+    /// Counted from one. None in a file that has no lines.
+    #[serde(default)]
+    pub line: Option<u64>,
+    /// Bytes from the start of the file.
+    pub offset: u64,
+    /// The line, or the bytes around the find, safe to print.
+    pub text: String,
+    /// Where in `text` the find is: byte offset, then length.
+    pub at: (u32, u32),
 }
 
 /// Files that are, or may be, the same file. A wire type of its own so that
@@ -418,6 +533,7 @@ pub enum Response {
         /// answer that looks complete gets files deleted on a guess.
         unconfirmed: u64,
     },
+    Grep(GrepResponse),
     /// A piece of an export: CSV text, whole lines, so a relay never buffers a partial
     /// one. The first piece carries the byte-order mark and the heading row. Sized by
     /// the service — see `EXPORT_CHUNK` in `scour-engine` — not one row a frame.
@@ -525,6 +641,7 @@ impl Request {
             | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
+            | Request::Grep { .. }
             | Request::Settings {}
             | Request::Explain { .. }
             | Request::Sources {}
@@ -555,6 +672,7 @@ impl Request {
             | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
+            | Request::Grep { .. }
             | Request::Settings {}
             | Request::SetSettings { .. }
             | Request::Explain { .. }
@@ -589,6 +707,7 @@ impl Request {
             Request::Thumbnails { .. } => "thumbnails",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",
+            Request::Grep { .. } => "grep",
             Request::Settings {} => "settings",
             Request::SetSettings { .. } => "set-settings",
             Request::Explain { .. } => "explain",
@@ -718,6 +837,19 @@ mod tests {
                 query: "size:abc".into(),
                 cursor: Some(4),
             },
+            Request::Grep {
+                query: "ext:rs".into(),
+                pattern: "unsafe".into(),
+                mode: GrepMode::Regex,
+                exact_case: true,
+                binary: false,
+                offset: 64,
+                top: 5,
+                hits: 1,
+                read_budget: 1 << 20,
+                max_size: 0,
+                timeout_ms: 500,
+            },
             Request::Volumes {},
             Request::Postpone {
                 volume: "uuid:abc".into(),
@@ -797,6 +929,21 @@ mod tests {
                 folders: vec![],
             },
             Response::Facets(FacetResponse::default()),
+            Response::Grep(GrepResponse {
+                files: vec![GrepFile {
+                    path: "/a/b.rs".into(),
+                    hits: vec![GrepHit {
+                        line: Some(3),
+                        offset: 40,
+                        text: "unsafe {".into(),
+                        at: (0, 6),
+                    }],
+                    more: true,
+                }],
+                candidates: 9,
+                next: Some(4),
+                ..GrepResponse::default()
+            }),
             Response::Tree {
                 root: TreeNode {
                     name: "u".into(),

@@ -5046,6 +5046,7 @@ dependencies = [
  "scour-core",
  "scour-dupes",
  "scour-export",
+ "scour-grep",
  "scour-index-native",
  "scour-mock",
  "scour-query",
@@ -5057,6 +5058,17 @@ name = "scour-export"
 version = "0.2.0-alpha.12"
 dependencies = [
  "scour-core",
+]
+
+[[package]]
+name = "scour-grep"
+version = "0.2.0-alpha.12"
+dependencies = [
+ "libc",
+ "memchr",
+ "regex",
+ "surefoot",
+ "tempfile",
 ]
 
 [[package]]
@@ -5370,6 +5382,7 @@ dependencies = [
  "scour-core",
  "scour-dupes",
  "scour-engine",
+ "scour-grep",
  "scour-hotkey",
  "scour-icon",
  "scour-index-native",
