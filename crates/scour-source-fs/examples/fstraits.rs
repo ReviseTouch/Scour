@@ -1,4 +1,6 @@
 //! What each path's filesystem promises. `cargo run -p scour-source-fs --example fstraits -- <paths…>`
+use scour_source_fs::fs::MediumExt;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let paths = if args.is_empty() {

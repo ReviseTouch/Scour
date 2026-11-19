@@ -101,10 +101,10 @@ clap        = { version = "4", features = ["derive"] }
 ratatui     = "0.30.2"
 
 
-# Filesystem traversal and watching. `ignore` is BurntSushi's parallel walker
-# from ripgrep; it is portable and already understands ignore files, which the
-# scanner has to respect anyway.
-ignore      = "0.4"
+# Filesystem traversal and watching. `surefoot` is this project's own walker,
+# kept in a repository of its own so that other programs can use it: it asks
+# what the roots are standing on and reads through the open directory.
+surefoot    = { path = "../surefoot" }
 notify      = "8"
 notify-debouncer-full = "0.7"
 
@@ -123,8 +123,8 @@ rustc-hash  = "2"
 memmap2     = "0.9"
 memchr      = "2"
 
-# The engine behind it — regex-automata and regex-syntax — is already in the
-# tree through globset, so this is a facade rather than a dependency.
+# For `regex:` terms in a query. Its engine, regex-automata and regex-syntax,
+# is here for this alone since the walker stopped being `ignore`.
 regex       = "1"
 
 # One writer per index directory. The lock has to be released by the *kernel*

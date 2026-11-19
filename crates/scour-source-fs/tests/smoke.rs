@@ -569,7 +569,7 @@ fn a_root_that_cannot_be_read_is_reported_as_such() {
 /// thread the entries are handed to; `Medium::threads` carries the measurements.
 #[test]
 fn the_device_decides_how_many_threads_are_worth_using() {
-    use scour_source_fs::fs::Medium;
+    use scour_source_fs::fs::{Medium, MediumExt};
     assert_eq!(Medium::Spinning.threads(20), 1);
     assert_eq!(Medium::Solid.threads(20), 2);
     assert_eq!(Medium::Memory.threads(20), 2);
@@ -584,7 +584,7 @@ fn the_device_decides_how_many_threads_are_worth_using() {
 /// A network mount batches harder, because every reaction costs a round trip.
 #[test]
 fn a_network_mount_lets_events_settle_for_longer() {
-    use scour_source_fs::fs::Medium;
+    use scour_source_fs::fs::{Medium, MediumExt};
     assert!(Medium::Network.debounce_ms() > Medium::Spinning.debounce_ms());
     assert!(Medium::Spinning.debounce_ms() > Medium::Solid.debounce_ms());
 }

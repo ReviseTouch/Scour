@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ignore::WalkBuilder;
 use scour_core::{Change, ChangeSink, Result, ScanOptions, SourceId, WatchHandle};
 
 use crate::path;
@@ -400,128 +399,64 @@ const DIR_IN_FLIGHT: usize = 64;
 /// because the walker has just read that directory and can name it cheaply.
 type Walked = (DirKey, Option<DirKey>, String);
 
-/// One walker thread's outgoing buffer of directories.
-struct DirBatch {
-    tx: crossbeam_channel::Sender<Vec<Walked>>,
-    buf: Vec<Walked>,
-}
-
-impl DirBatch {
-    fn new(tx: crossbeam_channel::Sender<Vec<Walked>>) -> DirBatch {
-        DirBatch {
-            tx,
-            buf: Vec::with_capacity(DIR_BATCH),
-        }
-    }
-
-    /// Returns false once the far end is gone, which is a walk to abandon.
-    fn push(&mut self, key: DirKey, parent: Option<DirKey>, path: String) -> bool {
-        self.buf.push((key, parent, path));
-        self.buf.len() < DIR_BATCH || self.flush()
-    }
-
-    fn flush(&mut self) -> bool {
-        if self.buf.is_empty() {
-            return true;
-        }
-        let full = std::mem::replace(&mut self.buf, Vec::with_capacity(DIR_BATCH));
-        self.tx.send(full).is_ok()
-    }
-}
-
-/// The tail of a thread's last batch.
-/// `ignore` gives a visitor no way to say it has finished but does drop the box
-/// when the thread ends; a directory missing from the map resolves none of its events.
-impl Drop for DirBatch {
-    fn drop(&mut self) {
-        self.flush();
-    }
-}
-
 impl DirMap {
     /// Walk the roots and record what each directory is.
     /// The mark predates this process, so what happens during the walk is queued
     /// behind it. `/mnt/depo`'s 152,530 directories: 1.03 s → 0.19 s warm on eight.
     fn build(roots: &[std::path::PathBuf], rules: &Rules, threads: usize) -> DirMap {
         let mut map = DirMap::default();
-        let Some((first, rest)) = roots.split_first() else {
+        if roots.is_empty() {
             return map;
-        };
-
-        let mut builder = WalkBuilder::new(first);
-        for r in rest {
-            builder.add(r);
         }
-        builder
-            // `ignore` as a concurrent directory walk and nothing else, exactly as in the scan.
-            .standard_filters(false)
-            // No name is filtered here: a change under `~/.config` is a change.
-            .hidden(false)
-            // The map must agree with the walk about links, or an event resolves to a
-            // path no scan ever produces.
-            .follow_links(false)
-            .same_file_system(false)
-            .threads(threads);
+
+        // No name is filtered here: a change under `~/.config` is a change.
+        // And links are not followed: the map must agree with the walk about
+        // them, or an event resolves to a path no scan ever produces.
+        let walk = surefoot::Walk::new(roots.iter().cloned())
+            .threads(surefoot::Threads::Fixed(threads))
+            // The same nice value and idle I/O class the scan's walkers take,
+            // and neither costs anything on an idle machine.
+            .priority(surefoot::Priority::Background)
+            .batch(DIR_BATCH)
+            .queue(DIR_IN_FLIGHT);
 
         // Drained while the walk runs: holding a quarter of a million `String`s once
         // more in a joining vector would put a 13 MB peak straight back.
-        let (tx, rx) = crossbeam_channel::bounded::<Vec<Walked>>(DIR_IN_FLIGHT);
-        std::thread::scope(|scope| {
-            let walker_tx = tx.clone();
-            scope.spawn(move || {
-                builder.build_parallel().run(|| {
-                    let mut batch = DirBatch::new(walker_tx.clone());
-                    // On the first entry rather than here, because `ignore` builds the visitor
-                    // on the thread that spawns the workers.
-                    let mut polite = false;
-                    Box::new(move |result| {
-                        if !polite {
-                            polite = true;
-                            // The same nice value and idle I/O class the scan's walkers take, and
-                            // neither costs anything on an idle machine.
-                            crate::scan::stand_aside();
-                        }
-                        let Ok(de) = result else {
-                            // A directory that cannot be read resolves no events.
-                            return ignore::WalkState::Continue;
-                        };
-                        if !de.file_type().is_some_and(|t| t.is_dir()) {
-                            return ignore::WalkState::Continue;
-                        }
-                        let text = path::from_path(de.path());
-                        if rules.excludes_path(&text) {
-                            // Pruned, not merely skipped: resolving what the scan discards is how a
-                            // `cargo test` under a build tree took a query from 8 ms to 13 seconds.
-                            return ignore::WalkState::Skip;
-                        }
-                        let Ok(md) = de.metadata() else {
-                            return ignore::WalkState::Continue;
-                        };
-                        use std::os::unix::fs::MetadataExt;
-                        let key = DirKey {
-                            dev: md.dev(),
-                            ino: md.ino(),
-                        };
-                        // Named here rather than at the far end: this thread has just read the
-                        // parent, and the far end would pay every `statx` in series.
-                        let parent = de.path().parent().and_then(dir_key);
-                        if batch.push(key, parent, text) {
-                            ignore::WalkState::Continue
-                        } else {
-                            ignore::WalkState::Quit
-                        }
-                    })
-                });
-            });
-            // The senders go when the visitors do, which is what ends the loop below,
-            // so this clone has to go with them. Each tail is flushed by [`DirBatch`]'s `Drop`.
-            drop(tx);
-            for batch in rx {
-                for (key, parent, text) in batch {
-                    map.insert_key(key, parent, &text);
+        walk.run(
+            |found| -> surefoot::Visit<Walked> {
+                use surefoot::Visit;
+                if !found.is_dir() {
+                    return Visit::Pass;
                 }
-            }
-        });
+                let text = path::from_path(found.path());
+                if rules.excludes_path(&text) {
+                    // Pruned, not merely skipped: resolving what the scan discards is how a
+                    // `cargo test` under a build tree took a query from 8 ms to 13 seconds.
+                    return Visit::Prune;
+                }
+                let Ok(md) = found.metadata() else {
+                    return Visit::Pass;
+                };
+                use std::os::unix::fs::MetadataExt;
+                let key = DirKey {
+                    dev: md.dev(),
+                    ino: md.ino(),
+                };
+                // Named here rather than at the far end: this thread has just read the
+                // parent, and the far end would pay every `statx` in series.
+                let parent = found.path().parent().and_then(dir_key);
+                Visit::Take((key, parent, text))
+            },
+            |event| {
+                // A directory that cannot be read resolves no events.
+                if let surefoot::Event::Batch(batch) = event {
+                    for (key, parent, text) in batch {
+                        map.insert_key(key, parent, &text);
+                    }
+                }
+                std::ops::ControlFlow::Continue(())
+            },
+        );
         // Grown by doubling while the walk ran; the room left over is a quarter
         // of the list, kept for the few directories made after it.
         map.nodes.shrink_to_fit();
@@ -2402,6 +2337,7 @@ mod tests {
         }
 
         let source = FsSource::new(SourceId(0), "probe", roots.clone());
+        use crate::fs::MediumExt;
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);

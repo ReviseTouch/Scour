@@ -1,127 +1,45 @@
 //! Walking the tree.
 
 use std::io::Read;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use ignore::{WalkBuilder, WalkState};
 use scour_core::{
     Caps, ChangeSink, Entry, EntryId, EntrySink, Error, Meta, Result, ScanOptions, ScanReport,
     Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
+use surefoot::{Event, Priority, Threads, Visit, Walk};
 
-use crate::fs::FsTraits;
+use crate::fs::{FsTraits, MediumExt};
 use crate::path;
 use crate::rules::Rules;
 
-/// What a walker thread sends back.
-enum Msg {
-    /// A thread's worth of entries, not one entry. See [`Batch`].
-    Entries(Vec<Entry>),
-    /// Where the walk could not look, and why.
-    Unreadable(String, String),
-}
-
 /// How many entries a walker thread collects before handing them over.
 /// Too small and the channel is busy again; too large and the walk stutters.
+/// One send an entry made the channel the scan: 8,231,481 voluntary context
+/// switches for 870,000 entries, against 44,238 for the same walk batched.
 const BATCH: usize = 512;
 
 /// How many batches may be in the air; bound × batch is what the channel holds.
 const IN_FLIGHT: usize = 64;
 
-/// Step out of the way of everything else on the machine.
-/// Per thread, so a query typed during the first scan is still answered at full
-/// speed. A cold NTFS walk here is 61 s of device time.
-pub(crate) fn stand_aside() {
-    // SAFETY: ordinary syscalls on the calling thread, and failing to become
-    // polite is not failing to scan. Linux only: `ioprio_set` has no portable name.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        // Ten *more*: `nice` adds where `setpriority` sets, and the unit may say `Nice=15`.
-        libc::nice(10);
-        // IOPRIO_CLASS_IDLE (3) << IOPRIO_CLASS_SHIFT (13). The disk is the half that matters.
-        const IOPRIO_WHO_PROCESS: libc::c_int = 1;
-        const IOPRIO_CLASS_IDLE: libc::c_int = 3;
-        libc::syscall(
-            libc::SYS_ioprio_set,
-            IOPRIO_WHO_PROCESS,
-            0,
-            IOPRIO_CLASS_IDLE << 13,
-        );
-    }
-}
-
-/// One walker thread's outgoing buffer.
-/// One send an entry made the channel the scan: 8,231,481 voluntary context switches
-/// for 870,000 entries, against 44,238 for the same walk batched.
-struct Batch {
-    tx: crossbeam_channel::Sender<Msg>,
-    buf: Vec<Entry>,
-}
-
-impl Batch {
-    fn new(tx: crossbeam_channel::Sender<Msg>) -> Batch {
-        Batch {
-            tx,
-            buf: Vec::with_capacity(BATCH),
-        }
-    }
-
-    /// Returns false once the far end is gone, which is a walk to abandon.
-    fn push(&mut self, e: Entry) -> bool {
-        self.buf.push(e);
-        self.buf.len() < BATCH || self.flush()
-    }
-
-    fn flush(&mut self) -> bool {
-        if self.buf.is_empty() {
-            return true;
-        }
-        let full = std::mem::replace(&mut self.buf, Vec::with_capacity(BATCH));
-        self.tx.send(Msg::Entries(full)).is_ok()
-    }
-}
-
-/// The tail of a thread's last batch.
-/// `ignore` gives a visitor no way to say it has finished but does drop the box
-/// when the thread ends; without this a walk loses up to [`BATCH`] a thread.
-impl Drop for Batch {
-    fn drop(&mut self) {
-        self.flush();
-    }
-}
-
 /// How many unreadable subtrees are worth remembering by name.
 /// Past this the root is not vouched for: a walk blind in thousands of places proves nothing.
 const MAX_BLIND: usize = 4_096;
 
-/// Where the walker's error happened.
-/// The path is wrapped: `WithDepth` around `WithPath` around the `io::Error`.
-fn where_of(e: &ignore::Error) -> Option<&std::path::Path> {
-    match e {
-        ignore::Error::WithPath { path, .. } => Some(path),
-        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
-            where_of(err)
-        }
-        ignore::Error::Loop { child, .. } => Some(child),
-        ignore::Error::Partial(all) => all.iter().find_map(where_of),
-        _ => None,
-    }
-}
-
 /// Whether a second walk would find this place the same: refused by permission, or
 /// gone between being listed and being read. Anything else — an I/O error, a full
-/// file table — may be over by the next walk, and is what a retry is for.
-fn is_lasting(e: &ignore::Error) -> bool {
-    e.io_error().is_some_and(|io| {
-        matches!(
-            io.kind(),
-            std::io::ErrorKind::PermissionDenied
-                | std::io::ErrorKind::NotFound
-                | std::io::ErrorKind::NotADirectory
-        )
-    })
+/// file table, a link that loops — may be over by the next walk, and is what a
+/// retry is for.
+fn is_lasting(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::NotADirectory
+    )
 }
 
 /// Which filesystem a path is on, or nothing if it cannot be asked.
@@ -408,9 +326,9 @@ impl Source for FsSource {
             Some(s) => vec![path::to_path(s)],
             None => self.roots.clone(),
         };
-        let Some((first, rest)) = roots.split_first() else {
+        if roots.is_empty() {
             return Ok(ScanReport::default());
-        };
+        }
         // This thread looks at the roots before and after the walk: as the
         // same person the walker threads read them as, or a share the walk
         // read whole is judged unreadable (PC2, 17 November).
@@ -420,7 +338,9 @@ impl Source for FsSource {
         // is minutes. Only where this process may open the volume — the
         // service — and only for a whole walk; anything that goes wrong walks.
         #[cfg(windows)]
-        if opts.subtree.is_none() && rest.is_empty() {
+        if opts.subtree.is_none()
+            && let [first] = roots.as_slice()
+        {
             let root = path::from_path(first);
             if let Some(volume) = crate::mft::open(&root) {
                 match crate::mft::read(&volume, self.id, &root, &rules, opts.hidden, sink) {
@@ -462,192 +382,113 @@ impl Source for FsSource {
             })
             .collect();
 
-        // `ignore`'s parallel walker with its opinions off: an index must hold what
-        // `.gitignore` skips.
-        let mut blind: Vec<String> = Vec::new();
-        let mut too_blind = false;
-        let mut builder = WalkBuilder::new(first);
-        for r in rest {
-            builder.add(r);
-        }
-        builder
-            .standard_filters(false)
-            .hidden(!opts.hidden)
+        // Zero means "decide for me", and the device decides: on a spinning
+        // disk every extra thread is another seek. A borrowed identity reads
+        // on one thread, which is right for a share anyway.
+        let threads = if self.walk_as.is_some() {
+            1
+        } else if opts.threads == 0 {
+            self.medium.threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4),
+            )
+        } else {
+            opts.threads
+        };
+        let mut walk = Walk::new(roots.iter().cloned())
+            .threads(Threads::Fixed(threads))
+            .medium(self.medium)
+            // Per thread, so a query typed during the first scan is still
+            // answered at full speed. A cold NTFS walk here is 61 s of device time.
+            .priority(Priority::Background)
+            .skip_hidden(!opts.hidden)
             .follow_links(opts.follow_symlinks)
-            .same_file_system(false)
-            // Zero means "decide for me", and the device decides: on a spinning
-            // disk every extra thread is another seek.
-            .threads(if opts.threads == 0 {
-                self.medium.threads(
-                    std::thread::available_parallelism()
-                        .map(|n| n.get())
-                        .unwrap_or(4),
-                )
-            } else {
-                opts.threads
-            });
+            .batch(BATCH)
+            .queue(IN_FLIGHT);
+        if let Some(walk_as) = self.walk_as.clone() {
+            // Taken on each reading thread before its first read: as SYSTEM a
+            // worker found a share's root unreadable and walked nothing
+            // (PC2, 17 November).
+            walk = walk.on_thread(move || Box::new((walk_as.0)()) as Box<dyn std::any::Any>);
+        }
 
         let src_id = self.id;
         let excluded = AtomicU64::new(0);
-        let unreadable = AtomicU64::new(0);
-        let lasting = AtomicU64::new(0);
-        let entries = AtomicU64::new(0);
-        let dirs = AtomicU64::new(0);
-        let cancelled = AtomicBool::new(false);
         let want_meta = !opts.skip_metadata;
         let real_modes = self.traits.real_modes;
+        let rules = &rules;
 
-        // The walker runs on its own threads and the sink is drained on this one,
-        // over a bounded channel: backpressure free, and no `Send` bound on the trait.
-        let (tx, rx) = crossbeam_channel::bounded::<Msg>(IN_FLIGHT);
+        let (mut entries, mut dirs, mut unreadable, mut lasting) = (0u64, 0u64, 0u64, 0u64);
+        let mut blind: Vec<String> = Vec::new();
+        let mut too_blind = false;
 
-        let walk_as = self.walk_as.as_ref();
-        std::thread::scope(|scope| {
-            let walker_tx = tx.clone();
-            let (rules, excluded, unreadable, lasting, entries, dirs, cancelled) = (
-                &rules,
-                &excluded,
-                &unreadable,
-                &lasting,
-                &entries,
-                &dirs,
-                &cancelled,
-            );
-            let walker = scope.spawn(move || {
-                // This thread looks at the roots before any worker does: as
-                // SYSTEM it found a share's root unreadable and walked nothing.
-                let _as = walk_as.and_then(|w| (w.0)());
-                let visitor = || {
-                    let tx = walker_tx.clone();
-                    let mut batch = Batch::new(tx.clone());
-                    // On the first entry, not here: `ignore` builds the visitor on the
-                    // spawning thread.
-                    let mut polite = false;
-                    let mut held: Option<Box<dyn std::any::Any + Send>> = None;
-                    let visit: Box<
-                        dyn FnMut(std::result::Result<ignore::DirEntry, ignore::Error>) -> WalkState
-                            + Send
-                            + '_,
-                    > = Box::new(move |result| {
-                        if !polite {
-                            polite = true;
-                            stand_aside();
-                            held = walk_as.and_then(|w| (w.0)());
-                        }
-                        let _ = &held;
-                        if cancelled.load(Ordering::Relaxed) {
-                            return WalkState::Quit;
-                        }
-                        let de = match result {
-                            Ok(de) => de,
-                            Err(e) => {
-                                // Reported, not swallowed.
-                                unreadable.fetch_add(1, Ordering::Relaxed);
-                                if is_lasting(&e) {
-                                    lasting.fetch_add(1, Ordering::Relaxed);
-                                }
-                                // The path, not only the count: an unreadable
-                                // directory still holds its files and the sweep
-                                // must spare it — see `ScanReport::blind`.
-                                let where_ = where_of(&e).map(path::from_path).unwrap_or_default();
-                                let _ = tx.send(Msg::Unreadable(where_, e.to_string()));
-                                return WalkState::Continue;
-                            }
-                        };
-                        let is_dir = de.file_type().is_some_and(|t| t.is_dir());
-                        let normalised = path::from_path(de.path());
-                        // The same encoding as the path, so rules compare like with like.
-                        let name = path::from_path(std::path::Path::new(de.file_name()));
+        // The visitor runs on the reading threads and the sink is drained on
+        // this one, over a bounded queue: backpressure free, and no `Send`
+        // bound on the trait.
+        let report = walk.run(
+            |found| {
+                let is_dir = found.is_dir();
+                let normalised = path::from_path(found.path());
+                // The same encoding as the path, so rules compare like with like.
+                let name = path::from_path(std::path::Path::new(found.file_name()));
 
-                        if !rules.is_empty() && rules.excludes(&normalised, &name, is_dir) {
-                            excluded.fetch_add(1, Ordering::Relaxed);
-                            // Prune — unless an allowed subtree lives below it.
-                            return if is_dir && !rules.may_contain_allowed(&normalised) {
-                                WalkState::Skip
-                            } else {
-                                WalkState::Continue
-                            };
-                        }
+                if !rules.is_empty() && rules.excludes(&normalised, &name, is_dir) {
+                    excluded.fetch_add(1, Ordering::Relaxed);
+                    // Prune — unless an allowed subtree lives below it.
+                    return if is_dir && !rules.may_contain_allowed(&normalised) {
+                        Visit::Prune
+                    } else {
+                        Visit::Pass
+                    };
+                }
 
-                        // Skipping the per-entry `stat` is a usable index in a minute
-                        // rather than ten; sizes and dates arrive in a second pass.
-                        let md = if want_meta { de.metadata().ok() } else { None };
-                        entries.fetch_add(1, Ordering::Relaxed);
-                        if is_dir {
-                            dirs.fetch_add(1, Ordering::Relaxed);
-                        }
-                        if !batch.push(entry_of(
-                            src_id,
-                            &normalised,
-                            md.as_ref(),
-                            is_dir,
-                            real_modes,
-                        )) {
-                            return WalkState::Quit;
-                        }
-                        WalkState::Continue
-                    });
-                    visit
-                };
-                if walk_as.is_some() {
-                    // A borrowed identity: on this thread alone, in order. The
-                    // parallel walker's threads read a directory before they
-                    // call the visitor, so a worker's first read was always
-                    // as SYSTEM — and the first read is the share's root
-                    // (PC2, 17 November). One thread is right for a share
-                    // anyway. Pruned here, since this walker cannot be told
-                    // to skip from inside the loop.
-                    let pruned = rules.clone();
-                    builder.filter_entry(move |de| {
-                        if pruned.is_empty() || !de.file_type().is_some_and(|t| t.is_dir()) {
-                            return true;
-                        }
-                        let at = path::from_path(de.path());
-                        let name = path::from_path(std::path::Path::new(de.file_name()));
-                        !(pruned.excludes(&at, &name, true) && !pruned.may_contain_allowed(&at))
-                    });
-                    let mut visit = visitor();
-                    for entry in builder.build() {
-                        if matches!(visit(entry), WalkState::Quit) {
-                            break;
-                        }
-                    }
+                // Skipping the per-entry `stat` is a usable index in a minute
+                // rather than ten; sizes and dates arrive in a second pass.
+                let md = if want_meta {
+                    found.metadata().ok()
                 } else {
-                    builder.build_parallel().run(visitor);
-                }
-            });
-            // The walker holds clones of the sender; this one has to go.
-            drop(tx);
-
-            let mut stopping = false;
-            for msg in rx {
-                if stopping {
-                    // Keep draining, so no walker thread is left on a full channel.
-                    continue;
-                }
-                match msg {
-                    Msg::Entries(batch) => {
+                    None
+                };
+                Visit::Take(entry_of(
+                    src_id,
+                    &normalised,
+                    md.as_ref(),
+                    is_dir,
+                    real_modes,
+                ))
+            },
+            |event| {
+                match event {
+                    Event::Batch(batch) => {
                         for e in batch {
+                            entries += 1;
+                            dirs += u64::from(e.is_dir);
                             if sink.push(e).is_stop() {
-                                cancelled.store(true, Ordering::Relaxed);
-                                stopping = true;
-                                break;
+                                return ControlFlow::Break(());
                             }
                         }
                     }
-                    Msg::Unreadable(path, detail) => {
+                    // Reported, not swallowed — and the path, not only the
+                    // count: an unreadable directory still holds its files and
+                    // the sweep must spare it — see `ScanReport::blind`.
+                    Event::Unreadable(refusal) => {
+                        unreadable += 1;
+                        lasting += u64::from(is_lasting(&refusal.error));
+                        let at = path::from_path(&refusal.path);
                         // Past the ceiling the root stops being vouched for at all.
-                        if !path.is_empty() && blind.len() < MAX_BLIND {
-                            blind.push(path.clone());
-                        } else if !path.is_empty() {
+                        if blind.len() < MAX_BLIND {
+                            blind.push(at.clone());
+                        } else {
                             too_blind = true;
                         }
-                        sink.unreadable(&path, &Error::Io { detail });
+                        let detail = format!("{}: {}", refusal.path.display(), refusal.error);
+                        sink.unreadable(&at, &Error::Io { detail });
                     }
                 }
-            }
-            let _ = walker.join();
-        });
+                ControlFlow::Continue(())
+            },
+        );
 
         // Asked again: a device number that is not the one the walk started on means
         // the walk was about something else.
@@ -658,13 +499,13 @@ impl Source for FsSource {
             .collect();
 
         Ok(ScanReport {
-            entries: entries.load(Ordering::Relaxed),
-            dirs: dirs.load(Ordering::Relaxed),
+            entries,
+            dirs,
             excluded: excluded.load(Ordering::Relaxed),
-            unreadable: unreadable.load(Ordering::Relaxed),
-            lasting: lasting.load(Ordering::Relaxed),
+            unreadable,
+            lasting,
             took_ms: started.elapsed().as_millis() as u64,
-            cancelled: cancelled.load(Ordering::Relaxed),
+            cancelled: report.cancelled,
             vouched,
             blind,
         })
@@ -745,30 +586,19 @@ mod tests {
     use super::is_lasting;
     use std::io::{Error, ErrorKind};
 
-    fn at_path(err: Error) -> ignore::Error {
-        ignore::Error::WithPath {
-            path: "/k/d".into(),
-            err: Box::new(ignore::Error::Io(err)),
-        }
-    }
-
     #[test]
     fn a_refusal_or_a_vanished_directory_is_lasting_and_nothing_else_is() {
-        assert!(is_lasting(&at_path(ErrorKind::PermissionDenied.into())));
-        assert!(is_lasting(&at_path(ErrorKind::NotFound.into())));
-        assert!(is_lasting(&at_path(ErrorKind::NotADirectory.into())));
+        assert!(is_lasting(&ErrorKind::PermissionDenied.into()));
+        assert!(is_lasting(&ErrorKind::NotFound.into()));
+        assert!(is_lasting(&ErrorKind::NotADirectory.into()));
         // What a retry is for.
-        assert!(!is_lasting(&at_path(ErrorKind::TimedOut.into())));
+        assert!(!is_lasting(&ErrorKind::TimedOut.into()));
         #[cfg(unix)]
         {
-            assert!(!is_lasting(&at_path(Error::from_raw_os_error(libc::EIO))));
-            assert!(!is_lasting(&at_path(Error::from_raw_os_error(
-                libc::EMFILE
-            ))));
+            assert!(!is_lasting(&Error::from_raw_os_error(libc::EIO)));
+            assert!(!is_lasting(&Error::from_raw_os_error(libc::EMFILE)));
         }
-        assert!(!is_lasting(&ignore::Error::Loop {
-            ancestor: "/k".into(),
-            child: "/k/d".into(),
-        }));
+        // How the walk reports a link that leads back above itself.
+        assert!(!is_lasting(&Error::other("a loop")));
     }
 }
