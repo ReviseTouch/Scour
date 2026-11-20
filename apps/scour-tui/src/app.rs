@@ -192,6 +192,8 @@ pub enum Want {
     },
     /// Look at these paths again, now: this program moved them.
     Recheck(Vec<String>),
+    /// A `content:` query's reading goes on, or with `true` begins again.
+    Reread(bool),
     /// Ask what the walk skips.
     Rules,
     /// Ask for everything the report shows, about this folder.
@@ -279,6 +281,10 @@ pub struct App {
     /// What the last answer cost, for the meter.
     pub took_us: u64,
     pub rows_visited: u64,
+    /// How far a `content:` query's reading has got; none on any other query.
+    pub reading: Option<scour_core::Reading>,
+    /// Answers landed, which is what turns the mark beside a reading.
+    pub turn: usize,
     /// True while the count is a floor rather than a total.
     pub capped: bool,
     /// Something to say instead of the counts.
@@ -447,6 +453,8 @@ impl Default for App {
             kept_order: (SortKey::Modified, true),
             took_us: 0,
             rows_visited: 0,
+            reading: None,
+            turn: 0,
             capped: false,
             trouble: String::new(),
             picked: std::collections::BTreeMap::new(),
@@ -741,6 +749,8 @@ impl App {
         }
         self.took_us = reply.took_us;
         self.rows_visited = reply.rows_visited;
+        self.reading = reply.reading;
+        self.turn = self.turn.wrapping_add(1);
         self.capped = reply.capped;
         self.trouble.clear();
         let page = Pages::<Hit>::page_of(offset as usize);
@@ -748,7 +758,12 @@ impl App {
         // A page short of both what was asked for and the largest page seen is
         // the end: both, because a new query's first page is short on purpose.
         let total = self.pages.length(page, arrived, limit as usize);
-        let total = total.max(reply.total as usize);
+        // A reading's own count is the newest there is, and may be shorter
+        // than the last: read again, it begins from nothing.
+        let total = match reply.reading {
+            Some(_) => reply.total as usize,
+            None => total.max(reply.total as usize),
+        };
         let first = reply
             .hits
             .first()

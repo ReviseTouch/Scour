@@ -219,6 +219,10 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         // The settings, on the key nothing else here uses; the old keys open
         // them on their own section.
         KeyCode::F(5) => return app.open_settings(Panel::General),
+        // A `content:` query's reading: on from where it stopped, and again.
+        KeyCode::F(6) | KeyCode::F(7) if app.reading.is_some() => {
+            return Want::Reread(key.code == KeyCode::F(7));
+        }
         // Asked when it opens: this panel is the only thing changing them.
         KeyCode::Char('k') if ctrl => return app.open_settings(Panel::Rules),
         KeyCode::Char('l') if ctrl => return app.open_settings(Panel::General),

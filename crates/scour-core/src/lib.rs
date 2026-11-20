@@ -18,10 +18,10 @@ pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
     EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Group, Hit,
     IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Owner, PAGE_ROWS, Page,
-    PrefixSet, Result, Role, ScanOptions, ScanReport, ScanRequest, SearchRequest, SearchResponse,
-    Similar, SortKey, SourceId, SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode,
-    UsageRequest, UsageResponse, Walked, ext_of, ext_str, kind_of, mistakes_allowed, mode_string,
-    owner_name, path_digest, runs_when_opened, under,
+    PrefixSet, Reading, ReadingStage, Result, Role, ScanOptions, ScanReport, ScanRequest,
+    SearchRequest, SearchResponse, Similar, SortKey, SourceId, SourceInfo, SourceKind, Span,
+    Status, Subtree, TimeField, TreeNode, UsageRequest, UsageResponse, Walked, ext_of, ext_str,
+    kind_of, mistakes_allowed, mode_string, owner_name, path_digest, runs_when_opened, under,
 };
 
 /// Write a line to stderr, carrying on if the write fails.

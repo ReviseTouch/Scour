@@ -310,6 +310,19 @@
   .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
   .meter .ms  { color: var(--ink-3); font-weight: 600; }
   .meter .sep { color: var(--line); }
+  .meter #rows.reading { color: var(--q-key); font-weight: 600; }
+  /* The one thing on the line that turns: files are being read. */
+  .meter #rows.reading::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    vertical-align: -1px; border: 2px solid var(--line); border-top-color: var(--q-key);
+    border-radius: 50%; animation: reading-turns .8s linear infinite;
+  }
+  @keyframes reading-turns { to { transform: rotate(360deg); } }
+  .meter .reread {
+    flex: none; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px;
+    background: none; color: var(--ink-2); font: inherit; cursor: pointer;
+  }
+  .meter .reread:hover { color: var(--ink); border-color: var(--ink-3); }
   /* What the meter has shed for want of width — see `fitMeter`. */
   .meter[data-drop~="note"] #path-note, .meter[data-drop~="note"] #path-note-sep,
   .meter[data-drop~="rows"] #rows, .meter[data-drop~="rows"] #rows-sep,
@@ -1749,6 +1762,9 @@
       <span class="ms" id="ms">—</span>
       <span class="sep" id="rows-sep">·</span>
       <span id="rows"></span>
+      <!-- A `content:` query's reading: on from where it stopped, or again. -->
+      <button type="button" class="reread" id="read-on" data-t="go on" hidden></button>
+      <button type="button" class="reread" id="read-again" data-t="read again" hidden></button>
       <!-- Switching a skip rule off starts a walk; this is what then moves. -->
       <span class="sep" id="scanning-sep" hidden>·</span>
       <span id="scanning" class="scanning" hidden></span>
@@ -3669,7 +3685,8 @@
           keepWindow(start, request.rev);
           /* Only when the engine reached the end of the matching set: a capped
            * number snaps the scrollbar back to 1.000 on every change. */
-          if (!res.capped && (!LIST.exact || LIST.total !== res.total)) {
+          if (res.reading) tellReading(res);
+          else if (!res.capped && (!LIST.exact || LIST.total !== res.total)) {
             setTotal(res.total, true);
           }
           if (refreshing) now = Math.floor(Date.now() / 1000);  /* "5 min ago" moves */
@@ -4016,6 +4033,7 @@
         LIST.pending.clear();
         /* Before `putRows`: `clearRows` has just emptied `LIST.at`. */
         if (!keepExact) setTotal(res.total, !res.capped);
+        READING = res.reading || null;
         offerSimilar(res.total === 0 ? res.similar : null);
         LIST.since = Date.now();
         /* The first window, and the first word on what the rest would cost. */
@@ -4064,13 +4082,43 @@
 
   /* Kept, not only printed: a language switch rewrites both halves. */
   let LAST_COST = null;
+  /* How far a `content:` query's reading has got; null on any other query. */
+  let READING = null;
+  const READ_SAID = {
+    running: "reading files: {n}",
+    paused: "stopped half-way: {n} files read",
+    done: "{n} files read",
+  };
   function drawCost(us, rowsVisited) {
     if (us !== undefined) LAST_COST = { us, rowsVisited };
     if (!LAST_COST) return;
     /* From `Intl`: a hand-written comma prints `0,29 ms` beside `4,864 rows`. */
     document.getElementById("ms").textContent = MS.format(LAST_COST.us / 1000) + " ms";
-    document.getElementById("rows").textContent =
-      T("{n} rows read", { n: fmt(LAST_COST.rowsVisited) });
+    const rows = document.getElementById("rows");
+    rows.textContent = READING
+      ? T(READ_SAID[READING.stage], { n: fmt(READING.files) })
+      : T("{n} rows read", { n: fmt(LAST_COST.rowsVisited) });
+    rows.classList.toggle("reading", !!READING && READING.stage === "running");
+    document.getElementById("read-on").hidden = !READING || READING.stage !== "paused";
+    document.getElementById("read-again").hidden = !READING;
+  }
+  /* A window of a query that reads files: the list is as long as what has
+     been found, and that is the newest word on it. */
+  function tellReading(res) {
+    READING = res.reading;
+    const done = res.reading.stage === "done";
+    if (LIST.total !== res.total || LIST.exact !== done) setTotal(res.total, done);
+    const shown = done ? fmt(res.total) : fmt(res.total) + "+";
+    document.getElementById("count").textContent = withIndexTotal(shown);
+    drawCost();
+  }
+  for (const [id, from] of [["read-on", ""], ["read-again", "start"]]) {
+    document.getElementById(id).addEventListener("click", () => {
+      fetch(`/api/reread?${new URLSearchParams({ from, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      }).catch((e) => console.error("scour: the reading was not told:", e));
+    });
   }
 
   /* Three views of the same rows, so one walk. They wait for the typing to

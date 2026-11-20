@@ -254,6 +254,12 @@ pub enum Request {
         #[serde(default = "default_wait_ms")]
         timeout_ms: u32,
     },
+    /// The reading of the last `content:` query: go on from where it stopped,
+    /// or with `from_start` forget it and read the files again.
+    Reread {
+        #[serde(default)]
+        from_start: bool,
+    },
     /// Walk a source again. `path` narrows it to one subtree.
     Rescan {
         #[serde(default)]
@@ -648,6 +654,7 @@ impl Request {
             | Request::Status {}
             | Request::Stats {}
             | Request::Await { .. }
+            | Request::Reread { .. }
             | Request::Syntax {} => false,
         }
     }
@@ -681,6 +688,7 @@ impl Request {
             | Request::Stats {}
             | Request::Await { .. }
             | Request::Thumbnails { .. }
+            | Request::Reread { .. }
             | Request::Rescan { .. }
             | Request::Maintain { .. }
             | Request::Reset {}
@@ -715,6 +723,7 @@ impl Request {
             Request::Status {} => "status",
             Request::Stats {} => "stats",
             Request::Await { .. } => "await",
+            Request::Reread { .. } => "reread",
             Request::Rescan { .. } => "rescan",
             Request::Recheck { .. } => "recheck",
             Request::Maintain { .. } => "maintain",
@@ -761,6 +770,7 @@ mod tests {
             Request::Status {},
             Request::Stats {},
             Request::Syntax {},
+            Request::Reread { from_start: true },
             Request::Await {
                 since: 0,
                 timeout_ms: 1,
@@ -861,6 +871,7 @@ mod tests {
             Request::Sources {},
             Request::Status {},
             Request::Stats {},
+            Request::Reread { from_start: false },
             Request::Await {
                 since: 9,
                 timeout_ms: 1_000,

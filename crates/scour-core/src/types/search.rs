@@ -249,6 +249,28 @@ pub struct SearchResponse {
     /// typing mistakes. Only when it found nothing, and only when asked to offer.
     #[serde(default)]
     pub similar: Option<Similar>,
+    /// How far the reading has got, on a query with `content:` in it.
+    #[serde(default)]
+    pub reading: Option<Reading>,
+}
+
+/// Files read for a `content:` query so far, and whether more will be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reading {
+    /// Files opened and read.
+    pub files: u64,
+    pub stage: ReadingStage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingStage {
+    /// Files are being read now.
+    Running,
+    /// Stopped before the last candidate: nobody had asked for more.
+    Paused,
+    /// Every file the rest of the query names was read.
+    Done,
 }
 
 /// Files a query did not find and nearly did. See [`SearchResponse::similar`].

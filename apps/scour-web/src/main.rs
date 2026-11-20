@@ -379,6 +379,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/thumb"
         || req.path == "/api/volume"
         || req.path == "/api/rescan"
+        || req.path == "/api/reread"
         || req.path == "/api/index-do"
         || (req.path == "/api/settings" && req.param("set").is_some())
         // Reading the desktop's key is a `GET`; writing one carries a body.
@@ -415,6 +416,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/volumes" => disks::api_volumes(&mut stream, client),
         "/api/volume" => disks::api_volume(&mut stream, client, &req),
         "/api/rescan" => disks::api_rescan(&mut stream, client, &req),
+        "/api/reread" => disks::api_reread(&mut stream, client, &req),
         "/api/index" => disks::api_index(&mut stream, client),
         "/api/index-do" => disks::api_index_do(&mut stream, client, &req, doing.launch),
         "/api/rules" => api_rules(&mut stream, client),
@@ -579,6 +581,8 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     "capped": r.capped,
                     "took_us": r.took_us,
                     "rows_visited": r.rows_visited,
+                    // Only on a query that reads files: how far that has got.
+                    "reading": r.reading,
                     // Only on a search that found nothing: what it nearly found.
                     "similar": r.similar,
                 }),

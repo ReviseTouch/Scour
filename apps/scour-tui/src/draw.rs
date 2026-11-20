@@ -1157,6 +1157,42 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             Style::new().fg(theme.key()),
         ));
     }
+    // A query that reads files: how far, and the keys that move it.
+    if let Some(reading) = app.reading {
+        use scour_core::ReadingStage::{Done, Paused, Running};
+        let said = app
+            .say(scour_ui::reading_said(
+                reading.stage == Running,
+                reading.stage == Done,
+            ))
+            .replace("{n}", &format::grouped(reading.files, mark.0));
+        let keys = match reading.stage {
+            Running => String::new(),
+            Paused => format!(
+                "  F6 {} · F7 {}",
+                app.say(scour_ui::READ_ON),
+                app.say(scour_ui::READ_AGAIN)
+            ),
+            Done => format!("  F7 {}", app.say(scour_ui::READ_AGAIN)),
+        };
+        parts.push(Span::styled("  ·  ", dim));
+        if reading.stage == Running {
+            const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            parts.push(Span::styled(
+                format!("{} ", FRAMES[app.turn % FRAMES.len()]),
+                Style::new().fg(theme.key()),
+            ));
+        }
+        parts.push(Span::styled(
+            said,
+            if reading.stage == Running {
+                Style::new().fg(theme.key())
+            } else {
+                dim
+            },
+        ));
+        parts.push(Span::styled(keys, dim));
+    }
     // What the index is doing, beside what the search found: switching a skip
     // rule off starts a walk, and nothing else on this line moves while it runs.
     if app.unwritten > 0 {

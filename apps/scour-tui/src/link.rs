@@ -31,6 +31,7 @@ pub enum Deed {
 pub enum Ask {
     /// Look at these paths again, now — this program moved them.
     Recheck(Vec<String>),
+    Reread(bool),
     Search {
         /// Which keystroke this belongs to. An answer to an older one is
         /// dropped, or the list goes backwards under somebody's hands.
@@ -58,19 +59,33 @@ pub enum Ask {
     /// The same file, several times over.
     Dupes,
     /// What a folder weighs, and which of its children weigh the most.
-    Usage { path: String },
+    Usage {
+        path: String,
+    },
     /// What the weighed folder is made of, by kind. Counted over the report's
     /// scope rather than over the search, so the two questions never mix.
-    Kinds { path: String },
+    Kinds {
+        path: String,
+    },
     /// What can be shown of a file, and the head of it when that is text.
-    Preview { path: String },
+    Preview {
+        path: String,
+    },
     /// The query read back: which run of it is what. Sent beside every search;
     /// it costs the parser, not the index.
-    Explain { generation: u64, query: String },
+    Explain {
+        generation: u64,
+        query: String,
+    },
     /// Exactly how many match, once the typing has stopped.
-    Count { generation: u64, query: String },
+    Count {
+        generation: u64,
+        query: String,
+    },
     /// Wait until the index moves — a long poll, on a lane of its own.
-    Await { since: u64 },
+    Await {
+        since: u64,
+    },
     /// What the walk skips, in three groups, and which of them are off.
     Rules,
     /// Switch a rule off or on: the whole list, replaced.
@@ -78,11 +93,17 @@ pub enum Ask {
     /// The disks, and what each is.
     Volumes,
     /// An answer about a disk: `index`, `leave` or `later`.
-    Disk { volume: String, what: String },
+    Disk {
+        volume: String,
+        what: String,
+    },
     /// Remember something small — the language, the face.
     Remember(scour_settings::Change),
     /// The whole result as a spreadsheet, written where the caller says.
-    Export { query: String, to: String },
+    Export {
+        query: String,
+        to: String,
+    },
     /// The desktop's key. Reaches no service — but travels this lane even so:
     /// binding runs `gsettings`, and a process must not start on the draw path.
     Hotkey(Deed),
@@ -516,6 +537,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 },
             },
             Ask::Recheck(paths) => Request::Recheck { paths },
+            Ask::Reread(from_start) => Request::Reread { from_start },
             Ask::OffRules(off) => Request::SetSettings {
                 change: scour_settings::Change {
                     exclude_off: Some(off),

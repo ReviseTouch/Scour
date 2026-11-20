@@ -2404,3 +2404,18 @@ msgstr "okunamadı"
 
 msgid "stopped early; go on with"
 msgstr "erken durdu; devam için"
+
+msgid "reading files: {n}"
+msgstr "dosyalar okunuyor: {n}"
+
+msgid "stopped half-way: {n} files read"
+msgstr "yarıda durdu: {n} dosya okundu"
+
+msgid "{n} files read"
+msgstr "{n} dosya okundu"
+
+msgid "go on"
+msgstr "devam et"
+
+msgid "read again"
+msgstr "sıfırla"

@@ -29,6 +29,24 @@ pub const UNWRITTEN: &str = "the index cannot be saved — is the disk full?";
 /// week of ordinary use took ordering by path from 1.9 ms to 21.5, and one
 /// rebuild put it back. Names the command, not only the condition.
 pub const REBUILD_ADVISED: &str = "`scour maintain rebuild` would speed searches up";
+/// A `content:` query, on the status line: its files being read, the reading
+/// stopped before the last of them, and all of them read.
+pub const READING: &str = "reading files: {n}";
+pub const READ_HALF: &str = "stopped half-way: {n} files read";
+pub const READ_ALL: &str = "{n} files read";
+/// The two things to press there: read on from where it stopped, and forget
+/// what was found and read the files again.
+pub const READ_ON: &str = "go on";
+pub const READ_AGAIN: &str = "read again";
+
+/// Which of the three sentences a reading is at.
+pub fn reading_said(running: bool, done: bool) -> &'static str {
+    match (running, done) {
+        (true, _) => READING,
+        (false, true) => READ_ALL,
+        (false, false) => READ_HALF,
+    }
+}
 pub mod menu;
 pub mod query;
 

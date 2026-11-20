@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 use scour_core::{
-    Ast, Error, Hit, Index, Match, Page, Result, SearchRequest, SearchResponse, SortKey,
+    Ast, Error, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest, SearchResponse,
+    SortKey,
 };
 use scour_grep::{Budget, Enter, Ground, Needle, Options, Outcome, Pattern, Scanner};
 
@@ -18,6 +19,8 @@ const WAIT: Duration = Duration::from_millis(300);
 /// How long the reading goes on for rows nobody has asked to see yet. Asking
 /// for a later page, or the query again after another, allows as long again.
 const GRANT: Duration = Duration::from_secs(15);
+/// How long it goes on when somebody says to go on, and for every row kept.
+const SAID: Duration = Duration::from_secs(60);
 /// Rows wanted by a query that has only been counted.
 const AT_FIRST: usize = 200;
 /// Kept at most: a hundred bytes a row, and nobody scrolls this far.
@@ -203,8 +206,51 @@ impl Contents {
             capped: !state.done,
             rows_visited: state.scanned,
             rows_built: (to - from) as u64,
+            reading: Some(scour_core::Reading {
+                files: state.scanned,
+                stage: if state.running {
+                    ReadingStage::Running
+                } else if state.done {
+                    ReadingStage::Done
+                } else {
+                    ReadingStage::Paused
+                },
+            }),
             ..SearchResponse::default()
         })
+    }
+
+    /// How many files of this query the reading has found, and whether that
+    /// is a floor. Nothing yet, and a floor, when it is not the query read.
+    pub(crate) fn found(&self, ast: &Ast) -> (u64, bool) {
+        let current = self.current.lock();
+        match current.as_ref().filter(|r| r.ast == *ast) {
+            Some(reading) => {
+                let state = reading.state.lock();
+                (state.hits.len() as u64, !state.done)
+            }
+            None => (0, true),
+        }
+    }
+
+    /// Read on from where the reading stopped, or forget it and begin again.
+    /// Nothing is read here: the next page asked for does that. False when
+    /// there is no reading to speak of.
+    pub(crate) fn again(&self, from_start: bool) -> bool {
+        let mut current = self.current.lock();
+        let Some(reading) = current.as_ref() else {
+            return false;
+        };
+        if from_start {
+            reading.budget.stop();
+            *current = None;
+        } else {
+            let mut state = reading.state.lock();
+            (state.want, state.until) = (KEPT, Some(Instant::now() + SAID));
+        }
+        // The revision is about to move, and not because the index did.
+        self.told.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
     /// The reading thread: candidates a page at a time, in the order asked
@@ -274,7 +320,9 @@ impl Contents {
                     .extend(holding.into_iter().map(|row| batch[row].clone()));
                 drop(state);
                 reading.grew.notify_all();
-                if grew && told.elapsed() >= TOLD_EVERY {
+                // Without a find too, though seldom: the count of files read
+                // is on the status line, and one that stands still looks stuck.
+                if told.elapsed() >= if grew { TOLD_EVERY } else { TOLD_EVERY * 4 } {
                     told = Instant::now();
                     self.told.fetch_add(1, Ordering::Relaxed);
                     (lent.touched)();

@@ -472,6 +472,10 @@ fn run(
             })
         }
         Request::Stats {} => Response::Stats(engine.stats()?),
+        Request::Reread { from_start } => {
+            engine.reread(from_start);
+            Response::Accepted
+        }
         Request::Rescan { path } => {
             engine.rescan(path)?;
             Response::Accepted

@@ -88,6 +88,10 @@ pub enum Ask {
     Rescan {
         path: String,
     },
+    /// A `content:` query's reading goes on, or begins again.
+    Reread {
+        from_start: bool,
+    },
     /// Where the index is and what it holds, for the Index section.
     IndexFacts,
     /// Build the ordered part of the index again from the rows it has.
@@ -260,6 +264,7 @@ impl Freshness {
             | Ask::Await { .. }
             | Ask::Remember { .. }
             | Ask::Rescan { .. }
+            | Ask::Reread { .. }
             | Ask::IndexFacts
             | Ask::Reorganize
             | Ask::Reset
@@ -341,6 +346,7 @@ impl Link {
             | Ask::Status
             | Ask::Remember { .. }
             | Ask::Rescan { .. }
+            | Ask::Reread { .. }
             | Ask::IndexFacts
             | Ask::Reorganize
             | Ask::Reset
@@ -568,6 +574,7 @@ fn spawn_lane(
                 ),
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
                 Ask::Rescan { path } => (0, Request::Rescan { path: Some(path) }, Lane::Places),
+                Ask::Reread { from_start } => (0, Request::Reread { from_start }, Lane::Places),
                 Ask::IndexFacts => (0, Request::Stats {}, Lane::Places),
                 Ask::Reorganize => (
                     0,

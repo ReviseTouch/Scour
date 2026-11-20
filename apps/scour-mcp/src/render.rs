@@ -573,6 +573,7 @@ mod tests {
             rows_built: 0,
             misread: Vec::new(),
             similar: None,
+            reading: None,
         }));
         assert!(out.contains("1 shown of 500"), "{out}");
         assert!(out.contains("narrow the query"), "{out}");

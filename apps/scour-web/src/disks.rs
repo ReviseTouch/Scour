@@ -42,6 +42,18 @@ pub fn api_rescan(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req)
     }
 }
 
+/// A `content:` query's reading goes on, or with `from=start` begins again.
+pub fn api_reread(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let request = Request::Reread {
+        from_start: req.param("from") == Some("start"),
+    };
+    match call(client, request) {
+        Ok(Response::Accepted) => http::json(stream, &serde_json::json!({ "ok": true })),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 pub fn api_volume(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let volume = req.param("id").unwrap_or_default().to_owned();
     let request = match req.param("do") {

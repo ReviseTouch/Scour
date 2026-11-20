@@ -957,6 +957,7 @@ impl Engine {
             // Stamped by `search` for every path alike.
             misread: Vec::new(),
             similar: None,
+            reading: None,
         })
     }
 
@@ -1019,12 +1020,19 @@ impl Engine {
     /// Every facet question about one query, answered from one walk.
     pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
         self.shared.reading();
+        let ast = self.shared.ast(query);
+        let reads = crate::content::plan(&ast).is_some();
         // Of the candidates, when the query reads contents: what kinds hold
         // the text is not known until every one of them is read.
         let mut res = self.shared.index.facets(&FacetRequest {
-            query: crate::content::without(self.shared.ast(query)),
+            query: crate::content::without(ast.clone()),
             by,
         })?;
+        // But the total is the list's length in every face, so it is the
+        // reading's: the files found, not the files there are to read.
+        if reads {
+            (res.total, res.capped) = self.shared.contents.found(&ast);
+        }
         res.misread = misread(query);
         Ok(res)
     }
@@ -1118,6 +1126,14 @@ impl Engine {
     /// service reads as the person it serves. See [`scour_grep::Enter`].
     pub fn read_files_as(&self, enter: scour_grep::Enter) {
         *self.shared.enter.write() = Some(enter);
+    }
+
+    /// The reading of a `content:` query goes on from where it stopped, or
+    /// begins again: every face waiting is told to ask once more.
+    pub fn reread(&self, from_start: bool) {
+        if self.shared.contents.again(from_start) {
+            self.shared.touched();
+        }
     }
 
     /// What a reading of file contents borrows from here.

@@ -378,6 +378,8 @@ fn show_picks(
     w.set_picked_n(n.into());
     w.set_picked_post(post.into());
     w.set_pick_copy(t(cat, "Copy the paths"));
+    w.set_read_on(t(cat, scour_ui::READ_ON));
+    w.set_read_again(t(cat, scour_ui::READ_AGAIN));
     w.set_pick_drop(t(cat, "Clear the selection"));
     w.set_pick_asking(asking);
     let folders = folders_of(picks).len();
@@ -1532,6 +1534,10 @@ fn main() -> Result<()> {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
         let folders = Rc::clone(&folders);
+        {
+            let link = Rc::clone(&link);
+            window.on_reread(move |from_start| link.send(Ask::Reread { from_start }));
+        }
         {
             let link = Rc::clone(&link);
             window.on_rescan_root(move |path| {
@@ -4461,6 +4467,15 @@ fn apply(
             .flatten();
             let any_fresh = {
                 let mut s = state.borrow_mut();
+                // A reading's answer is its own count, and the newest there is:
+                // neither the rail nor an earlier count knows how far it has got.
+                if r.reading.is_some() {
+                    s.exact_count = Some(ExactCount {
+                        query_revision: s.query_revision,
+                        total: r.total,
+                        capped: r.capped,
+                    });
+                }
                 let counted = s
                     .exact_count
                     .map(|c| c.total)
@@ -4609,8 +4624,22 @@ fn apply(
                     grouped(indexed),
                 ),
                 format!("{:.2} ms", r.took_us as f64 / 1000.0),
-                format!("{} {}", grouped(r.rows_visited), cat.get("rows read")),
+                match r.reading {
+                    Some(reading) => cat
+                        .get(scour_ui::reading_said(
+                            reading.stage == scour_core::ReadingStage::Running,
+                            reading.stage == scour_core::ReadingStage::Done,
+                        ))
+                        .replace("{n}", &grouped(reading.files)),
+                    None => format!("{} {}", grouped(r.rows_visited), cat.get("rows read")),
+                },
             );
+            w.set_reading_stage(match r.reading.map(|reading| reading.stage) {
+                None => 0,
+                Some(scour_core::ReadingStage::Running) => 1,
+                Some(scour_core::ReadingStage::Paused) => 2,
+                Some(scour_core::ReadingStage::Done) => 3,
+            });
         }
         // The exact total the interactive search did not stop to compute: it lands
         // after the list, so the meter tightens from `1000+` to a number.

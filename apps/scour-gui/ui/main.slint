@@ -1275,6 +1275,13 @@ export component MainWindow inherits Window {
     in property <string> meter-count;
     in property <string> meter-ms;
     in property <string> meter-rows;
+    /// A `content:` query's reading: 0 none, 1 running, 2 stopped half-way,
+    /// 3 every file read.
+    in property <int> reading-stage;
+    in property <string> read-on;
+    in property <string> read-again;
+    /// `true` forgets what was found and reads the files again.
+    callback reread(bool);
     /// How far the walk has got, while the index is being built. Drawn beside
     /// the counts, where somebody waiting is already looking.
     in property <string> scanning;
@@ -4556,11 +4563,43 @@ export component MainWindow inherits Window {
                         font-size: 11.5px;
                         vertical-alignment: center;
                     }
+                    // Turning while files are read, and only then: a timer
+                    // that ran always would be a window that never rests.
+                    if root.reading-stage == 1: Text {
+                        property <int> turn;
+                        property <[string]> frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                        text: self.frames[self.turn];
+                        color: Theme.q-key;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        Timer {
+                            interval: 90ms;
+                            running: true;
+                            triggered => { parent.turn = Math.mod(parent.turn + 1, 10); }
+                        }
+                    }
                     Text {
                         text: root.meter-rows;
-                        color: Theme.ink-3;
+                        color: root.reading-stage == 1 ? Theme.q-key : Theme.ink-3;
                         font-size: 11.5px;
+                        font-weight: root.reading-stage == 1 ? 600 : 400;
                         vertical-alignment: center;
+                    }
+                    if root.reading-stage == 2: VerticalLayout {
+                        alignment: center;
+                        Push {
+                            label: root.read-on;
+                            plain: true;
+                            clicked => { root.reread(false); }
+                        }
+                    }
+                    if root.reading-stage > 0: VerticalLayout {
+                        alignment: center;
+                        Push {
+                            label: root.read-again;
+                            plain: true;
+                            clicked => { root.reread(true); }
+                        }
                     }
                     Text {
                         text: root.scanning == "" ? "" : "·";

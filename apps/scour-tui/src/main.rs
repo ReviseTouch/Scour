@@ -674,6 +674,7 @@ fn act(want: Want, link: &Link) {
         }
         // On the slow lane: a keystroke must not queue behind a stat of paths.
         Want::Recheck(paths) => link.later(Ask::Recheck(paths)),
+        Want::Reread(from_start) => link.later(Ask::Reread(from_start)),
         Want::Report(path) => {
             link.later(Ask::Stats);
             // Weighed first and the duplicates last: finding those reads files,

@@ -80,6 +80,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, which face opens, and how words are read: `accents_exact`, `typos` (`""` offers, `always`, `off`). A change names only what it touches |
 | `await` | | `since`, `timeout_ms` → a `Status` when the index would answer differently. One blocked thread instead of a poll; also what tells the service somebody is looking |
 | `thumbnails` | ✓ | starts the desktop's own thumbnailers, at most four at once — bounded here because the bound is the machine's |
+| `reread` | | `from_start` → the reading of the last `content:` query goes on from where it stopped, or is forgotten and begun again; a `search` of such a query carries `reading` (`files`, and `stage`: `running` / `paused` / `done`) |
 | `rescan`, `maintain`, `shutdown` | ✓ | `maintain` is `flush` / `idle` / `compact` / `rebuild` |
 
 `took_us` covers parsing, cache lookup, the index call and folder-size

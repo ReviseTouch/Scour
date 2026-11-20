@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use scour_core::{
     Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, FacetBy, Maintenance, Page,
-    ScanOptions, ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
+    ReadingStage, ScanOptions, ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind,
+    WatchHandle,
 };
 use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
@@ -2428,5 +2429,26 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
         .engine
         .facets("ext:rs content:iğne", vec![FacetBy::Ext { top: 5 }])
         .expect("facets");
-    assert_eq!(kinds.total, 30);
+    // Not the query being read: nothing is known of it, and that is a floor.
+    assert_eq!((kinds.total, kinds.capped), (0, true));
+    settle(&f, |_| !ask("ext:rs content:iğne").capped);
+    let kinds = f
+        .engine
+        .facets("ext:rs content:iğne", vec![FacetBy::Ext { top: 5 }])
+        .expect("facets");
+    // The kinds are the candidates'; the total is the list's length.
+    assert_eq!((kinds.total, kinds.capped), (10, false));
+    assert_eq!(kinds.groups[0].facets[0].count, 30);
+
+    // The reading says how far it got, and is forgotten when told to be.
+    let read = ask("ext:rs content:iğne").reading.expect("a reading");
+    assert_eq!((read.files, read.stage), (30, ReadingStage::Done));
+    assert_eq!(ask("ext:rs").reading, None);
+    std::fs::write(files.path().join("f54.rs"), "nothing here\n").expect("write");
+    assert_eq!(ask("ext:rs content:iğne").total, 10, "kept, not read again");
+    let before = f.engine.status().revision;
+    f.engine.reread(true);
+    assert_ne!(f.engine.status().revision, before, "nobody was told");
+    settle(&f, |_| !ask("ext:rs content:iğne").capped);
+    assert_eq!(ask("ext:rs content:iğne").total, 9);
 }
