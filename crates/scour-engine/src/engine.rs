@@ -227,6 +227,10 @@ struct Shared {
     /// How many of them there are. Read by the commit clock: zero means nobody is
     /// looking and the batching stands.
     watchers: AtomicU32,
+    /// The reading behind a query with `content:` in it.
+    contents: Arc<crate::content::Contents>,
+    /// What a thread reading files does first. See [`Engine::read_files_as`].
+    enter: RwLock<Option<scour_grep::Enter>>,
 }
 
 /// What the preparing thread is asked to have ready.
@@ -427,6 +431,8 @@ impl Engine {
             ),
             wake_owed: AtomicBool::new(false),
             watchers: AtomicU32::new(0),
+            contents: Arc::default(),
+            enter: RwLock::new(None),
             read_as: AtomicU8::new(reading.bits()),
             similar: Mutex::new(None),
             prepared: RwLock::new(None),
@@ -859,6 +865,12 @@ impl Engine {
             ..page
         };
         let started = Instant::now();
+        let ast = self.shared.ast(query);
+        if let Some(plan) = crate::content::plan(&ast) {
+            let lent = self.lent();
+            let contents = &self.shared.contents;
+            return contents.page(lent, ast, plan, sort, descending, page);
+        }
         if let Some(res) = self.sliced(query, sort, descending, &page, started) {
             return Ok(res);
         }
@@ -1007,8 +1019,10 @@ impl Engine {
     /// Every facet question about one query, answered from one walk.
     pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
         self.shared.reading();
+        // Of the candidates, when the query reads contents: what kinds hold
+        // the text is not known until every one of them is read.
         let mut res = self.shared.index.facets(&FacetRequest {
-            query: self.shared.ast(query),
+            query: crate::content::without(self.shared.ast(query)),
             by,
         })?;
         res.misread = misread(query);
@@ -1100,6 +1114,32 @@ impl Engine {
         ))
     }
 
+    /// The identity every thread that reads file contents takes first: a
+    /// service reads as the person it serves. See [`scour_grep::Enter`].
+    pub fn read_files_as(&self, enter: scour_grep::Enter) {
+        *self.shared.enter.write() = Some(enter);
+    }
+
+    /// What a reading of file contents borrows from here.
+    fn lent(&self) -> crate::content::Lent {
+        let shared = Arc::clone(&self.shared);
+        crate::content::Lent {
+            index: Arc::clone(&self.shared.index),
+            roots: self.roots(),
+            enter: self.shared.enter.read().clone(),
+            revision: self.shared.revision.load(Ordering::Acquire),
+            touched: Arc::new(move || shared.touched()),
+        }
+    }
+
+    fn roots(&self) -> Vec<String> {
+        self.shared
+            .sources
+            .iter()
+            .flat_map(|source| source.describe().roots)
+            .collect()
+    }
+
     /// Which of the files a query names hold a pattern, read now and newest
     /// first. `enter` is what each reading thread does first: see
     /// [`scour_grep::Enter`].
@@ -1110,21 +1150,10 @@ impl Engine {
         enter: Option<scour_grep::Enter>,
     ) -> Result<crate::Grepped> {
         self.shared.reading();
-        let roots: Vec<String> = self
-            .shared
-            .sources
-            .iter()
-            .flat_map(|source| source.describe().roots)
-            .collect();
-        let index = self.shared.index.as_ref();
-        crate::grep::run(
-            index,
-            &roots,
-            self.shared.ast(query),
-            CANDIDATES,
-            ask,
-            enter,
-        )
+        let (index, roots) = (self.shared.index.as_ref(), self.roots());
+        // What reads the rest of the query reads this one too, `content:` aside.
+        let ast = crate::content::without(self.shared.ast(query));
+        crate::grep::run(index, &roots, ast, CANDIDATES, ask, enter)
     }
 
     pub fn stats(&self) -> Result<IndexStats> {

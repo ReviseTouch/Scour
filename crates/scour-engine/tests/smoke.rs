@@ -2345,3 +2345,80 @@ fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
         Err(Error::QuerySyntax { .. })
     ));
 }
+
+/// `content:` in an ordinary search: the rest of the query names the files,
+/// they are read off to the side, and the page fills as the reading goes —
+/// the revision moving each time, so a waiting face asks again.
+#[test]
+fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
+    let files = tempfile::tempdir().expect("temp");
+    let entries: Vec<Entry> = (0..60)
+        .map(|i| {
+            let ext = if i % 2 == 0 { "rs" } else { "txt" };
+            let path = files.path().join(format!("f{i:02}.{ext}"));
+            let body = if i % 3 == 0 {
+                "alpha İĞNE beta\n"
+            } else {
+                "alpha beta\n"
+            };
+            std::fs::write(&path, body).expect("write");
+            let mut entry = row(&path.to_string_lossy());
+            entry.meta.size = body.len() as i64;
+            entry.meta.mtime = 1_000 + i as i64;
+            entry
+        })
+        .collect();
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let source = MemSource::new(entries);
+    let opts = EngineOptions {
+        commit_interval: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let f = Fixture {
+        engine: Engine::new(vec![source.clone()], index, opts),
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| count(f, "ext:rs") == 30);
+
+    let ask = |q: &str| {
+        f.engine
+            .search(q, SortKey::Modified, true, Page::new(0, 200))
+            .expect("search")
+    };
+    let before = f.engine.status().revision;
+    // Even files are `.rs`, every third holds the needle: 0, 6, 12 … 54.
+    settle(&f, |_| !ask("ext:rs content:iğne").capped);
+    let found = ask("ext:rs content:iğne");
+    assert_eq!((found.total, found.capped), (10, false));
+    assert!(
+        found.hits[0].path.ends_with("f54.rs"),
+        "{}",
+        found.hits[0].path
+    );
+    assert!(found.hits.iter().all(|hit| hit.path.ends_with(".rs")));
+    assert_ne!(
+        f.engine.status().revision,
+        before,
+        "nobody was told it grew"
+    );
+
+    // Two needles: a file must hold both.
+    settle(&f, |_| !ask("content:iğne content:alpha ext:txt").capped);
+    assert_eq!(ask("content:iğne content:alpha ext:txt").total, 10);
+    settle(&f, |_| !ask("content:iğne content:gamma").capped);
+    assert_eq!(ask("content:iğne content:gamma").total, 0);
+
+    // What the reading cannot answer is still refused, and facets are the candidates'.
+    let refused = f
+        .engine
+        .search("!content:iğne", SortKey::Modified, true, Page::new(0, 10));
+    assert_eq!(refused.unwrap_err(), Error::ContentNotIndexed);
+    let kinds = f
+        .engine
+        .facets("ext:rs content:iğne", vec![FacetBy::Ext { top: 5 }])
+        .expect("facets");
+    assert_eq!(kinds.total, 30);
+}

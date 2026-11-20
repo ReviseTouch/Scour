@@ -173,8 +173,8 @@ msgstr "tam tarama"
 msgid "paths built"
 msgstr "yol kuruldu"
 
-msgid "needs document contents, which this index may not have"
-msgstr "belge içeriği gerekiyor, bu dizinde olmayabilir"
+msgid "reads the files the rest of the query names, so it takes longer"
+msgstr "sorgunun kalanının adını verdiği dosyaları okur, bu yüzden daha uzun sürer"
 
 msgid "Start `scourd` first — the MCP server is a client of it, like this one."
 msgstr "Önce `scourd` başlatın — MCP sunucusu, bunun gibi, onun istemcisidir."
@@ -893,8 +893,8 @@ msgstr "ne zaman oluşturuldu"
 msgid "when it was last read"
 msgstr "en son ne zaman okundu"
 
-msgid "the document's contents contain this (if contents are indexed)"
-msgstr "belge içeriği bunu içeriyor (içerik indeksliyse)"
+msgid "the file's contents hold this text; the files are read to find out"
+msgstr "dosyanın içinde bu metin geçiyor; öğrenmek için dosyalar okunur"
 
 # The singular of the three rungs whose noun is a whole word, and of the status
 # line's source count. Turkish spells both the same — a noun after a numeral

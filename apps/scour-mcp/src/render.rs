@@ -325,7 +325,7 @@ pub fn human(r: &Response) -> String {
         } => {
             let mut out = format!("The query means: {description}");
             if *needs_content {
-                out.push_str("\nIt asks about document contents, which this index may not hold.");
+                out.push_str("\nIt reads file contents: the files the rest of the query names are opened, so narrow it.");
             }
             out
         }

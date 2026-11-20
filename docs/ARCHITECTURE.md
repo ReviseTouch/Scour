@@ -100,12 +100,21 @@ correct on the day it is written.
   the worst thing a search box can do.
 - **The answer carries the offset.** A page is written at the offset the
   **answer** names, not the one that was asked for.
-- **Reading files is not the index's job.** `content:` is still unanswered by
-  the index; what is inside a file is `grep`'s question. The engine asks the
-  index which files, newest first, and hands them to `scour-grep`, which knows
-  nothing of Scour: paths and a pattern in, lines out. It asks `surefoot` what
-  each root stands on, as the walk does, and reads a spinning disk on one
-  thread in path order, a solid one on up to eight, a network one on four.
+- **Reading files is not the index's job.** What is inside a file is read
+  when it is asked for. The engine asks the index which files, in the order
+  wanted, and hands them to `scour-grep`, which knows nothing of Scour: paths
+  and a pattern in, lines out. It asks `surefoot` what each root stands on, as
+  the walk does, and reads a spinning disk on one thread in path order, a
+  solid one on up to eight, a network one on four.
+- **`content:` is a search like any other, answered as it is read.** A term
+  standing alone is taken out of the query; the rest names the candidates and
+  a thread of its own reads them (`scour-engine/src/content.rs`). A page is
+  what has been found so far, `capped` until every candidate is read, and the
+  revision moves as rows arrive — so a face waiting on `await` asks again and
+  its list grows, with nothing in the face written for it. The reading goes
+  on for fifteen seconds past what was asked for, and again when a later page
+  is. `!content:` and `a | content:` are still refused; the rail counts the
+  candidates, not the finds.
 
 ---
 

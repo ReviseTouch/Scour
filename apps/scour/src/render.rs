@@ -373,7 +373,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             if *needs_content {
                 println!(
                     "({})",
-                    t("needs document contents, which this index may not have")
+                    t("reads the files the rest of the query names, so it takes longer")
                 );
             }
         }
@@ -1607,7 +1607,7 @@ mod tests {
             "was searched for as text",
             "a rebuild would speed searches up",
             "The index is empty. Run `scour rescan`.",
-            "needs document contents, which this index may not have",
+            "reads the files the rest of the query names, so it takes longer",
             "Start `scourd` first — the MCP server is a client of it, like this one.",
         ];
         let missing: Vec<&str> = used.iter().copied().filter(|m| c.get(m) == **m).collect();

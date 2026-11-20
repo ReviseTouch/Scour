@@ -53,7 +53,7 @@ indexes paths, so a path term is a scan of them.
 | `dm:7d` | modified in the last 7 days |
 | `dc:2026-01-31` | created on that day |
 | `da:>2026-01-01` | accessed after that day |
-| `content:invoice` | document contents contain this (only if content indexing is on) |
+| `content:invoice` | the file's contents hold this text; the files the rest of the query names are read, so narrow it |
 
 ## What the filesystem knows
 

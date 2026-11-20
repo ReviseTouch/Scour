@@ -4,6 +4,7 @@
 //! It is handed a `Box<dyn Source>` and an `Arc<dyn Index>` and has no way to
 //! discover that either is a filesystem or a tantivy index; `scourd` picks both.
 
+mod content;
 mod engine;
 mod grep;
 mod reconcile;

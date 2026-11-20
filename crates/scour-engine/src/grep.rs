@@ -132,19 +132,7 @@ fn read(
     top: u32,
     out: &mut Grepped,
 ) -> Option<u32> {
-    // Directories are in the answer and not in the reading.
-    let (places, files): (Vec<u32>, Vec<File>) = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, hit)| !hit.is_dir)
-        .map(|(row, hit)| {
-            // A row never stat'ed says zero, which is not "empty".
-            let known = hit.meta.mtime != 0 || hit.meta.size != 0;
-            let size = known.then_some(hit.meta.size.max(0) as u64);
-            let path = scour_core::path::to_path(&hit.path);
-            (row as u32, File { path, size })
-        })
-        .unzip();
+    let (places, files) = files_of(rows);
     for (k, outcome) in scanner.scan(&files, budget).into_iter().enumerate() {
         match outcome {
             Outcome::NotReached => return Some(places[k]),
@@ -167,4 +155,20 @@ fn read(
         }
     }
     None
+}
+
+/// The files among these rows, and the row each came from: directories are
+/// in an answer and not in a reading.
+pub(crate) fn files_of(rows: &[scour_core::Hit]) -> (Vec<u32>, Vec<File>) {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, hit)| !hit.is_dir)
+        .map(|(row, hit)| {
+            // A row never stat'ed says zero, which is not "empty".
+            let known = hit.meta.mtime != 0 || hit.meta.size != 0;
+            let size = known.then_some(hit.meta.size.max(0) as u64);
+            let path = scour_core::path::to_path(&hit.path);
+            (row as u32, File { path, size })
+        })
+        .unzip()
 }

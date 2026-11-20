@@ -132,7 +132,7 @@ pub const FIELDS: &[Field] = &[
         name: "content",
         aliases: &["text", "icerik", "içerik"],
         takes: Takes::Text,
-        about: "the document's contents contain this, if contents are indexed",
+        about: "the file's contents hold this text; the files are read to find out",
         example: "content:invoice",
     },
     // ---- what a filesystem knows and nothing else does --------------------

@@ -71,7 +71,7 @@ pub fn engine(
         })
         .collect();
 
-    Engine::new(
+    let engine = Engine::new(
         sources,
         index,
         EngineOptions {
@@ -98,7 +98,10 @@ pub fn engine(
             first_revision,
             ..EngineOptions::default()
         },
-    )
+    );
+    // Whatever reads file contents reads as the person asking; see `preview`.
+    engine.read_files_as(Arc::new(crate::as_owner::for_a_read));
+    engine
 }
 
 /// How queries are read, as a person set it: [`scour_settings::Settings`]'s

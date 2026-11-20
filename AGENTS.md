@@ -64,7 +64,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 
 | op | writes | |
 |---|---|---|
-| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` → rows, `rows_visited`, `rows_built`; a first page that found nothing may carry `similar{total,capped,query}` — what its words nearly name, and the `fuzzy:` query that shows them |
+| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` → rows, `rows_visited`, `rows_built`; a query with `content:` is answered from the files as they are read — `total` is a floor and `capped` true until every candidate is, and `revision` moves as rows arrive; a first page that found nothing may carry `similar{total,capped,query}` — what its words nearly name, and the `fuzzy:` query that shows them |
 | `count` | | `query`, `cap` — a floor when `capped` |
 | `facets` | | `query`, `by`: a list of `kind`/`ext{top}`/`dir{path,top}`/`age{edges}`, one walk for all of them; any `age` group lifts the 200,000-row sampling cap |
 | `tree` | | `path`, `depth`, `limit` — bounded per level |

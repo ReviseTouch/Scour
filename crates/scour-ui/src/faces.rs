@@ -140,11 +140,11 @@ pub const FEATURES: &[Feature] = &[
     },
     Feature {
         id: "contents",
-        what: "which files hold a text: the query's files are read, newest first",
+        what: "`content:` in a query: the files it names are read, and the list fills as they are",
         faces: [
-            Not("not yet: the command line has it, as `scour grep`"),
-            Not("not yet: the command line has it, as `scour grep`"),
-            Not("not yet: the command line has it, as `scour grep`"),
+            Part("the files, not the lines: those are `scour grep`'s"),
+            Part("the files, not the lines: those are `scour grep`'s"),
+            Part("the files, not the lines: those are `scour grep`'s"),
             Has,
         ],
     },
