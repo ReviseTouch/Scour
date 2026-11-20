@@ -2405,6 +2405,14 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
         "nobody was told it grew"
     );
 
+    // A count is asked in an order of its own, and is the same reading's.
+    assert_eq!(count(&f, "ext:rs content:iğne"), 10);
+    let sized = f
+        .engine
+        .search("ext:rs content:iğne", SortKey::Size, false, Page::new(0, 0))
+        .expect("count");
+    assert_eq!((sized.total, sized.capped), (10, false));
+
     // Two needles: a file must hold both.
     settle(&f, |_| !ask("content:iğne content:alpha ext:txt").capped);
     assert_eq!(ask("content:iğne content:alpha ext:txt").total, 10);

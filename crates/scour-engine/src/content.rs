@@ -141,7 +141,9 @@ impl Contents {
             let kept = current.as_ref().filter(|r| {
                 let stale =
                     r.index_at != index_now && r.began.elapsed() > STALE && !r.state.lock().running;
-                r.ast == ast && r.sort == sort && r.descending == descending && !stale
+                // A count has no order: it is answered by whatever reading there is.
+                let ordered = page.limit == 0 || (r.sort == sort && r.descending == descending);
+                r.ast == ast && ordered && !stale
             });
             match kept {
                 Some(reading) => Arc::clone(reading),
@@ -183,7 +185,8 @@ impl Contents {
                 .map_err(|e| Error::unsupported(format!("reading files: {e}")))?;
         }
         let deadline = Instant::now() + WAIT;
-        while state.hits.len() < need && state.running {
+        // A count waits for the reading itself: there is no row to wait for.
+        while state.running && (state.hits.len() < need || page.limit == 0) {
             if reading.grew.wait_until(&mut state, deadline).timed_out() {
                 break;
             }
