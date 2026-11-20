@@ -284,3 +284,20 @@ fn an_identity_that_cannot_be_taken_reads_nothing() {
         [Outcome::Unreadable(std::io::ErrorKind::PermissionDenied)]
     );
 }
+
+#[test]
+fn a_line_with_two_finds_is_shown_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [put(
+        dir.path(),
+        "a.rs",
+        b"needle_init and needle_mark\nnothing\nneedle\n",
+    )];
+    let got =
+        scanner(text("needle"), Options::default(), dir.path()).scan(&files, &Budget::unlimited());
+    let Outcome::Found { hits, more } = &got[0] else {
+        panic!("{:?}", got[0])
+    };
+    let lines: Vec<_> = hits.iter().map(|hit| hit.line).collect();
+    assert_eq!((lines, *more), (vec![Some(1), Some(3)], false));
+}

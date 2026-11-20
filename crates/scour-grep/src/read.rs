@@ -67,18 +67,23 @@ impl Reader {
                 if found.is_empty() {
                     continue;
                 }
-                if hits.len() >= opts.hits_per_file {
-                    more = true;
-                    break;
-                }
                 let (start, end) = match kind {
                     Kind::Binary => pattern.settled(hay, found.start(), found.end()),
                     _ => (found.start(), found.end()),
                 };
+                let line = (kind == Kind::Text).then(|| lines.at(path, base, hay, start));
+                // A second find on a line already shown is the same line again.
+                if line.is_some() && hits.last().is_some_and(|last: &Hit| last.line == line) {
+                    continue;
+                }
+                if hits.len() >= opts.hits_per_file {
+                    more = true;
+                    break;
+                }
                 let (text, at) = around(hay, start, end, kind, opts.excerpt);
                 hits.push(Hit {
                     offset: base + start as u64,
-                    line: (kind == Kind::Text).then(|| lines.at(path, base, hay, start)),
+                    line,
                     text,
                     at,
                 });

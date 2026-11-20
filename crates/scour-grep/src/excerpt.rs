@@ -52,10 +52,16 @@ pub(crate) fn around(
         start.saturating_sub(lead),
         (start.saturating_sub(lead) + room).max(end).min(hay.len()),
     );
+    // Whether the line goes on past what is shown, at either end.
+    let (mut cut_before, mut cut_after) = (false, false);
     let read: fn(&[u8]) -> String = match kind {
         Kind::Text => {
-            from = from.max(memrchr(b'\n', &hay[..start]).map_or(0, |i| i + 1));
-            to = to.min(memchr(b'\n', &hay[end..]).map_or(hay.len(), |i| end + i));
+            let line = (
+                memrchr(b'\n', &hay[..start]).map_or(0, |i| i + 1),
+                memchr(b'\n', &hay[end..]).map_or(hay.len(), |i| end + i),
+            );
+            (cut_before, cut_after) = (from > line.0, to < line.1);
+            (from, to) = (from.max(line.0), to.min(line.1));
             // Not through the middle of a character.
             while from < start && hay[from] & 0xC0 == 0x80 {
                 from += 1;
@@ -93,6 +99,12 @@ pub(crate) fn around(
         // Its lines end where a decoded newline is, not where a byte is.
         before = before.rsplit('\n').next().unwrap_or("").to_owned();
         after = after.split('\n').next().unwrap_or("").to_owned();
+    }
+    if cut_before {
+        before.insert(0, '…');
+    }
+    if cut_after {
+        after.push('…');
     }
     let at = (before.len() as u32, found.len() as u32);
     (before + &found + &after, at)
@@ -142,7 +154,8 @@ mod tests {
         assert_eq!(&text[at.0 as usize..(at.0 + at.1) as usize], "şey");
         let (short, at) = around(hay, start, start + "şey".len(), Kind::Text, 6);
         assert_eq!(&short[at.0 as usize..(at.0 + at.1) as usize], "şey");
-        assert!(short.len() <= 12, "{short:?}");
+        // Cut at both ends, and it says so.
+        assert_eq!(short, "…r şey…");
     }
 
     #[test]
