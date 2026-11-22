@@ -861,7 +861,7 @@ fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
         "the fixture is supposed to be fragmented"
     );
 
-    for sort in [SortKey::Name, SortKey::Path] {
+    for sort in [SortKey::Name, SortKey::Path, SortKey::Ext] {
         for desc in [true, false] {
             // Every edge of the group: just before it, its first row, inside
             // it, its last row, and past it.
@@ -4634,12 +4634,15 @@ fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
         index.commit().expect("commit");
         all.extend(part);
     }
-    for &(offset, limit) in &[(2_500usize, 50usize), (6_000, 100), (9_500, 200)] {
+    for (descending, offset, limit) in [true, false]
+        .into_iter()
+        .flat_map(|d| [(2_500usize, 50usize), (6_000, 100), (9_500, 200)].map(|(o, l)| (d, o, l)))
+    {
         let whole = brute_force(
             &all,
             &parse_at("", NOW),
             SortKey::Modified,
-            true,
+            descending,
             offset + limit,
         );
         let want: Vec<String> = whole[offset.min(whole.len())..]
@@ -4650,7 +4653,7 @@ fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
             .search(&SearchRequest {
                 query: parse_at("", NOW),
                 sort: SortKey::Modified,
-                descending: true,
+                descending,
                 page: Page {
                     offset: offset as u32,
                     limit: limit as u32,
@@ -4661,7 +4664,7 @@ fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
         let got: Vec<String> = answer.hits.into_iter().map(|h| h.path).collect();
         assert_eq!(
             got, want,
-            "the page at {offset}+{limit} disagrees with brute force"
+            "the page at {offset}+{limit} descending={descending} disagrees with brute force"
         );
         assert!(
             answer.rows_visited < (limit * 4) as u64,
@@ -4708,18 +4711,21 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
         .expect("remove");
     index.commit().expect("commit");
 
-    for &(offset, limit) in &[
-        (2_000usize, 100usize),
-        (2_500, 60),
-        (4_999, 200),
-        (8_000, 120),
-        (11_000, 200),
-    ] {
+    for (descending, offset, limit) in [true, false].into_iter().flat_map(|d| {
+        [
+            (2_000usize, 100usize),
+            (2_500, 60),
+            (4_999, 200),
+            (8_000, 120),
+            (11_000, 200),
+        ]
+        .map(|(o, l)| (d, o, l))
+    }) {
         let whole = brute_force(
             &alive,
             &parse_at("", NOW),
             SortKey::Modified,
-            true,
+            descending,
             offset + limit,
         );
         let want: Vec<String> = whole[offset.min(whole.len())..]
@@ -4730,7 +4736,7 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
             .search(&SearchRequest {
                 query: parse_at("", NOW),
                 sort: SortKey::Modified,
-                descending: true,
+                descending,
                 page: Page {
                     offset: offset as u32,
                     limit: limit as u32,
@@ -4744,13 +4750,13 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
         );
         assert_eq!(
             got.0, want,
-            "the page at {offset}+{limit} disagrees with brute force"
+            "the page at {offset}+{limit} descending={descending} disagrees with brute force"
         );
         // A thousand rows share every date, so a page inside a group steps
         // through the part before it — never the thousands above the group.
         assert!(
             got.1 < 1_200 + limit as u64,
-            "the page at {offset} visited {} rows — it was walked to",
+            "the page at {offset} descending={descending} visited {} rows — it was walked to",
             got.1
         );
     }
@@ -4911,7 +4917,7 @@ fn a_deep_page_in_a_stored_text_order_is_the_page_the_walk_finds() {
         )
         .expect("remove pending");
 
-    for sort in [SortKey::Name, SortKey::Path] {
+    for sort in [SortKey::Name, SortKey::Path, SortKey::Ext] {
         for descending in [false, true] {
             let whole = all(sort, descending);
             assert!(whole.len() > 6_000, "{} rows", whole.len());
@@ -4920,7 +4926,7 @@ fn a_deep_page_in_a_stored_text_order_is_the_page_the_walk_finds() {
             offsets.extend([2_000, 2_001, last - 200, last - 1, last, last + 50]);
             for (n, &offset) in offsets.iter().enumerate() {
                 let limit = [1usize, 3, 40, 200][n % 4];
-                let got: Vec<String> = index
+                let answer = index
                     .search(&SearchRequest {
                         query: parse_at("", NOW),
                         sort,
@@ -4931,17 +4937,21 @@ fn a_deep_page_in_a_stored_text_order_is_the_page_the_walk_finds() {
                             count_cap: 10_000_000,
                         },
                     })
-                    .expect("search")
-                    .hits
-                    .into_iter()
-                    .map(|h| h.path)
-                    .collect();
+                    .expect("search");
+                let visited = answer.rows_visited;
+                let got: Vec<String> = answer.hits.into_iter().map(|h| h.path).collect();
                 let from = offset.min(last);
                 let to = (offset + limit).min(last);
                 assert_eq!(
                     got,
                     whole[from..to],
                     "{sort:?} descending={descending} at {offset}+{limit}"
+                );
+                // Reached, not walked to: the walk visits every row above the
+                // page, and here that is six thousand at least.
+                assert!(
+                    offset >= last || visited < 1_000,
+                    "{sort:?} descending={descending} at {offset} visited {visited} rows"
                 );
             }
         }

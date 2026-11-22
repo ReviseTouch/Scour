@@ -1702,6 +1702,7 @@ fn walk_only() -> bool {
 fn reach(
     segments: &[Live],
     views: &[Segment<'_>],
+    descending: bool,
     offset: usize,
     limit: usize,
     cap: usize,
@@ -1748,10 +1749,13 @@ fn reach(
             })
             .sum()
     };
+    // And older, for oldest first: every live row not newer than `t - 1`.
+    let older = |t: i64| -> usize { counted - newer(t.saturating_sub(1)) };
 
-    // The date of the row at `offset`: the smallest `t` with no more than
-    // `offset` rows above it, by bisection. The bracket is the newest date in
-    // **any** segment and the oldest in any, not the newest they share.
+    // The date of the row at `offset`, by bisection: newest first, the smallest
+    // `t` with no more than `offset` rows above it; oldest first, the largest.
+    // The bracket is the newest date in **any** segment and the oldest in any,
+    // not the newest they share.
     let mut low = i64::MAX;
     let mut high = i64::MIN;
     for (live, seg) in segments.iter().zip(views) {
@@ -1764,15 +1768,24 @@ fn reach(
         return Some(empty(0));
     }
     while low < high {
-        let mid = low + (high - low) / 2;
-        if newer(mid) <= offset {
-            high = mid;
+        if descending {
+            let mid = low + ((i128::from(high) - i128::from(low)) / 2) as i64;
+            if newer(mid) <= offset {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
         } else {
-            low = mid + 1;
+            let mid = low + ((i128::from(high) - i128::from(low) + 1) / 2) as i64;
+            if older(mid) <= offset {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
         }
     }
-    let when = high;
-    let above = newer(when);
+    let when = if descending { high } else { low };
+    let above = if descending { newer(when) } else { older(when) };
     // Rows of that same date that still precede the page. There is no rank
     // inside a tie, so these are stepped through — see [`TIE_STEPS`].
     let mut skip = offset.checked_sub(above)?;
@@ -1780,40 +1793,54 @@ fn reach(
         return None;
     }
 
-    // Where each segment's part of the page begins: its first row not newer
-    // than `when`.
-    let mut at: Vec<usize> = segments
+    // Each segment's part of the page: the rows of one date at a time, read
+    // forwards from its first row, so the path breaks a tie forwards either
+    // way. Newest first the next date is the next row; oldest first it is the
+    // group stored just before, found by a bisection below it.
+    let mut at: Vec<Span> = segments
         .iter()
         .zip(views)
         .map(|(live, seg)| {
-            first_at_or_below(live.rows(), when, |row| seg.num_of(Field::Mtime, row))
+            let start = first_at_or_below(live.rows(), when, |row| seg.num_of(Field::Mtime, row));
+            let end = if descending {
+                live.rows()
+            } else {
+                first_at_or_below(live.rows(), when.saturating_sub(1), |row| {
+                    seg.num_of(Field::Mtime, row)
+                })
+            };
+            Span {
+                row: start,
+                start,
+                end,
+            }
         })
         .collect();
-    for (i, cursor) in at.iter_mut().enumerate() {
-        *cursor = next_live(views, segments, i, *cursor);
+    for (i, span) in at.iter_mut().enumerate() {
+        span.settle(views, i, descending);
     }
 
-    // The merge holds one row a segment, ordered as `sort_hits` orders it:
-    // newest first, ties broken by paths compared as if joined.
+    // The merge holds one row a segment, ordered as `sort_hits` orders it: by
+    // date, ties broken by paths compared as if joined.
     let mut dirs: HashMap<(usize, u32), String> = HashMap::new();
     let mut hits: Vec<Hit> = Vec::with_capacity(limit.min(counted));
     let mut visited = 0u64;
     while hits.len() < limit {
         let mut best: Option<usize> = None;
         for i in 0..views.len() {
-            if at[i] >= segments[i].rows() {
+            if at[i].row >= at[i].end {
                 continue;
             }
             let Some(b) = best else {
                 best = Some(i);
                 continue;
             };
-            if first_of(views, &mut dirs, (i, at[i]), (b, at[b])) {
+            if first_of(views, &mut dirs, descending, (i, at[i].row), (b, at[b].row)) {
                 best = Some(i);
             }
         }
         let Some(i) = best else { break };
-        let row = at[i];
+        let row = at[i].row;
         visited += 1;
         if skip > 0 {
             skip -= 1;
@@ -1823,7 +1850,8 @@ fn reach(
                 hits.push(seg.hit(row, &name));
             }
         }
-        at[i] = next_live(views, segments, i, row + 1);
+        at[i].row = row + 1;
+        at[i].settle(views, i, descending);
     }
 
     Some(SearchResponse {
@@ -1834,23 +1862,53 @@ fn reach(
     })
 }
 
-/// The next live row at or after `from`, or one past the end.
-fn next_live(views: &[Segment<'_>], segments: &[Live], i: usize, from: usize) -> usize {
-    let rows = segments[i].rows();
-    (from..rows)
-        .find(|&row| views[i].is_alive(row))
-        .unwrap_or(rows)
+/// Where one segment's part of a reached page has got to: `row`, inside the
+/// rows `start..end` it is reading forwards.
+struct Span {
+    row: usize,
+    start: usize,
+    end: usize,
 }
 
-/// Whether `a` comes before `b` in the merged stored order.
+impl Span {
+    /// On to the next live row, and when this run is spent, newest first, the
+    /// rest of the segment is the run; oldest first, the date stored before.
+    /// `row == end` once nothing is left.
+    fn settle(&mut self, views: &[Segment<'_>], i: usize, descending: bool) {
+        let seg = &views[i];
+        loop {
+            while self.row < self.end && !seg.is_alive(self.row) {
+                self.row += 1;
+            }
+            if self.row < self.end || descending || self.start == 0 {
+                return;
+            }
+            let date = seg.num_of(Field::Mtime, self.start - 1);
+            let start =
+                first_at_or_below(self.start - 1, date, |row| seg.num_of(Field::Mtime, row));
+            self.end = self.start;
+            self.start = start;
+            self.row = start;
+        }
+    }
+}
+
+/// Whether `a` comes before `b` in the merged stored order, newest first or
+/// oldest. The path breaks a tie forwards in both.
 fn first_of(
     views: &[Segment<'_>],
     dirs: &mut HashMap<(usize, u32), String>,
+    descending: bool,
     a: (usize, usize),
     b: (usize, usize),
 ) -> bool {
     let mtime = |(seg, row): (usize, usize)| views[seg].num_of(Field::Mtime, row);
-    match mtime(a).cmp(&mtime(b)) {
+    let by_date = mtime(a).cmp(&mtime(b));
+    match if descending {
+        by_date
+    } else {
+        by_date.reverse()
+    } {
         std::cmp::Ordering::Greater => return true,
         std::cmp::Ordering::Less => return false,
         std::cmp::Ordering::Equal => {}
@@ -2591,28 +2649,39 @@ impl Index for NativeIndex {
         // **A page reached instead of walked to**, for the one shape that allows
         // it: the stored order, nothing filtering, nothing concealed, deep enough
         // to be worth it. Everything else falls through to the walk unchanged.
+        // Oldest first is the same order read by date the other way, with the
+        // path still breaking a tie forwards: reached too.
         let stored_order = matches!(
             req.sort,
             scour_core::SortKey::Modified | scour_core::SortKey::Relevance
-        ) && req.descending;
+        ) && req.descending
+            || req.sort == scour_core::SortKey::Modified;
         if offset >= REACH_FROM
             && !walk_only()
             && stored_order
             && req.query.groups.is_empty()
             && inner.hidden_prefixes.is_empty()
-            && let Some(found) = reach(&inner.segments, &views, offset, limit, cap, started)
+            && let Some(found) = reach(
+                &inner.segments,
+                &views,
+                req.descending,
+                offset,
+                limit,
+                cap,
+                started,
+            )
         {
             return Ok(found);
         }
 
-        // The same for the two stored text orders, where only the place is
+        // The same for the three stored text orders, where only the place is
         // found: the rows around it join the pool and are ordered below.
         let deep = (offset >= REACH_FROM
             && limit > 0
             && !walk_only()
             && matches!(
                 req.sort,
-                scour_core::SortKey::Name | scour_core::SortKey::Path
+                scour_core::SortKey::Name | scour_core::SortKey::Path | scour_core::SortKey::Ext
             )
             && req.query.groups.is_empty())
         .then(|| {

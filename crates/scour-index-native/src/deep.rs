@@ -1,4 +1,4 @@
-//! A deep page in name or path order, reached instead of walked to.
+//! A deep page in name, path or extension order, reached instead of walked to.
 //!
 //! Every segment stores its rows in both orders, so the row at a global offset
 //! is a selection across sorted lists: bisect on a key taken from the widest
@@ -14,12 +14,16 @@ use std::collections::HashMap;
 
 use scour_core::SortKey;
 
+use crate::columns::Field;
+use crate::extension_order::{Chunk, ExtensionOrder};
 use crate::name_order::NameOrder;
 use crate::order::PathOrder;
 use crate::search::Segment;
 
-/// How many rows sharing one key, or scanned past the page to finish a group,
-/// this will gather before leaving the page to the walk.
+/// How many rows sharing one key *and* one second this will gather before
+/// leaving the page to the walk. Rows stepped over to fill the page are not
+/// counted: a deleted folder is a run of dead positions in path order, cheap
+/// to step over and a second's walk to give up on.
 const TIE_ROWS: usize = 100_000;
 
 /// Positions between two entries of a rank table.
@@ -41,6 +45,7 @@ pub(crate) struct Deep {
 enum Order<'a> {
     Name(NameOrder<'a>),
     Path(PathOrder<'a>),
+    Ext(ExtensionOrder<'a>),
 }
 
 impl Order<'_> {
@@ -48,6 +53,26 @@ impl Order<'_> {
         match self {
             Order::Name(o) => o.at(i),
             Order::Path(o) => o.at(i),
+            Order::Ext(o) => o.at(i),
+        }
+    }
+
+    /// The row at every position of `from..to`, in order. The extension order
+    /// decodes a chunk of thirty-two to read one position, so a run of them
+    /// keeps the chunk.
+    fn each(self, from: usize, to: usize, mut f: impl FnMut(usize, Option<u32>)) {
+        match self {
+            Order::Ext(o) => {
+                let mut chunk = Chunk::default();
+                for i in from..to {
+                    f(i, chunk.at(&o, i));
+                }
+            }
+            _ => {
+                for i in from..to {
+                    f(i, self.at(i));
+                }
+            }
         }
     }
 }
@@ -91,17 +116,14 @@ impl Rank {
         }
         let mut prefix = Vec::with_capacity(rows.div_ceil(STRIDE));
         let mut running = 0u32;
-        for i in 0..rows {
+        order.each(0, rows, |i, row| {
             if i % STRIDE == 0 {
                 prefix.push(running);
             }
-            if order
-                .at(i)
-                .is_some_and(|row| shown.row(s, seg, row as usize))
-            {
+            if row.is_some_and(|row| shown.row(s, seg, row as usize)) {
                 running += 1;
             }
-        }
+        });
         Rank {
             prefix,
             total: running as usize,
@@ -125,14 +147,11 @@ impl Rank {
         let Some(&base) = self.prefix.get(entry) else {
             return self.total;
         };
-        base as usize
-            + (entry * STRIDE..at)
-                .filter(|&i| {
-                    order
-                        .at(i)
-                        .is_some_and(|row| shown.row(s, seg, row as usize))
-                })
-                .count()
+        let mut live = 0usize;
+        order.each(entry * STRIDE, at, |_, row| {
+            live += usize::from(row.is_some_and(|row| shown.row(s, seg, row as usize)));
+        });
+        base as usize + live
     }
 }
 
@@ -159,6 +178,16 @@ impl Keys<'_, '_> {
         match self.orders[seg] {
             Order::Name(_) => match view.folded.get(row) {
                 Some(name) => out.extend_from_slice(name.as_bytes()),
+                None => self.bad = true,
+            },
+            // The key the walk compares last, `compare_extensions`: complete,
+            // where its sort value is only the head.
+            Order::Ext(_) => match view.folded.get(row) {
+                Some(name) => out.extend_from_slice(crate::search::folded_extension(
+                    view,
+                    row,
+                    name.as_bytes(),
+                )),
                 None => self.bad = true,
             },
             Order::Path(_) => {
@@ -208,10 +237,11 @@ fn bound(mut lo: usize, mut hi: usize, mut before: impl FnMut(usize) -> bool) ->
 
 /// The rows around `offset` in `sort` order over every shown row, or `None`
 /// for a shape this cannot answer: another order, a segment written without the
-/// stored order, or a tie group too large to gather. `hide(segment, row)` is a
-/// removal not yet committed, asked only of the segments `hides` marks: without
-/// it a page asked in the second between a deletion and its commit was walked
-/// to, 1.1 s and 2 GB at three million rows by path.
+/// stored order, or more rows sharing one key and one second than to gather.
+/// `hide(segment, row)` is a removal not yet committed, asked only of the
+/// segments `hides` marks: without it a page asked in the second between a
+/// deletion and its commit was walked to, 1.1 s and 2 GB at three million rows
+/// by path.
 pub(crate) fn reach(
     views: &[Segment<'_>],
     sort: SortKey,
@@ -229,6 +259,7 @@ pub(crate) fn reach(
             match sort {
                 SortKey::Name => seg.norder.filter(|o| o.rows() == rows).map(Order::Name),
                 SortKey::Path => seg.porder.filter(|o| o.rows() == rows).map(Order::Path),
+                SortKey::Ext => seg.eorder.filter(|o| o.rows() == rows).map(Order::Ext),
                 _ => None,
             }
         })
@@ -295,9 +326,62 @@ pub(crate) fn reach(
         }
     };
 
-    if (0..n).map(|s| past[s] - first[s]).sum::<usize>() > TIE_ROWS {
+    // Rows of the group that precede the page. The order inside a group is the
+    // same both ways — newest first, then path — so only where the group sits
+    // depends on the direction.
+    let skip = if descending {
+        upto_group - 1 - target
+    } else {
+        target - below
+    };
+
+    // **Inside the group, by date.** In every segment a group's positions run
+    // in row order, and rows are stored newest first, so the dates fall along
+    // it: the second the page begins in is a bisection, and only that second's
+    // rows are gathered. Gathering the whole group instead gave up past a
+    // hundred thousand rows — every common extension, and the commonest names —
+    // and the walk then took 0.8 to 1.2 s.
+    let misread = std::cell::Cell::new(false);
+    let mtime = |s: usize, at: usize| -> i64 {
+        match orders[s].at(at) {
+            Some(row) => views[s].num_of(Field::Mtime, row as usize),
+            None => {
+                misread.set(true);
+                i64::MIN
+            }
+        }
+    };
+    // The first position of the group with a date not after `t`.
+    let cut = |s: usize, t: i64| bound(first[s], past[s], |i| mtime(s, i) > t);
+    let newer = |t: i64| -> usize { (0..n).map(|s| upto(s, cut(s, t)) - upto(s, first[s])).sum() };
+    let (mut low, mut high) = (i64::MAX, i64::MIN);
+    for s in 0..n {
+        if past[s] > first[s] {
+            high = high.max(mtime(s, first[s]));
+            low = low.min(mtime(s, past[s] - 1));
+        }
+    }
+    if low > high {
         return None;
     }
+    while low < high {
+        let mid = low + ((i128::from(high) - i128::from(low)) / 2) as i64;
+        if newer(mid) <= skip {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let when = high;
+    let skip = skip.checked_sub(newer(when))?;
+    let from: Vec<usize> = (0..n).map(|s| cut(s, when)).collect();
+    let to: Vec<usize> = (0..n)
+        .map(|s| bound(from[s], past[s], |i| mtime(s, i) >= when))
+        .collect();
+    if misread.get() || (0..n).map(|s| to[s] - from[s]).sum::<usize>() > TIE_ROWS {
+        return None;
+    }
+
     let mut rows: Vec<(u32, u32)> = Vec::new();
     let take = |rows: &mut Vec<(u32, u32)>, s: usize, at: usize| -> bool {
         match orders[s].at(at) {
@@ -309,49 +393,58 @@ pub(crate) fn reach(
         }
     };
     for s in 0..n {
-        for at in first[s]..past[s] {
+        for at in from[s]..to[s] {
             take(&mut rows, s, at);
         }
     }
-    let skip = if descending {
-        offset - (total - upto_group)
-    } else {
-        offset - below
-    };
-    // The page may run past the group: each segment's next `limit` live rows
-    // hold everything it can reach.
-    let mut edge = Vec::new();
+    // The page may run on past that second. Each segment's next `limit` shown
+    // rows in the order asked hold everything it can reach: a row beyond them
+    // has `limit` rows of its own segment before it.
+    let mut key = Vec::new();
     for s in 0..n {
         let mut taken = 0usize;
+        // Ascending, the order asked is the stored one from here on.
+        let end = if descending { past[s] } else { views[s].rows() };
+        let mut at = to[s];
+        while taken < limit && at < end {
+            taken += usize::from(take(&mut rows, s, at));
+            at += 1;
+        }
         if !descending {
-            let mut at = past[s];
-            while taken < limit && at < views[s].rows() {
-                taken += usize::from(take(&mut rows, s, at));
-                at += 1;
-            }
             continue;
         }
-        // Backwards, a group cut short would hand over its tail while the
-        // order inside a group still runs forwards: finish the group.
+        // Descending, what comes next is stored *before* this group, a group at
+        // a time, each read from its start. Stepping back takes whole groups;
+        // the one the step stops inside is read from its start instead of
+        // finished, which for a group of a million was the walk's price. Rows
+        // taken twice over would be on the page twice, so the two halves meet.
         let mut at = first[s];
-        let mut steps = 0usize;
-        while at > 0 {
-            if taken >= limit {
-                if edge.is_empty() {
-                    keys.fill(s, at, &mut edge);
-                }
-                if keys.cmp(s, at - 1, &edge).is_ne() {
-                    break;
-                }
-            }
+        while taken < limit && at > 0 {
             at -= 1;
             taken += usize::from(take(&mut rows, s, at));
-            steps += 1;
-            if steps > TIE_ROWS + limit {
-                return None;
-            }
         }
-        edge.clear();
+        if at == 0 || at == first[s] {
+            continue;
+        }
+        // Back from `at` by doubling steps while the key holds, then bisected.
+        keys.fill(s, at, &mut key);
+        let (mut lo, mut hi, mut step) = (0usize, at, 1usize);
+        while let Some(p) = hi.checked_sub(step) {
+            if keys.cmp(s, p, &key).is_ne() {
+                lo = p + 1;
+                break;
+            }
+            hi = p;
+            step *= 2;
+        }
+        let start = bound(lo, hi, |i| keys.cmp(s, i, &key).is_lt());
+        let mut taken = 0usize;
+        for i in start..at {
+            if taken >= limit {
+                break;
+            }
+            taken += usize::from(take(&mut rows, s, i));
+        }
     }
     if keys.bad {
         return None;

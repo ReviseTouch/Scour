@@ -555,7 +555,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// The complete folded extension, with eligibility read from the spelling.
-fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a [u8] {
+pub(crate) fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a [u8] {
     let ext = crate::extension_order::extension(folded);
     if ext.is_empty() || !spelling_is_eligible(seg, row, ext) {
         return b"";

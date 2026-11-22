@@ -664,6 +664,55 @@ Not measured: a cold cache alone, a spinning disk, a network share, Windows;
 whether more than eight threads, or `io_uring`, reads a solid disk faster —
 the thread counts are the walk's until that is done.
 
+## Deep pages by extension, oldest first, and inside a large tie (2026-11-22)
+
+A copy of this machine's index (6.94 M live rows, seven segments, 1.1 M dead
+rows in the largest), `deepcheck` run reached and then with `SCOUR_NO_REACH=1`:
+343 pages at fixed offsets, seven orders, every one identical to the walk's —
+8.2 s against 313.3 s. Not alternated: the walk is what the extension order
+and oldest-first always were, so its column is the before.
+
+| order, empty query | walk, median | reached, median | reached, worst |
+|---|---:|---:|---:|
+| extension, descending | 1,125 ms | 45 ms | 73 ms |
+| extension, ascending | 1,167 ms | 48 ms | 83 ms |
+| modified, oldest first | 182 ms | 0.4 ms | 65 ms |
+| name, either way | 787–850 ms | 19 ms | 21 ms |
+| path, either way | 970–1,315 ms | 14 ms | 15 ms |
+
+**The extension order was never reached**, though every segment stores it.
+Hooking it to the name order's bisection was not enough on its own: that
+gathered the whole tie group around the page and gave up past 100,000 rows,
+and an extension's group is that large as a rule. Name order gave up the same
+way where a name is shared widely — 836 ms at offset 3.6 M, measured on the
+live service earlier the same day. A group's positions run in row order, and rows are stored
+newest first, so the dates fall along the group: a second bisection, on the
+date, finds the second the page begins in, and only that second's rows are
+gathered. Descending, the group before is read from its start rather than
+finished.
+
+**Oldest first is the newest-first reach with the date bisected the other
+way.** Inside a date the path still runs forwards, so a segment's part is read
+one date at a time, each found by a bisection below the last.
+
+What is left:
+
+- **The rank is rebuilt for every page.** With one dead row in a segment,
+  every position of its stored order is read to count the live ones before it:
+  most of name's 19 ms, and with the extension order's chunks to decode, most
+  of its 45.
+- **A second shared by many rows is stepped through.** The 65 ms worst is
+  offset 77,777 oldest first: the oldest 77,778 rows share one date, the epoch —
+  flatpak's objects and container layers. Newest
+  first has the same limit at the end of the list.
+- Still walked to: a filtered query, a hidden prefix, the numeric orders other
+  than date, relevance oldest first.
+
+```sh
+cargo run --release -p scour-index-native --example deepcheck -- /var/tmp/idx/native > reach.txt
+SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example deepcheck -- /var/tmp/idx/native > walk.txt
+```
+
 ## Reproducing
 
 ```sh
