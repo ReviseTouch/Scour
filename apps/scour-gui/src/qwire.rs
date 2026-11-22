@@ -33,6 +33,13 @@ pub struct QueryBar {
     rescue_for: String,
     /// The query with a misspelt field name put right, when there is one.
     fix: Option<String>,
+    /// The narrowing line: the query it is for, its answers, and its chips
+    /// as label, count and the term a press writes.
+    narrow_for: String,
+    narrow_total: u64,
+    narrow_facets: Option<scour_core::FacetResponse>,
+    narrow_usage: Option<scour_core::UsageResponse>,
+    chips: Vec<(String, u64, String)>,
 }
 
 /// Whether drawing also opens, follows or leaves the lens.
@@ -312,6 +319,178 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
             .into()
     });
     w.set_offers(ModelRc::new(VecModel::from(lines)));
+}
+
+/// A first page landed: ask what the narrowing line shows for this query —
+/// one `facets` walk and one `usage` under home. Nothing for a query that
+/// reads files, or that found fewer than two.
+pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
+    let text = s.query.clone();
+    if s.qb.narrow_for == text && s.qb.narrow_total == total {
+        return;
+    }
+    s.qb.narrow_for = text.clone();
+    s.qb.narrow_total = total;
+    s.qb.narrow_facets = None;
+    s.qb.narrow_usage = None;
+    s.qb.chips.clear();
+    show_chips(w, &s.qb, cat);
+    let ts = lens::terms(&text);
+    if total < 2 || ts.iter().any(|t| t.field == Some("content")) {
+        return;
+    }
+    let revision = s.query_revision;
+    link.send(Ask::Narrow {
+        query_revision: revision,
+        slot: 0,
+        request: scour_proto::Request::Facets {
+            query: text.clone(),
+            by: vec![
+                scour_core::FacetBy::Kind,
+                scour_core::FacetBy::Ext { top: 6 },
+                scour_core::FacetBy::Age { edges: vec![7] },
+            ],
+        },
+    });
+    let home = home();
+    if !home.is_empty()
+        && !ts
+            .iter()
+            .any(|t| matches!(t.field, Some("under" | "parent")))
+    {
+        link.send(Ask::Narrow {
+            query_revision: revision,
+            slot: 1,
+            request: scour_proto::Request::Usage {
+                path: home,
+                top: 8,
+                query: text,
+            },
+        });
+    }
+}
+
+/// An answer for the narrowing line.
+pub fn narrowed(w: &MainWindow, s: &mut State, cat: &Catalogue, revision: u64, reply: Response) {
+    if revision != s.query_revision {
+        return;
+    }
+    match reply {
+        Response::Facets(f) => s.qb.narrow_facets = Some(f),
+        Response::Usage(u) => s.qb.narrow_usage = Some(u),
+        _ => return,
+    }
+    let text = s.qb.narrow_for.clone();
+    let ts = lens::terms(&text);
+    let has = |f: &str| ts.iter().any(|t| t.field == Some(f) && !t.not);
+    let all =
+        s.qb.narrow_facets
+            .as_ref()
+            .map_or(s.qb.narrow_total, |f| f.total);
+    let mut chips = Vec::new();
+    let group = |by: fn(&scour_core::FacetBy) -> bool| {
+        s.qb.narrow_facets
+            .as_ref()
+            .and_then(|f| f.groups.iter().find(|g| by(&g.by)))
+            .map(|g| g.facets.clone())
+            .unwrap_or_default()
+    };
+    if !has("kind") {
+        for x in group(|b| matches!(b, scour_core::FacetBy::Kind))
+            .into_iter()
+            .take(3)
+        {
+            if x.count > 0 && x.count < all {
+                let name = scour_core::Kind::from_name(&x.key)
+                    .and_then(|k| k.first())
+                    .map_or_else(|| x.key.clone(), |k| cat.get(k.msgid()).into_owned());
+                chips.push((name, x.count, format!("kind:{}", x.key)));
+            }
+        }
+    }
+    if !has("ext") {
+        for x in group(|b| matches!(b, scour_core::FacetBy::Ext { .. }))
+            .into_iter()
+            .take(3)
+        {
+            if !x.key.is_empty() && x.count > 0 && x.count < all {
+                chips.push((format!(".{}", x.key), x.count, format!("ext:{}", x.key)));
+            }
+        }
+    }
+    if let Some(u) = &s.qb.narrow_usage {
+        let home = home();
+        let mut kids: Vec<_> = u
+            .children
+            .iter()
+            .filter(|c| c.files > 0 && c.files < all)
+            .collect();
+        kids.sort_by_key(|c| std::cmp::Reverse(c.files));
+        for c in kids.into_iter().take(2) {
+            let shown = match c.path.strip_prefix(&home) {
+                Some(rest) if !home.is_empty() => format!("~{rest}"),
+                _ => c.path.clone(),
+            };
+            let term = lens::place(&lens::terms("under:x")[0], &shown);
+            chips.push((shown, c.files, term));
+        }
+    }
+    if !has("dm")
+        && let Some(week) = group(|b| matches!(b, scour_core::FacetBy::Age { .. }))
+            .into_iter()
+            .find(|x| x.key == "7")
+        && week.count > 0
+        && week.count < all
+    {
+        chips.push((
+            cat.get("last 7 days").into_owned(),
+            week.count,
+            "dm:7d".into(),
+        ));
+    }
+    s.qb.chips = chips;
+    show_chips(w, &s.qb, cat);
+}
+
+fn show_chips(w: &MainWindow, qb: &QueryBar, _cat: &Catalogue) {
+    let chips: Vec<crate::Facet> = qb
+        .chips
+        .iter()
+        .map(|(label, n, term)| crate::Facet {
+            label: label.as_str().into(),
+            token: term.as_str().into(),
+            count: crate::grouped(*n).into(),
+            share: 0.0,
+            icon: Default::default(),
+        })
+        .collect();
+    w.set_chips(ModelRc::new(VecModel::from(chips)));
+}
+
+/// A press on a chip: the term goes in, in place of one of the same field;
+/// with Alt held it goes in excluded.
+fn take_chip(w: &MainWindow, s: &Rc<RefCell<State>>, term: &str, alt: bool) {
+    let text = w.get_query().to_string();
+    let field = &term[..term.find(':').map_or(0, |i| i + 1)];
+    let same = if alt {
+        None
+    } else {
+        lens::terms(&text)
+            .into_iter()
+            .find(|t| !t.not && text[t.start..t.end].to_lowercase().starts_with(field))
+    };
+    let term = if alt {
+        format!("!{term}")
+    } else {
+        term.to_string()
+    };
+    let query = match same {
+        Some(t) => lens::replace(&text, &t, &term).0,
+        None if text.trim().is_empty() => term,
+        None => format!("{} {term}", text.trim_end()),
+    };
+    let n = query.len();
+    write(w, s, query, n);
 }
 
 /// The query was read back: offer the spelling a misspelt field meant.
@@ -624,6 +803,14 @@ pub fn wire(
             let Some(q) = q else { return };
             let n = q.len();
             write(&w, &state, q, n);
+        });
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_narrow_taken(move |term, alt| {
+            if let Some(w) = weak.upgrade() {
+                take_chip(&w, &state, &term, alt);
+            }
         });
     }
     {

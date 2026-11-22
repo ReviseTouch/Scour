@@ -69,9 +69,34 @@
     padding: 12px 12px 10px 16px;
     border-bottom: 1px solid var(--line);
   }
-  .query .brand { width: calc(180px - 26px); display: flex; align-items: center; }
-  .query .qread { flex-basis: 100%; margin: 0; padding-left: 196px; }
-  .query .qread:empty { display: none; }
+  .query .brand { display: flex; align-items: center; }
+  /* The filters a query can take: the same list as `:` and Ctrl+Space. */
+  .qfilter {
+    flex: none; align-self: flex-start; height: 34px; padding: 0 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    color: var(--ink-2); font: 500 13px/1 var(--sans); cursor: pointer;
+  }
+  .qfilter:hover, .qfilter[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
+  /* One line, always: what the results hold on the left, the switches on the
+     right. A long strip is cut, never wrapped, so the list never moves. */
+  .ctxrow {
+    flex-basis: 100%; display: flex; align-items: center; gap: 10px;
+    margin: 0 -12px -10px -16px; padding: 5px 12px 5px 16px;
+    border-top: 1px solid var(--line); min-width: 0;
+  }
+  .narrow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+  .narrow .qread { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .narrow .qread:empty, .narrow .qread[hidden] { display: none; }
+  .narrow .nlbl { flex: none; font: 500 12px var(--sans); color: var(--ink-3); }
+  .narrow .nlbl[hidden] { display: none; }
+  .chips { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
+  .chips button {
+    flex: none; border: 1px solid var(--line); border-radius: 6px; background: none;
+    padding: 2px 8px; font: 500 12px/1.5 var(--sans); color: var(--ink-2); cursor: pointer;
+  }
+  .chips button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .chips button b { font-weight: 500; color: var(--ink-3); margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .ctxrow .tabs button { padding: 4px 10px; }
   .brand {
     font-size: 14px;
     font-weight: 600;
@@ -129,7 +154,7 @@
     letter-spacing: -.01em;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    padding: 0 46px 0 0;
+    padding: 0 22px 0 0;
     margin: 0;
     position: relative;
     z-index: 2;
@@ -146,7 +171,7 @@
     letter-spacing: -.01em;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    padding: 0 46px 0 0;
+    padding: 0 22px 0 0;
     overflow: hidden;
     pointer-events: none;
     /* A bare term: blue for wanted, red for `!`. See `scour_ui::Palette`. */
@@ -212,7 +237,7 @@
 
   /* No node per term: the face is monospace, so the caret index is
      `x / charWidth`. No z-index here, or the layer hides what it points at. */
-  #qpast, #qadd {
+  #qpast {
     position: absolute;
     right: 0;
     top: 1px;
@@ -227,9 +252,8 @@
     font: 600 11px/1 var(--sans);
     cursor: pointer;
   }
-  #qadd { right: 22px; font: 500 15px/1 var(--sans); }
   #qpast[hidden] { display: none; }
-  #qpast:hover, #qadd:hover { color: var(--ink); background: var(--line-soft); }
+  #qpast:hover { color: var(--ink); background: var(--line-soft); }
   #qpast[aria-expanded="true"] { color: var(--ink); background: var(--line-soft); }
   #qpast:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
@@ -388,6 +412,19 @@
   }
   .meter > span { white-space: nowrap; flex: none; }
   .meter > .tools, .meter > .views { flex: none; }
+  .meter .mright { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; }
+  .meter .mchip {
+    border: 1px solid var(--line); border-radius: 6px; background: none; padding: 1px 8px;
+    font: 500 11.5px/1.5 var(--sans); color: var(--ink-2); cursor: pointer; letter-spacing: 0;
+  }
+  .meter .mchip:hover { color: var(--ink); border-color: var(--ink-3); }
+  .meter .mchip.warn { color: var(--q-bad); border-color: var(--q-bad); }
+  .meter .mchip[hidden] { display: none; }
+  .meter .mkeys { font: 500 11.5px var(--sans); color: var(--ink-3); letter-spacing: 0; }
+  .meter kbd {
+    font: 500 10.5px var(--mono); padding: 0 4px; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 4px; color: var(--ink-2);
+  }
   .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
   .meter .ms  { color: var(--ink-3); font-weight: 600; }
   .meter .sep { color: var(--line); }
@@ -416,8 +453,9 @@
   .body { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 0; overflow: hidden; }
   /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
   .body[hidden], .report[hidden] { display: none; }
-  .query { grid-row: 1; }
-  .tabstrip { grid-row: 2; }
+  /* The tabs over the bar they switch, as a browser's are. */
+  .tabstrip { grid-row: 1; }
+  .query { grid-row: 2; }
   .disk-ask { grid-row: 3; }
   #view-search, #view-report { grid-row: 4; }
   .meter { grid-row: 5; }
@@ -780,14 +818,15 @@
   /* ---------------- the time ribbon ---------------- */
   /* The rail and the ribbon, put away: kept in the settings for every face.
      The rail stays a grid item, emptied, so the columns do not shift. */
-  .body.no-rail { grid-template-columns: 16px minmax(0, 1fr); }
-  .body.no-rail.peeking { grid-template-columns: 16px minmax(0, 1fr) var(--peek-w); }
+  /* Away means away: no edge is left. Settings → List brings it back. */
+  .body.no-rail { grid-template-columns: 0 minmax(0, 1fr); }
+  .body.no-rail.peeking { grid-template-columns: 0 minmax(0, 1fr) var(--peek-w); }
   .body.no-rail .rail { padding: 0; overflow: hidden; }
   .body.no-rail .rail > :not(.rail-back) { display: none; }
   /* The rail put away leaves its edge, which brings it back. */
   .rail-back { display: none; }
   .body.no-rail .rail-back {
-    display: flex; align-items: center; justify-content: center;
+    display: none; align-items: center; justify-content: center;
     width: 100%; height: 100%; border: 0; background: none; padding: 0;
     color: var(--ink-3); font-size: 15px; cursor: pointer;
   }
@@ -1827,9 +1866,6 @@
                  aria-autocomplete="list" aria-controls="hints"
                  data-t-ph="file name  ·  : starts a filter  ·  ext:pdf  ·  dm:7d"></textarea>
           <div class="qacts" id="qacts" aria-hidden="true"></div>
-          <!-- `:` or Ctrl+Space does the same: the filters a query can take. -->
-          <button type="button" id="qadd" tabindex="-1"
-                  data-t-title="add a filter (:)" data-t-aria="add a filter">+</button>
           <!-- `Alt+↓` is the gesture; hidden until there is a past. -->
           <button type="button" id="qpast" tabindex="-1" hidden
                   data-t-title="past searches (Alt+↓)" data-t-aria="past searches">▾</button>
@@ -1839,48 +1875,59 @@
           <div class="lens" id="lens" role="listbox" data-t-aria="Choices" hidden></div>
         </div>
       </div>
-      <div class="tabs" role="tablist">
-        <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
-        <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
+      <!-- The filters a query can take, as `:` and Ctrl+Space offer them. -->
+      <button type="button" id="qadd" class="qfilter" aria-haspopup="listbox"
+              data-t-title="add a filter (:)" data-t-aria="add a filter"><span data-t="Filter"></span> ▾</button>
+      <!-- Under the bar: what the results hold, each a term a press adds; at
+           its right end the switches for what is shown. -->
+      <div class="ctxrow">
+        <div class="narrow" id="narrow">
+          <p class="qread" id="qread"></p>
+          <span class="nlbl" id="narrow-lbl" data-t="Narrow:" hidden></span>
+          <span class="chips" id="chips"></span>
+        </div>
+        <div class="tabs" role="tablist">
+          <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
+          <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
+        </div>
+        <!-- One group: each of these is about the window, not the results. -->
+        <div class="tools" role="group" data-t-aria="window controls">
+          <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
+                  aria-expanded="false" data-t-title="how to run it"
+                  data-t-aria="switch between the window, the terminal and the browser">⇄</button>
+          <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
+                  aria-expanded="false" data-t-title="language"
+                  data-t-aria="choose the language">文</button>
+          <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
+                  aria-expanded="false" data-t-title="what is skipped"
+                  data-t-aria="the rules that keep files out of the index">⊘</button>
+          <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
+                  aria-expanded="false" data-t-title="disks"
+                  data-t-aria="the disks this machine has, and which are indexed">⛁</button>
+          <button type="button" id="tab-new" class="about"
+                  data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
+          <button type="button" id="csv" class="about"
+                  data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
+          <button type="button" id="about" class="about" aria-pressed="false" hidden
+                  data-t-title="help" data-t-aria="show the help">?</button>
+          <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
+          <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
+                  data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        </div>
+        <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
+        <div class="views" id="peek-switch" role="group">
+          <button type="button" id="peek-toggle" aria-pressed="false"
+                  data-t-title="Preview" data-t-aria="close the preview">◫</button>
+        </div>
+        <div class="views" id="views" role="group" data-t-aria="how the results are shown">
+          <button type="button" data-view="detail" aria-pressed="true"
+                  data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
+          <button type="button" data-view="icons" aria-pressed="false"
+                  data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
+          <button type="button" data-view="large" aria-pressed="false"
+                  data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
+        </div>
       </div>
-      <!-- One group: each of these is about the window, not the results. -->
-      <div class="tools" role="group" data-t-aria="window controls">
-        <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
-                aria-expanded="false" data-t-title="how to run it"
-                data-t-aria="switch between the window, the terminal and the browser">⇄</button>
-        <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
-                aria-expanded="false" data-t-title="language"
-                data-t-aria="choose the language">文</button>
-        <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
-                aria-expanded="false" data-t-title="what is skipped"
-                data-t-aria="the rules that keep files out of the index">⊘</button>
-        <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
-                aria-expanded="false" data-t-title="disks"
-                data-t-aria="the disks this machine has, and which are indexed">⛁</button>
-        <button type="button" id="tab-new" class="about"
-                data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
-        <button type="button" id="csv" class="about"
-                data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
-        <button type="button" id="about" class="about" aria-pressed="false" hidden
-                data-t-title="help" data-t-aria="show the help">?</button>
-        <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
-        <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
-                data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-      </div>
-      <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
-      <div class="views" id="peek-switch" role="group">
-        <button type="button" id="peek-toggle" aria-pressed="false"
-                data-t-title="Preview" data-t-aria="close the preview">◫</button>
-      </div>
-      <div class="views" id="views" role="group" data-t-aria="how the results are shown">
-        <button type="button" data-view="detail" aria-pressed="true"
-                data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
-        <button type="button" data-view="icons" aria-pressed="false"
-                data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
-        <button type="button" data-view="large" aria-pressed="false"
-                data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
-      </div>
-      <p class="qread" id="qread"></p>
     </div>
 
     <!-- The search tabs. Hidden only while the report is shown. -->
@@ -1904,6 +1951,15 @@
       <span id="stale" class="stale" hidden></span>
       <span class="sep" id="path-note-sep">·</span>
       <span id="path-note" data-t="connecting…"></span>
+      <!-- The status bar's right end: a disk waiting for an answer, how words
+           are read for every search, and the two keys worth knowing. -->
+      <span class="mright">
+        <button type="button" class="mchip warn" id="m-disk" hidden></button>
+        <button type="button" class="mchip" id="m-typos"
+                data-t-title="How every word is read; a press changes it"></button>
+        <span class="mkeys"><kbd>:</kbd> <span data-t="filter"></span>
+          <kbd>Alt</kbd>+<kbd>T</kbd> <span data-t="tab"></span></span>
+      </span>
     </div>
 
     <!-- Choosing a face starts a program, so a second press confirms it. -->
@@ -1972,6 +2028,8 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Refresh the list every"></div><div class="desc" data-t="While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."></div></div><div class="seg" id="seg-refresh"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="System icons"></div><div class="desc" data-t="The desktop's own file and folder icons instead of built-in glyphs."></div></div><div class="seg" id="seg-sysicons"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Sidebar"></div><div class="desc" data-t="Places, types and sizes beside the list. The filter strip and the lens do the same from the bar."></div></div><div class="seg" id="seg-rail"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Time ribbon"></div><div class="desc" data-t="How old the results are, as bars under the list."></div></div><div class="seg" id="seg-ribbon"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
             </div>
@@ -2985,6 +3043,7 @@
           (s) => s.role === "unknown_field" || s.role === "bad_value",
         );
         offerFix(text);
+        drawNarrow();
         qread.classList.toggle("warn", wrong);
         /* Shown only when it has something to say: any part of the query
          * more than a plain word, or wrong. */
@@ -4060,6 +4119,100 @@
      it: a count, and the query that shows them — its words written `fuzzy:`. */
   const similarBox = document.getElementById("similar");
   let SIMILAR = "";
+
+  /* The narrowing strip: what the results hold, each a term a press adds —
+     the commonest kinds and extensions, the folders under home that hold the
+     most, and the last week. One `facets` walk and one `usage`, after the
+     search has landed; nothing for a query that reads files. */
+  const chipsBox = document.getElementById("chips");
+  const narrowLbl = document.getElementById("narrow-lbl");
+  let narrowGen = 0, narrowStop = null, narrowTimer = 0, CHIPS = [];
+  function drawNarrow() {
+    const wrong = qread.classList.contains("warn") || !!qread.querySelector(".fix");
+    const show = !wrong && CHIPS.length > 0;
+    chipsBox.hidden = !show;
+    narrowLbl.hidden = !show;
+    qread.style.display = show ? "none" : "";
+    chipsBox.innerHTML = show ? CHIPS.map((c, i) =>
+      '<button type="button" data-i="' + i + '" title="' + escape_(c.term) + '">' + escape_(c.label) +
+      "<b>" + fmt(c.n) + "</b></button>").join("") : "";
+    document.getElementById("narrow").title = qread.textContent || "";
+  }
+  function narrowSoon(text, total) {
+    clearTimeout(narrowTimer);
+    const mine = ++narrowGen;
+    if (narrowStop) narrowStop.abort();
+    if (READS.test(text) || total < 2) { CHIPS = []; drawNarrow(); return; }
+    narrowTimer = setTimeout(() => {
+      narrowStop = new AbortController();
+      const signal = narrowStop.signal;
+      const has = (f) => terms(text).some(([a, b]) => new RegExp("^" + f + ":", "i").test(text.slice(a, b)));
+      Promise.all([
+        SERVICE.get("facets", { q: text, by: "kind,ext,age", edges: "7" }, signal).catch(() => null),
+        HOME && !has("under") && !has("parent") ? SERVICE.get("usage", { path: HOME, top: 8, q: text }, signal).catch(() => null) : null,
+      ]).then(([f, u]) => {
+        if (mine !== narrowGen || q.value !== text) return;
+        const out = [];
+        const all = f ? f.total : total;
+        const group = (by) => ((f && f.groups.find((g) => g.by === by)) || { facets: [] }).facets;
+        if (!has("kind")) for (const x of group("kind").slice(0, 3)) {
+          if (x.count > 0 && x.count < all) out.push({ label: KIND_KEY[x.key] || x.key, n: x.count, term: "kind:" + x.key });
+        }
+        if (!has("ext")) for (const x of group("ext").slice(0, 3)) {
+          if (x.key && x.count > 0 && x.count < all) out.push({ label: "." + x.key, n: x.count, term: "ext:" + x.key });
+        }
+        if (u) for (const c of u.children.filter((c) => c.files > 0 && c.files < all).sort((a, b) => b.files - a.files).slice(0, 2)) {
+          out.push({ label: homeForm(c.path), n: c.files, term: "under:" + quoteIf(homeForm(c.path)) });
+        }
+        const week = group("age").find((x) => x.key === "7");
+        if (!has("dm") && week && week.count > 0 && week.count < all) out.push({ label: T("last 7 days"), n: week.count, term: "dm:7d" });
+        CHIPS = out;
+        drawNarrow();
+      });
+    }, 250);
+  }
+  /* A press adds the term, or puts it in place of the one of the same field;
+     with Alt held it excludes instead. */
+  chipsBox.addEventListener("mousedown", (e) => {
+    const b = e.target.closest("button");
+    const c = b && CHIPS[+b.dataset.i];
+    if (!c) return;
+    e.preventDefault();
+    const term = (e.altKey ? "!" : "") + c.term;
+    const field = c.term.slice(0, c.term.indexOf(":") + 1);
+    const text = q.value;
+    const same = !e.altKey && terms(text).find(([a, x]) => text.slice(a, x).toLowerCase().startsWith(field));
+    let next;
+    if (same) next = text.slice(0, same[0]) + term + text.slice(same[1]);
+    else next = (text.trim() ? text.replace(/\s+$/, "") + " " : "") + term;
+    q.value = next;
+    q.focus();
+    q.setSelectionRange(next.length, next.length);
+    render();
+  });
+
+  /* How every word is read, said and switched at the status bar's end. */
+  const typosBtn = document.getElementById("m-typos");
+  const TYPOS_SAID = { "": "offer it", always: "always", off: "off" };
+  function drawTypos() {
+    const v = (KEPT && KEPT.typos) || "";
+    typosBtn.textContent = T("Similar spelling: {how}", { how: T(TYPOS_SAID[v] || "offer it") });
+  }
+  typosBtn.addEventListener("click", () => {
+    const v = (KEPT && KEPT.typos) || "";
+    const next = { "": "always", always: "off", off: "" }[v];
+    KEPT = { ...(KEPT || {}), typos: next };
+    keep({ typos: next });
+    drawTypos();
+    // Read again under the new rule once the service has it.
+    setTimeout(render, 150);
+  });
+  document.getElementById("m-disk").addEventListener("click", () => {
+    const b = document.querySelector('.set-nav button[data-sec="disks"]');
+    document.getElementById("settings-btn").click();
+    if (b) b.click();
+  });
+
   /* Nothing found: each filter, left out on its own, and what would then be
      found. Counted, never searched, and only for this query. */
   const rescueBox = document.getElementById("rescue");
@@ -4861,6 +5014,7 @@
         READING = res.reading || null;
         offerSimilar(res.total === 0 ? res.similar : null);
         offerRescue(text, res.total !== 0);
+        if (queryChanged) narrowSoon(text, res.total);
         LIST.since = Date.now();
         /* The first window, and the first word on what the rest would cost. */
         LIST.cost = res.took_us / 1000;
@@ -5478,27 +5632,28 @@
   /* The rail and the ribbon as the settings hold them. */
   function applyPanes() {
     const body = document.querySelector(".body");
-    const railOff = !!(KEPT && KEPT.rail_hidden);
-    const ribbonOff = !!(KEPT && KEPT.ribbon_hidden);
+    const railOff = !(KEPT && KEPT.rail_shown);
+    const ribbonOff = !(KEPT && KEPT.ribbon_shown);
     if (body) {
       body.classList.toggle("no-rail", railOff);
       body.classList.toggle("no-ribbon", ribbonOff);
     }
     // The rail comes back from its own edge; only the ribbon needs the line.
     document.getElementById("rail-back").hidden = true;
-    document.getElementById("ribbon-back").hidden = !ribbonOff;
-    document.getElementById("restore").hidden = !ribbonOff;
+    // No line left to bring it back: Settings → List does, and says so.
+    document.getElementById("ribbon-back").hidden = true;
+    document.getElementById("restore").hidden = true;
   }
   function setPanes(change) {
     KEPT = { ...(KEPT || {}), ...change };
     applyPanes();
     keep(change);
   }
-  document.getElementById("rail-x").addEventListener("click", () => setPanes({ rail_hidden: true }));
-  document.getElementById("ribbon-x").addEventListener("click", () => setPanes({ ribbon_hidden: true }));
-  document.getElementById("rail-back").addEventListener("click", () => setPanes({ rail_hidden: false }));
-  document.getElementById("rail-edge").addEventListener("click", () => setPanes({ rail_hidden: false }));
-  document.getElementById("ribbon-back").addEventListener("click", () => setPanes({ ribbon_hidden: false }));
+  document.getElementById("rail-x").addEventListener("click", () => setPanes({ rail_shown: false }));
+  document.getElementById("ribbon-x").addEventListener("click", () => setPanes({ ribbon_shown: false }));
+  document.getElementById("rail-back").addEventListener("click", () => setPanes({ rail_shown: true }));
+  document.getElementById("rail-edge").addEventListener("click", () => setPanes({ rail_shown: true }));
+  document.getElementById("ribbon-back").addEventListener("click", () => setPanes({ ribbon_shown: true }));
 
   function applyGrid() {
     document.body.classList.toggle("lines", !!(KEPT && KEPT.grid_lines));
@@ -5509,6 +5664,7 @@
     KEPT = s;
     applyGrid();
     applyPanes();
+    drawTypos();
     applyTheme(s.theme || "");
     const oldSort = sortKey;
     const oldDescending = sortDesc;
@@ -7385,6 +7541,7 @@
    * position and the selection. */
   function applyLanguage() {
     document.documentElement.lang = LANG;
+    drawTypos();
     buildFormatters();
     applyMarkup(document);
     buildLangMenu();
@@ -7833,6 +7990,10 @@
     disksBtn.classList.toggle("asking", !!d);
     const badge = document.getElementById("set-badge");
     if (badge) badge.hidden = !d;
+    const asking = DISK_LIST.filter((x) => x.state === "asking").length;
+    const chip = document.getElementById("m-disk");
+    chip.hidden = !asking;
+    chip.textContent = T("{n} disk asking", { n: asking });
     settingsBtnAsking(!!d);
     if (!d) return;
     diskAsk.dataset.id = d.volume.id;
@@ -8060,6 +8221,14 @@
       KEPT.system_icons = v === "on";
       keep({ system_icons: KEPT.system_icons });
       repaint(true);
+      drawSettings();
+    });
+    seg("seg-rail", [["on", T("On")], ["off", T("Off")]], k.rail_shown ? "on" : "off", (v) => {
+      setPanes({ rail_shown: v === "on" });
+      drawSettings();
+    });
+    seg("seg-ribbon", [["on", T("On")], ["off", T("Off")]], k.ribbon_shown ? "on" : "off", (v) => {
+      setPanes({ ribbon_shown: v === "on" });
       drawSettings();
     });
     seg("seg-grid", [["on", T("On")], ["off", T("Off")]], k.grid_lines ? "on" : "off", (v) => {

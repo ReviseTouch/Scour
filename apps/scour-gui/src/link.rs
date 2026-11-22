@@ -130,6 +130,13 @@ pub enum Ask {
         slot: u32,
         request: Request,
     },
+    /// What the narrowing line under the bar shows for this query: its kinds,
+    /// extensions and week (`slot` 0), and its folders under home (`slot` 1).
+    Narrow {
+        query_revision: u64,
+        slot: u32,
+        request: Request,
+    },
     Stop,
 }
 
@@ -159,6 +166,10 @@ pub enum Got {
     Lens {
         generation: u64,
         slot: u32,
+        reply: Box<Response>,
+    },
+    Narrow {
+        query_revision: u64,
         reply: Box<Response>,
     },
     Places(Box<Response>),
@@ -260,7 +271,8 @@ impl Freshness {
             // goes out a moment before its search, and would look stale.
             Ask::Explain { query_revision, .. }
             | Ask::Facets { query_revision, .. }
-            | Ask::Count { query_revision, .. } => {
+            | Ask::Count { query_revision, .. }
+            | Ask::Narrow { query_revision, .. } => {
                 self.query.fetch_max(*query_revision, Ordering::Release);
             }
             Ask::Lens { generation, .. } => {
@@ -275,6 +287,7 @@ impl Freshness {
             Ask::Search { generation, .. } => *generation == self.search.load(Ordering::Acquire),
             Ask::Facets { query_revision, .. }
             | Ask::Count { query_revision, .. }
+            | Ask::Narrow { query_revision, .. }
             | Ask::Explain { query_revision, .. } => {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
@@ -384,6 +397,7 @@ impl Link {
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
             | Ask::Lens { .. }
+            | Ask::Narrow { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -451,6 +465,8 @@ enum Lane {
     Await,
     /// The query bar's lens.
     Lens,
+    /// The narrowing line under the bar.
+    Narrow,
 }
 
 /// Have a service at `addr`, starting one if nobody else has. At most once for
@@ -543,7 +559,7 @@ fn spawn_lane(
                 _ => Half::Both,
             };
             let slot = match ask {
-                Ask::Lens { slot, .. } => slot,
+                Ask::Lens { slot, .. } | Ask::Narrow { slot, .. } => slot,
                 _ => 0,
             };
             let (revision, request, facets) = match ask {
@@ -725,6 +741,11 @@ fn spawn_lane(
                     request,
                     ..
                 } => (generation, request, Lane::Lens),
+                Ask::Narrow {
+                    query_revision,
+                    request,
+                    ..
+                } => (query_revision, request, Lane::Narrow),
                 Ask::Stop => break,
             };
             // The page this request asked for, read back off the request so the
@@ -751,6 +772,10 @@ fn spawn_lane(
                         Lane::Lens => Got::Lens {
                             generation: revision,
                             slot,
+                            reply,
+                        },
+                        Lane::Narrow => Got::Narrow {
+                            query_revision: revision,
                             reply,
                         },
                         Lane::Search => Got::Search {
@@ -798,7 +823,7 @@ fn spawn_lane(
                         client = None;
                         was_down = true;
                         sink(Got::Down(e.to_string()));
-                    } else if matches!(facets, Lane::Lens) {
+                    } else if matches!(facets, Lane::Lens | Lane::Narrow) {
                         // A choice whose count was refused keeps no number;
                         // nothing else is said about it.
                     } else if matches!(facets, Lane::Peek) && is_preview {
@@ -822,6 +847,7 @@ fn spawn_lane(
                             | Lane::Thumbnails
                             | Lane::Peek
                             | Lane::Lens
+                            | Lane::Narrow
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

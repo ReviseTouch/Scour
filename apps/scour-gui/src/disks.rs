@@ -20,6 +20,17 @@ pub fn draw(w: &MainWindow, cat: &Catalogue, disks: &[scour_proto::Disk]) -> Str
         })
         .unwrap_or_default();
     w.set_disk_question(question.into());
+    let waiting = disks
+        .iter()
+        .filter(|d| d.state == DiskState::Asking)
+        .count();
+    w.set_disk_said(if waiting == 0 {
+        slint::SharedString::new()
+    } else {
+        t(cat, "{n} disk asking")
+            .replace("{n}", &waiting.to_string())
+            .into()
+    });
     asking.map(|d| d.volume.id.clone()).unwrap_or_default()
 }
 

@@ -1445,12 +1445,26 @@ export component MainWindow inherits Window {
     property <length> chrome: root.rail-w + 1px + 24px + 14px;
     /// The sidebar's width, which the header's mark matches so the field
     /// starts where the list does.
-    // Put away, the rail leaves a handle at the window's edge to bring it back.
-    out property <length> rail-w: root.rail-shown ? 180px : 16px;
+    // Put away, the rail leaves nothing: Settings → List brings it back.
+    out property <length> rail-w: root.rail-shown ? 180px : 0px;
     /// The rail and the time ribbon, each put away or brought back by a person;
     /// kept in the shared settings.
-    in-out property <bool> rail-shown: true;
-    in-out property <bool> ribbon-shown: true;
+    in-out property <bool> rail-shown: false;
+    in-out property <bool> ribbon-shown: false;
+    // The narrowing line under the bar: what the results hold, each a term.
+    in property <[Facet]> chips;
+    in property <string> word-narrow;
+    in property <string> word-filter-button;
+    callback narrow-taken(string, bool);
+    // The status bar's right end.
+    in property <string> typos-said;
+    in property <string> disk-said;
+    in property <string> word-filter-key;
+    in property <string> word-tab-key;
+    in property <string> set-rail;
+    in property <string> set-rail-note;
+    in property <string> set-ribbon;
+    in property <string> set-ribbon-note;
     callback panes-changed();
     in property <string> word-show-rail;
     in property <string> word-show-ribbon;
@@ -2123,14 +2137,56 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
+        // The search tabs, always: a strip that appears only with a second tab
+        // was never found (17 November). One tab has no ×.
+        if root.tabs-on && root.tab != "report": Rectangle {
+            height: 36px;
+            background: Theme.ground;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+            // Under the tabs: a double-click on the empty strip opens one.
+            TouchArea {
+                double-clicked => { root.tab-new(); }
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 2px;
+                alignment: start;
+                for label[i] in root.tab-labels: VerticalLayout {
+                    alignment: center;
+                    SearchTabChip {
+                        label: label;
+                        on: i == root.tab-active;
+                        closable: root.tab-labels.length > 1;
+                        picked => { root.tab-picked(i); }
+                        closed => { root.tab-closed(i); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Tool {
+                        icon: @image-url("icons/tools/plus.svg");
+                        has-icon: true;
+                        clicked => { root.tab-new(); }
+                    }
+                }
+            }
+        }
+
         // The query line. Slint's `TextInput` has no range colouring (upstream
         // #9560 puts editable text out of scope), so the colours are a second
         // layer under a transparent input.
         Rectangle {
             // 16px above the box, 12px below, the box 26px of 20px monospace.
             // Taller when the query is read back — see `reading`.
-            // And a line taller for each line the query wraps onto, up to three.
-            height: (root.q-shown - 1) * 22px + (root.reading == "" && root.fix-said == "" ? 56px : 77px);
+            // The bar, a line taller for each line the query wraps onto, and
+            // the narrowing line under it, which is always there.
+            height: (root.q-shown - 1) * 22px + 86px;
             background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
@@ -2145,11 +2201,11 @@ export component MainWindow inherits Window {
                 padding-left: 16px;
                 padding-right: 12px;
                 padding-top: 12px;
-                padding-bottom: 11px;
-                spacing: 5px;
+                padding-bottom: 5px;
+                spacing: 6px;
 
             HorizontalLayout {
-                // The box's own height, so the reading under it moves nothing.
+                // The box's own height, so the line under it moves nothing.
                 height: 32px + (root.q-shown - 1) * 22px;
                 spacing: 10px;
 
@@ -2190,9 +2246,9 @@ export component MainWindow inherits Window {
                     // One number for every layer: the runs, the capsules, the
                     // caret and a press are all placed from it.
                     property <length> pad: 9px;
-                    // What a line holds: the width less the padding and the two
-                    // buttons at the end, the filter's and the past's.
-                    property <length> room: max(0px, field.width - field.pad * 2 - 24px
+                    // What a line holds: the width less the padding and the
+                    // past's button at the end.
+                    property <length> room: max(0px, field.width - field.pad * 2
                         - (root.has-past ? 24px : 0px));
                     // One character's width, measured over forty because a
                     // layout rounds each run to whole pixels and the error
@@ -2524,7 +2580,7 @@ export component MainWindow inherits Window {
                 q-press := TouchArea {
                     x: 0;
                     y: 0;
-                    width: parent.width - 24px - (root.has-past ? 24px : 0px);
+                    width: parent.width - (root.has-past ? 24px : 0px);
                     height: parent.height;
                     mouse-cursor: text;
                     property <int> anchor: 0;
@@ -2573,32 +2629,6 @@ export component MainWindow inherits Window {
                         input.set-selection-offsets(w.from, w.to);
                     }
                 }
-
-                    // Starts a filter, as `:` does: the lens of everything a
-                    // query can take.
-                    Rectangle {
-                        x: field.width - (root.has-past ? 50px : 26px);
-                        width: 22px;
-                        height: 22px;
-                        y: (field.height - 22px) / 2;
-                        border-radius: 3px;
-                        background: add-touch.has-hover ? Theme.hover : transparent;
-                        Text {
-                            text: "+";
-                            color: root.lens-open && root.lens-launching ? Theme.ink : Theme.ink-3;
-                            font-size: 15px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        add-touch := TouchArea {
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down) {
-                                    input.focus();
-                                    root.lens-launch();
-                                }
-                            }
-                        }
-                    }
 
                     // What says `Alt+↓` is there. Inside the field at its
                     // trailing edge, because the box stretches and a button
@@ -2678,6 +2708,104 @@ export component MainWindow inherits Window {
                     }
 
                 }
+
+                // The filters a query can take, as `:` and Ctrl+Space offer them.
+                VerticalLayout {
+                    alignment: start;
+                    Push {
+                        height: 34px;
+                        label: root.word-filter-button;
+                        clicked => {
+                            input.focus();
+                            root.lens-launch();
+                        }
+                    }
+                }
+            }
+
+                // Under the bar: what the results hold, each a term a press adds;
+                // the switches for what is shown at its right end. One line, always:
+                // a long strip is cut, never wrapped, so the list never moves.
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 8px;
+
+                    // `siz:` is searched for as text; this offers `size:`.
+                    if root.fix-said != "": Rectangle {
+                        width: fix-text.preferred-width + 12px;
+                        height: 18px;
+                        y: 1px;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        border-color: Theme.q-bad;
+                        fix-text := Text {
+                            text: root.fix-said;
+                            color: Theme.q-bad;
+                            font-family: Fonts.mono;
+                            font-size: 11px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.fix-taken(); }
+                        }
+                    }
+                    if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Text {
+                        text: root.word-narrow;
+                        color: Theme.ink-3;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Flickable {
+                        horizontal-stretch: 1;
+                        interactive: false;
+                        viewport-width: chip-row.preferred-width;
+                        chip-row := HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            for c in root.chips: Rectangle {
+                                y: 4px;
+                                height: 22px;
+                                width: chip-text.preferred-width + chip-n.preferred-width + 21px;
+                                border-radius: 6px;
+                                border-width: Theme.hair;
+                                border-color: chip-touch.has-hover ? Theme.ink-3 : Theme.line;
+                                chip-text := Text {
+                                    x: 8px;
+                                    text: c.label;
+                                    color: chip-touch.has-hover ? Theme.ink : Theme.ink-2;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                chip-n := Text {
+                                    x: 8px + chip-text.preferred-width + 5px;
+                                    text: c.count;
+                                    color: Theme.ink-3;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                chip-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                            root.narrow-taken(c.token, e.modifiers.alt);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.chips.length == 0 || root.fix-said != "" || root.reading-warn: Text {
+                        text: root.reading;
+                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
+                        font-size: 11.5px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
 
                 // Search or report, and what the list looks like: a desktop's
                 // header bar, beside the field rather than in rows of their own.
@@ -2771,90 +2899,11 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
-            }
-
-                // What the engine read, in words: the colours say what each
-                // piece is, this says why the answer is what it is. Shown only
-                // when there is something worth saying — `Role::is_telling`.
-                if root.reading != "" || root.fix-said != "": HorizontalLayout {
-                    spacing: 8px;
-                    height: 20px;
-
-                    // `siz:` is searched for as text; this offers `size:`.
-                    if root.fix-said != "": Rectangle {
-                        width: fix-text.preferred-width + 12px;
-                        height: 18px;
-                        y: 1px;
-                        border-radius: 5px;
-                        border-width: 1px;
-                        border-color: Theme.q-bad;
-                        fix-text := Text {
-                            text: root.fix-said;
-                            color: Theme.q-bad;
-                            font-family: Fonts.mono;
-                            font-size: 11px;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.fix-taken(); }
-                        }
-                    }
-                    Text {
-                        text: root.reading;
-                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
-                        font-size: 11.5px;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
                 }
             }
         }
 
-        // The search tabs, always: a strip that appears only with a second tab
-        // was never found (17 November). One tab has no ×.
-        if root.tabs-on && root.tab != "report": Rectangle {
-            height: 36px;
-            background: Theme.ground;
 
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.line;
-            }
-            // Under the tabs: a double-click on the empty strip opens one.
-            TouchArea {
-                double-clicked => { root.tab-new(); }
-            }
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 2px;
-                alignment: start;
-                for label[i] in root.tab-labels: VerticalLayout {
-                    alignment: center;
-                    SearchTabChip {
-                        label: label;
-                        on: i == root.tab-active;
-                        closable: root.tab-labels.length > 1;
-                        picked => { root.tab-picked(i); }
-                        closed => { root.tab-closed(i); }
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    Tool {
-                        icon: @image-url("icons/tools/plus.svg");
-                        has-icon: true;
-                        clicked => { root.tab-new(); }
-                    }
-                }
-            }
-        }
 
         // A disk that came and has not been answered for, one at a time.
         if root.disk-question != "": Rectangle {
@@ -3675,7 +3724,7 @@ export component MainWindow inherits Window {
 
                 // The rail put away: its whole edge brings it back.
                 rail-back := TouchArea {
-                    visible: !root.rail-shown;
+                    visible: false;
                     width: parent.width - 1px;
                     mouse-cursor: pointer;
                     clicked => {
@@ -4933,18 +4982,62 @@ export component MainWindow inherits Window {
 
                 Rectangle { }
 
-                // What was put away, and the way to bring it back. The rail
-                // has its own handle at the window's edge.
-                if !root.ribbon-shown && root.tab != "report": VerticalLayout {
+                // A disk waiting for an answer, how every word is read, and
+                // the two keys worth knowing. The rail and the ribbon, put
+                // away, come back from Settings → List.
+                if root.disk-said != "": VerticalLayout {
                     alignment: center;
-                    Push {
-                        label: root.word-show-ribbon;
-                        plain: true;
-                        clicked => {
-                            root.ribbon-shown = true;
-                            root.panes-changed();
+                    Rectangle {
+                        height: 20px;
+                        width: disk-text.preferred-width + 16px;
+                        border-radius: 6px;
+                        border-width: Theme.hair;
+                        border-color: Theme.q-bad;
+                        disk-text := Text {
+                            text: root.disk-said;
+                            color: Theme.q-bad;
+                            font-size: 11.5px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.tool-clicked("settings");
+                                root.settings-section = "disks";
+                            }
                         }
                     }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 20px;
+                        width: typos-text.preferred-width + 16px;
+                        border-radius: 6px;
+                        border-width: Theme.hair;
+                        border-color: typos-touch.has-hover ? Theme.ink-3 : Theme.line;
+                        typos-text := Text {
+                            text: root.typos-said;
+                            color: typos-touch.has-hover ? Theme.ink : Theme.ink-2;
+                            font-size: 11.5px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        typos-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.typos-picked(root.typos-choice == "" ? "always"
+                                    : root.typos-choice == "always" ? "off" : "");
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: ":  " + root.word-filter-key + "    Alt+T  " + root.word-tab-key;
+                    color: Theme.ink-3;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
                 }
 
                 if root.note != "": Text {
@@ -5796,6 +5889,34 @@ export component MainWindow inherits Window {
                                             values: ["on", "off"];
                                             value: root.system-icons ? "on" : "off";
                                             picked(v) => { root.system-icons-picked(v == "on"); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-rail;
+                                        note: root.set-rail-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.rail-shown ? "on" : "off";
+                                            picked(v) => {
+                                                root.rail-shown = v == "on";
+                                                root.panes-changed();
+                                            }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-ribbon;
+                                        note: root.set-ribbon-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.ribbon-shown ? "on" : "off";
+                                            picked(v) => {
+                                                root.ribbon-shown = v == "on";
+                                                root.panes-changed();
+                                            }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }

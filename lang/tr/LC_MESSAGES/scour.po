@@ -2593,3 +2593,39 @@ msgstr "{all} klasörün en ağır {n} tanesi"
 
 msgid "no folder here by that name"
 msgstr "burada bu adda klasör yok"
+
+msgid "Filter"
+msgstr "Süzgeç"
+
+msgid "Narrow:"
+msgstr "Daralt:"
+
+msgid "tab"
+msgstr "sekme"
+
+msgid "How every word is read; a press changes it"
+msgstr "Bütün kelimeler nasıl okunsun; basınca değişir"
+
+msgid "Similar spelling: {how}"
+msgstr "Benzer yazım: {how}"
+
+msgid "offer it"
+msgstr "teklif et"
+
+msgid "always"
+msgstr "hep"
+
+msgid "{n} disk asking"
+msgstr "{n} disk soruyor"
+
+msgid "Sidebar"
+msgstr "Kenar çubuğu"
+
+msgid "Places, types and sizes beside the list. The filter strip and the lens do the same from the bar."
+msgstr "Listenin yanında yerler, türler ve boyutlar. Aynı işi çubuktaki Daralt şeridi ve mercek de görür."
+
+msgid "Time ribbon"
+msgstr "Zaman şeridi"
+
+msgid "How old the results are, as bars under the list."
+msgstr "Sonuçların yaşı, listenin altında çubuklarla."

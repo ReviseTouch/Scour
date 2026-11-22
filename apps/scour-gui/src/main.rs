@@ -712,8 +712,8 @@ fn main() -> Result<()> {
     window.set_tabs_on(!kept.tabs_off);
     window.set_accents_ignored(!kept.accents_exact);
     window.set_typos_choice(typos_choice(&kept.typos).into());
-    window.set_rail_shown(!kept.rail_hidden);
-    window.set_ribbon_shown(!kept.ribbon_hidden);
+    window.set_rail_shown(kept.rail_shown);
+    window.set_ribbon_shown(kept.ribbon_shown);
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {
@@ -1305,9 +1305,18 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
+        let cat = Rc::clone(&cat);
         window.on_typos_picked(move |choice| {
             if let Some(w) = weak.upgrade() {
                 w.set_typos_choice(choice.clone());
+                w.set_typos_said(typos_said(&cat.borrow(), &choice).into());
+                // Asked again once the service has the new rule.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(150), move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.invoke_query_changed(w.get_query());
+                    }
+                });
             }
             link.send(Ask::Remember {
                 change: scour_settings::Change {
@@ -1448,8 +1457,8 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             link.send(Ask::Remember {
                 change: scour_settings::Change {
-                    rail_hidden: Some(!w.get_rail_shown()),
-                    ribbon_hidden: Some(!w.get_ribbon_shown()),
+                    rail_shown: Some(w.get_rail_shown()),
+                    ribbon_shown: Some(w.get_ribbon_shown()),
                     ..Default::default()
                 },
             });
@@ -4633,6 +4642,7 @@ fn apply(
                 });
                 state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
                 qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total);
+                qwire::narrow(w, &mut state.borrow_mut(), link, cat, r.total);
             }
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
@@ -4969,6 +4979,11 @@ fn apply(
         // The query, read back and cut into runs, painted under the box. Two of
         // the engine's roles say *this is not what you think it is*: without them
         // a mistyped `sizE:>1mb` answers `0 of 0`, like a query matching nothing.
+        Got::Narrow {
+            query_revision,
+            reply,
+            ..
+        } => qwire::narrowed(w, &mut state.borrow_mut(), cat, query_revision, *reply),
         Got::Lens {
             generation,
             slot,
@@ -5653,6 +5668,16 @@ fn answer_the_next_start(
 /// hold a phrase together. What a term **means** stays `explain`'s answer.
 /// [`scour_settings::Settings::typos`] as the settings row's value: an
 /// unknown word is the offer, as the service reads it.
+/// The status bar's word for how every word is read.
+fn typos_said(cat: &Catalogue, choice: &str) -> String {
+    let how = match choice {
+        "always" => "always",
+        "off" => "off",
+        _ => "offer it",
+    };
+    t(cat, "Similar spelling: {how}").replace("{how}", &t(cat, how))
+}
+
 fn typos_choice(kept: &str) -> &'static str {
     match kept {
         "off" => "off",
@@ -5845,6 +5870,18 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "cafe also finds café. A word typed with an accent still finds only that spelling.",
     ));
     w.set_set_typos(t(cat, "Typing mistakes"));
+    w.set_word_narrow(t(cat, "Narrow:"));
+    w.set_word_filter_button(format!("{} ▾", t(cat, "Filter")).into());
+    w.set_word_filter_key(t(cat, "filter"));
+    w.set_word_tab_key(t(cat, "tab"));
+    w.set_set_rail(t(cat, "Sidebar"));
+    w.set_set_rail_note(t(
+        cat,
+        "Places, types and sizes beside the list. The filter strip and the lens do the same from the bar.",
+    ));
+    w.set_set_ribbon(t(cat, "Time ribbon"));
+    w.set_set_ribbon_note(t(cat, "How old the results are, as bars under the list."));
+    w.set_typos_said(typos_said(cat, w.get_typos_choice().as_str()).into());
     w.set_set_typos_note(t(
         cat,
         "A letter wrong, missing, extra or swapped, in a word of five letters or more.",

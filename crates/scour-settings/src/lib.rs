@@ -130,12 +130,14 @@ pub struct Settings {
     /// stay in [`Settings::tabs`] and come back with the switch.
     #[serde(default)]
     pub tabs_off: bool,
-    /// The kinds-and-places rail beside the list, put away.
+    /// The kinds-and-places rail beside the list, brought back. Away unless
+    /// somebody asks for it: the query bar's lens and its narrowing strip do
+    /// its work. A new name, so an old `rail_hidden: false` does not bring it.
     #[serde(default)]
-    pub rail_hidden: bool,
-    /// The time ribbon under the list, put away.
+    pub rail_shown: bool,
+    /// The time ribbon under the list, brought back; away by default.
     #[serde(default)]
-    pub ribbon_hidden: bool,
+    pub ribbon_shown: bool,
     /// A letter and the same letter with a mark are different letters to a
     /// search: `sirket` does not find `şirket`. Off by default, where only a
     /// word typed with a mark is that strict.
@@ -210,8 +212,8 @@ pub struct Change {
     pub grid_columns: Option<bool>,
     pub system_icons: Option<bool>,
     pub tabs_off: Option<bool>,
-    pub rail_hidden: Option<bool>,
-    pub ribbon_hidden: Option<bool>,
+    pub rail_shown: Option<bool>,
+    pub ribbon_shown: Option<bool>,
     pub accents_exact: Option<bool>,
     /// `off`, `always`, or `""` to offer. See [`Settings::typos`].
     pub typos: Option<String>,
@@ -313,11 +315,11 @@ impl Change {
         if let Some(v) = self.tabs_off {
             to.tabs_off = v;
         }
-        if let Some(v) = self.rail_hidden {
-            to.rail_hidden = v;
+        if let Some(v) = self.rail_shown {
+            to.rail_shown = v;
         }
-        if let Some(v) = self.ribbon_hidden {
-            to.ribbon_hidden = v;
+        if let Some(v) = self.ribbon_shown {
+            to.ribbon_shown = v;
         }
         if let Some(v) = self.accents_exact {
             to.accents_exact = v;
