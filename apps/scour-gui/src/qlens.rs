@@ -356,6 +356,14 @@ impl Lenses {
         Some(Chosen::Edit { query, caret, keep })
     }
 
+    /// The chosen line goes deeper or takes another value: a folder, or a list.
+    pub fn deepens(&self) -> bool {
+        self.open
+            .as_ref()
+            .and_then(|o| o.items.get(o.sel))
+            .is_some_and(|i| i.stays || i.dir.is_some())
+    }
+
     /// Ask again next time: what was answered no longer holds.
     pub fn forget(&mut self, key: &str) {
         self.seen.remove(key);

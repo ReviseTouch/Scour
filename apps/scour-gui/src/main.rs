@@ -2255,7 +2255,6 @@ fn main() -> Result<()> {
     {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
-        let model = Rc::clone(&rows);
         let weak = window.as_weak();
         // The fuller report, in the browser, on the same question. Not a switch
         // of face: this window stays, and so does the face somebody prefers.
@@ -2286,16 +2285,13 @@ fn main() -> Result<()> {
             let query = if scope.is_empty() {
                 String::new()
             } else {
-                format!("under:\"{scope}\"")
+                qwire::place_term(&scope)
             };
-            {
-                let mut s = state.borrow_mut();
-                s.query = query.clone();
-                s.advance_query();
-            }
-            w.set_query(query.as_str().into());
             w.set_tab("search".into());
-            dispatch(&state, &link, &model, w.get_visible_rows().max(0) as u32);
+            // Set, then tell: the field shows what is searched.
+            w.set_query(query.as_str().into());
+            w.invoke_query_changed(query.into());
+            w.invoke_caret_to_end();
         });
     }
 
@@ -2835,16 +2831,16 @@ fn main() -> Result<()> {
                 }
 
                 // The three that are only possible because there is an index.
+                // Into the query, where it can be seen and taken out: in place
+                // of a term of the same field, the rest of the query kept.
                 "search-here" => {
                     let scope = if is_dir { path.clone() } else { folder(&path) };
-                    w.invoke_query_changed(format!("under:{scope}").into());
+                    put_term(&w, &qwire::place_term(&scope));
                 }
                 "search-kind" => {
                     let name = leaf(&path);
                     match name.rfind('.').filter(|at| *at > 0) {
-                        Some(at) => w.invoke_query_changed(
-                            format!("ext:{}", name[at + 1..].to_lowercase()).into(),
-                        ),
+                        Some(at) => put_term(&w, &format!("ext:{}", name[at + 1..].to_lowercase())),
                         None => say(&w, t(&cat_now, "no extension to search for")),
                     }
                 }
@@ -4467,29 +4463,35 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
         if start > at {
             add(&query[at..start], 6, false, &mut out, &mut chars);
         }
-        add(
-            &query[start..end],
-            // The page's table, role for role.
-            match sp.role {
-                scour_core::Role::Field | scour_core::Role::Cmp | scour_core::Role::Or => 1,
-                scour_core::Role::Value | scour_core::Role::Phrase => 2,
-                scour_core::Role::Glob => 3,
-                scour_core::Role::Not => 4,
-                scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
-                // What is being looked for, which is not "everything else".
-                scour_core::Role::Text => 6,
-                // The syntax between terms, said quietly.
-                scour_core::Role::Colon
-                | scour_core::Role::Sep
-                | scour_core::Role::Quote
-                | scour_core::Role::Space => 7,
-                // **No catch-all**: a role added to `scour_core` stops compiling
-                // here instead of silently taking the ordinary ink.
-            },
-            sp.not,
-            &mut out,
-            &mut chars,
-        );
+        let run = &query[start..end];
+        let role = match sp.role {
+            scour_core::Role::Field | scour_core::Role::Cmp | scour_core::Role::Or => 1,
+            scour_core::Role::Value | scour_core::Role::Phrase => 2,
+            scour_core::Role::Glob => 3,
+            scour_core::Role::Not => 4,
+            scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
+            // What is being looked for, which is not "everything else".
+            scour_core::Role::Text => 6,
+            // The syntax between terms, said quietly.
+            // A capsule's frame, the label's colour: it is not typed into.
+            scour_core::Role::Colon | scour_core::Role::Quote => 8,
+            scour_core::Role::Sep | scour_core::Role::Space => 7,
+            // **No catch-all**: a role added to `scour_core` stops compiling
+            // here instead of silently taking the ordinary ink.
+        };
+        // A quoted value's quotes are the capsule's frame, drawn as its label.
+        match run.strip_prefix('"') {
+            Some(inner) if role == 2 && run.len() > 1 => {
+                let (mid, close) = match inner.strip_suffix('"') {
+                    Some(mid) => (mid, "\""),
+                    None => (inner, ""),
+                };
+                add("\"", 8, sp.not, &mut out, &mut chars);
+                add(mid, 2, sp.not, &mut out, &mut chars);
+                add(close, 8, sp.not, &mut out, &mut chars);
+            }
+            _ => add(run, role, sp.not, &mut out, &mut chars),
+        }
         at = end;
     }
     // What was typed since the spans were asked for.
@@ -5668,6 +5670,16 @@ fn answer_the_next_start(
 /// hold a phrase together. What a term **means** stays `explain`'s answer.
 /// [`scour_settings::Settings::typos`] as the settings row's value: an
 /// unknown word is the offer, as the service reads it.
+/// A term put in the query as the menu's searches do: in place of the one of
+/// the same field, the rest kept, shown in the field and searched.
+fn put_term(w: &MainWindow, term: &str) {
+    let text = scour_ui::query::toggle(&w.get_query(), term);
+    w.set_tab("search".into());
+    w.set_query(text.as_str().into());
+    w.invoke_query_changed(text.into());
+    w.invoke_caret_to_end();
+}
+
 /// The status bar's word for how every word is read.
 fn typos_said(cat: &Catalogue, choice: &str) -> String {
     let how = match choice {

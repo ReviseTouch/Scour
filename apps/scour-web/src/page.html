@@ -96,7 +96,7 @@
   }
   .chips button:hover { color: var(--ink); border-color: var(--ink-3); }
   .chips button b { font-weight: 500; color: var(--ink-3); margin-left: 5px; font-variant-numeric: tabular-nums; }
-  .ctxrow .tabs button { padding: 4px 10px; }
+
   .brand {
     font-size: 14px;
     font-weight: 600;
@@ -229,6 +229,11 @@
   .qshadow .term.cap.read { --cap: var(--cap-read); --cap-ring: var(--cap-read-ring); }
   .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); }
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
+  /* A capsule's frame — field, colon, quotes — is one colour, the label's:
+     it is not typed into. Only the value reads as text. */
+  .qshadow .term.cap .r-colon, .qshadow .term.cap .r-quote { color: var(--q-key); font-weight: 700; }
+  .qshadow .term.cap.neg .r-colon, .qshadow .term.cap.neg .r-quote,
+  .qshadow .term.cap.neg .r-field { color: var(--q-not); }
   .qshadow .term.word.hov {
     border-radius: 5px;
     background: var(--line-soft);
@@ -471,7 +476,10 @@
     display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px;
     background: var(--ground); border-bottom: 1px solid var(--line); min-width: 0;
   }
-  .tabstrip[hidden] { display: none; }
+  .stabs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; }
+  .stabs[hidden] { visibility: hidden; }
+  .tbar { flex: none; margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .tbar .tabs button { padding: 4px 10px; }
   .stab {
     display: flex; align-items: center; gap: 4px; height: 28px;
     min-width: 96px; max-width: 220px; padding: 0 4px 0 12px;
@@ -1886,52 +1894,58 @@
           <span class="nlbl" id="narrow-lbl" data-t="Narrow:" hidden></span>
           <span class="chips" id="chips"></span>
         </div>
-        <div class="tabs" role="tablist">
-          <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
-          <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
-        </div>
-        <!-- One group: each of these is about the window, not the results. -->
-        <div class="tools" role="group" data-t-aria="window controls">
-          <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
-                  aria-expanded="false" data-t-title="how to run it"
-                  data-t-aria="switch between the window, the terminal and the browser">⇄</button>
-          <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
-                  aria-expanded="false" data-t-title="language"
-                  data-t-aria="choose the language">文</button>
-          <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
-                  aria-expanded="false" data-t-title="what is skipped"
-                  data-t-aria="the rules that keep files out of the index">⊘</button>
-          <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
-                  aria-expanded="false" data-t-title="disks"
-                  data-t-aria="the disks this machine has, and which are indexed">⛁</button>
-          <button type="button" id="tab-new" class="about"
-                  data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
-          <button type="button" id="csv" class="about"
-                  data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
-          <button type="button" id="about" class="about" aria-pressed="false" hidden
-                  data-t-title="help" data-t-aria="show the help">?</button>
-          <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
-          <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
-                  data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-        </div>
-        <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
-        <div class="views" id="peek-switch" role="group">
-          <button type="button" id="peek-toggle" aria-pressed="false"
-                  data-t-title="Preview" data-t-aria="close the preview">◫</button>
-        </div>
-        <div class="views" id="views" role="group" data-t-aria="how the results are shown">
-          <button type="button" data-view="detail" aria-pressed="true"
-                  data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
-          <button type="button" data-view="icons" aria-pressed="false"
-                  data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
-          <button type="button" data-view="large" aria-pressed="false"
-                  data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
-        </div>
       </div>
     </div>
 
     <!-- The search tabs. Hidden only while the report is shown. -->
-    <div class="tabstrip" id="tabstrip" role="tablist" data-t-aria="Search tabs" hidden></div>
+    <!-- The tabs on the left; on the right what is about the window and the
+         list's shape, here because the strip has the room. Always shown. -->
+    <div class="tabstrip" id="tabstrip">
+      <div class="stabs" id="stabs" role="tablist" data-t-aria="Search tabs"></div>
+      <div class="tbar">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
+        <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
+      </div>
+      <!-- One group: each of these is about the window, not the results. -->
+      <div class="tools" role="group" data-t-aria="window controls">
+        <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="how to run it"
+                data-t-aria="switch between the window, the terminal and the browser">⇄</button>
+        <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
+                aria-expanded="false" data-t-title="language"
+                data-t-aria="choose the language">文</button>
+        <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="what is skipped"
+                data-t-aria="the rules that keep files out of the index">⊘</button>
+        <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="disks"
+                data-t-aria="the disks this machine has, and which are indexed">⛁</button>
+        <button type="button" id="tab-new" class="about"
+                data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
+        <button type="button" id="csv" class="about"
+                data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
+        <button type="button" id="about" class="about" aria-pressed="false" hidden
+                data-t-title="help" data-t-aria="show the help">?</button>
+        <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
+        <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
+                data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+      </div>
+      <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
+      <div class="views" id="peek-switch" role="group">
+        <button type="button" id="peek-toggle" aria-pressed="false"
+                data-t-title="Preview" data-t-aria="close the preview">◫</button>
+      </div>
+      <div class="views" id="views" role="group" data-t-aria="how the results are shown">
+        <button type="button" data-view="detail" aria-pressed="true"
+                data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
+        <button type="button" data-view="icons" aria-pressed="false"
+                data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
+        <button type="button" data-view="large" aria-pressed="false"
+                data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
+        </div>
+      </div>
+    </div>
 
     <div class="meter">
       <span class="big" id="count">—</span>
@@ -3141,7 +3155,16 @@
       const start = js(s.start);
       const end = js(s.start + s.len);
       if (start > at) out.push(["text", text.slice(at, start), false]);
-      out.push([s.role, text.slice(start, end), !!s.not]);
+      const run = text.slice(start, end);
+      // A quoted value's quotes are the capsule's frame, drawn as its label.
+      const m = (s.role === "value" || s.role === "phrase") && /^(")(.*?)(")?$/s.exec(run);
+      if (m && run.length > 1) {
+        out.push(["quote", m[1], !!s.not]);
+        if (m[2]) out.push([s.role, m[2], !!s.not]);
+        if (m[3]) out.push(["quote", m[3], !!s.not]);
+      } else {
+        out.push([s.role, run, !!s.not]);
+      }
       at = end;
     }
     if (at < text.length) out.push(["text", text.slice(at), false]);
@@ -3640,6 +3663,13 @@
   /* `:` on its own, or the + in the box: the launcher at the caret. */
   function lensLaunch() {
     q.focus();
+    // A `:` already waiting is opened, not joined by another.
+    const open = terms(q.value).find(([a, b]) => /^:[^:]*$/.test(q.value.slice(a, b)));
+    if (open) {
+      q.setSelectionRange(open[1], open[1]);
+      lensSync(true);
+      return;
+    }
     const c = q.selectionStart ?? q.value.length;
     const v = q.value;
     const lead = c > 0 && !/\s/.test(v[c - 1]) ? " " : "";
@@ -3694,7 +3724,7 @@
       }
       case "kind": case "ext": {
         LENS.title = LENS.kind === "kind" ? T("Type") : T("Extension");
-        LENS.foot = T("Tab adds or takes one away and stays open; Enter writes it and closes.");
+        LENS.foot = T("→ adds or takes one away and stays open; Enter writes it; Tab leaves the term.");
         return lensListItems(LENS.facets || []);
       }
       case "place": return lensPlaceItems();
@@ -3730,7 +3760,7 @@
     const field = t.field || "under";
     const [base, part] = placeParts(t.value);
     const want = fold(part);
-    LENS.foot = T("Tab goes into a folder; Enter chooses it. Backspace climbs back out.");
+    LENS.foot = T("→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term.");
     if (!base) {
       LENS.title = T("Where");
       const out = [];
@@ -3906,6 +3936,68 @@
     }
   }
 
+  /* The launcher shut without a choice: a lone `:` it left goes with it. */
+  function dropLauncher() {
+    const v = q.value;
+    const t = terms(v).find(([a, b]) => v.slice(a, b) === ":");
+    lensClose();
+    if (!t) return;
+    let [a, b] = t;
+    if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
+    q.value = v.slice(0, a) + v.slice(b);
+    q.setSelectionRange(a, a);
+    render();
+  }
+
+  function frameBackspace() {
+    const c = q.selectionStart, v = q.value;
+    const t = lensTerm(v, c);
+    if (!t || !t.named) return false;
+    const body = t.raw.replace(/^!/, "");
+    const head = t.a + (t.not ? 1 : 0) + body.indexOf(":") + 1;
+    const quoted = v[head] === '"';
+    if (quoted && c === t.b && v[c - 1] === '"' && c - 1 > head) {
+      q.setSelectionRange(c - 1, c - 1);
+      paint(v);
+      lensSync(true);
+      return true;
+    }
+    if (quoted && c === head + 1 && v[c] === '"') {
+      q.value = v.slice(0, head) + v.slice(head + 2);
+      q.setSelectionRange(head, head);
+      render();
+      return true;
+    }
+    if (c === head && c === t.b) {
+      let a = t.a, b = t.b;
+      if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
+      q.value = v.slice(0, a) + v.slice(b);
+      q.setSelectionRange(a, a);
+      lensClose();
+      render();
+      return true;
+    }
+    return false;
+  }
+
+  /* Leave the term the caret is at the end of: the lens closes and a space
+     follows the term, so the caret stands outside it and what is typed next
+     is a new term. True when there was a term to leave. */
+  function lensExit() {
+    const had = !!LENS;
+    lensClose();
+    const c = q.selectionStart;
+    if (c !== q.selectionEnd) return had;
+    const t = lensTerm(q.value, c);
+    if (!t || c !== t.b || !/cap/.test(termClass(t.raw))) return had;
+    const v = q.value;
+    if (!/\s/.test(v[c] || "")) q.value = v.slice(0, c) + " " + v.slice(c);
+    q.setSelectionRange(c + 1, c + 1);
+    render();
+    lensClose();
+    return true;
+  }
+
   lensBox.addEventListener("mousedown", (e) => {
     const o = e.target.closest(".lopt");
     e.preventDefault();
@@ -3925,6 +4017,20 @@
       else lensLaunch();
       return;
     }
+    // Backspace does not take a capsule's frame apart: past the closing quote
+    // it steps inside; in empty quotes it takes both; after a bare `field:`
+    // it takes the whole term.
+    if (e.key === "Backspace" && !e.ctrlKey && !e.altKey && !e.metaKey &&
+        q.selectionStart === q.selectionEnd && frameBackspace()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    // Tab leaves the term, lens or not: the caret goes outside it.
+    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      if (lensExit()) { e.preventDefault(); e.stopImmediatePropagation(); }
+      return;
+    }
     if (!LENS || lensBox.hidden) return;
     const n = LENS.items.length;
     const step = (d) => {
@@ -3935,14 +4041,23 @@
     };
     if (e.key === "ArrowDown" && !e.altKey) { e.preventDefault(); e.stopImmediatePropagation(); step(1); return; }
     if (e.key === "ArrowUp" && !e.altKey) { e.preventDefault(); e.stopImmediatePropagation(); step(-1); return; }
-    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); lensChoose(LENS.sel, true); return; }
+    // → goes into a folder, or adds one more value to a list, and stays open.
+    if (e.key === "ArrowRight" && q.selectionStart === LENS.b) {
+      const it = LENS.items[LENS.sel];
+      if (it && (it.stays || it.dir)) { e.preventDefault(); e.stopImmediatePropagation(); lensChoose(LENS.sel, true); }
+      return;
+    }
     if (e.key === "Enter") { e.preventDefault(); e.stopImmediatePropagation(); lensChoose(LENS.sel, false); return; }
-    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); lensClose(); }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (LENS.kind === "launch") dropLauncher(); else lensClose();
+    }
   }, true);
 
   document.getElementById("qadd").addEventListener("mousedown", (e) => {
     e.preventDefault();
-    if (LENS && LENS.kind === "launch") { lensClose(); return; }
+    if (LENS && LENS.kind === "launch") { dropLauncher(); return; }
     q.setSelectionRange(q.value.length, q.value.length);
     lensLaunch();
   });
@@ -4832,7 +4947,7 @@
   let TAB = 0;
   let TABS_READ = false;
   let tabsTimer = 0;
-  const strip = document.getElementById("tabstrip");
+  const strip = document.getElementById("stabs");
   const freshTab = () => ({ query: "", sort: "modified", descending: true });
   const nowTab = () => ({ query: q.value, sort: sortKey, descending: sortDesc });
   const keepTabs = () => keep({ tabs: TABS, tab: TAB });
@@ -6002,9 +6117,15 @@
    * fault, and the engine reads both spellings alike. */
   q.addEventListener("input", render);
   // The offer depends on where the caret is, not on what was last typed.
+  let lastClick = null;
+  q.addEventListener("mousedown", (e) => { lastClick = { x: e.clientX, y: e.clientY }; });
   q.addEventListener("click", () => {
     paint(q.value);
     showHints();
+    /* A press past the end of the text leaves the term there. */
+    const lastRect = shadow.lastElementChild && [...shadow.lastElementChild.getClientRects()].pop();
+    if (q.selectionStart === q.value.length && lastRect && lastClick &&
+        (lastClick.x > lastRect.right + 4 || lastClick.y > lastRect.bottom + 2) && lensExit()) return;
     /* A filter opens its lens when it is clicked; a word only when asked. */
     const t = lensTerm(q.value, q.selectionStart);
     lensSync(!!(t && t.named && lensKindOf(t)));
@@ -6561,7 +6682,8 @@
           : T("name copied"));
 
       case "search-here":
-        return toggleTerm("under:" + (row && row.is_dir ? p : up(p)));
+        // Home-relative and quoted when it has a space: one term, read back as typed.
+        return toggleTerm("under:" + quoteIf(homeForm(row && row.is_dir ? p : up(p))));
       case "search-kind": {
         const dot = leaf(p).lastIndexOf(".");
         if (dot <= 0) return flash(T("no extension to search for"));

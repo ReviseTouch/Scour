@@ -57,6 +57,19 @@ fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
+/// `under:` for a folder, as a person writes it: under home with `~`, quoted
+/// when it has a space.
+pub fn place_term(path: &str) -> String {
+    let home = home();
+    let shown = match path.strip_prefix(&home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
+        _ => path.to_string(),
+    };
+    lens::place(&lens::terms("under:x")[0], &shown)
+}
+
 fn with_env<R>(cat: &Catalogue, places: &[(String, String)], f: impl FnOnce(&Env) -> R) -> R {
     let tr = |m: &str| cat.get(m).into_owned();
     let kind_name = |token: &str| {
@@ -527,6 +540,104 @@ pub fn explained(w: &MainWindow, s: &mut State, cat: &Catalogue) {
     }
 }
 
+/// Leave the term the caret is at the end of: the lens shuts and a space
+/// follows the term, so the caret stands outside it. True when there was a
+/// term or a lens to leave.
+fn exit(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
+    let had = w.get_lens_open();
+    s.borrow_mut().qb.lenses.close();
+    w.set_lens_open(false);
+    let text = w.get_query().to_string();
+    let (anchor, c) = {
+        let st = s.borrow();
+        (st.qb.anchor, st.qb.cursor.min(text.len()))
+    };
+    if anchor != c {
+        return had;
+    }
+    let Some(t) = lens::term_at(&text, c) else {
+        return had;
+    };
+    let filter = t.not || t.field.is_some() || text[t.start..t.end].contains(':');
+    if c != t.end || !filter {
+        return had;
+    }
+    let query = if text[c..].starts_with(char::is_whitespace) {
+        text.clone()
+    } else {
+        format!("{} {}", &text[..c], &text[c..])
+    };
+    write(w, s, query, c + 1);
+    s.borrow_mut().qb.lenses.close();
+    w.set_lens_open(false);
+    true
+}
+
+/// Backspace at a capsule's frame: past the closing quote it steps inside;
+/// in empty quotes it takes both; after a bare `field:` the whole term.
+fn frame_backspace(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
+    let text = w.get_query().to_string();
+    let (anchor, c) = {
+        let st = s.borrow();
+        (st.qb.anchor, st.qb.cursor.min(text.len()))
+    };
+    if anchor != c {
+        return false;
+    }
+    let Some(t) = lens::term_at(&text, c) else {
+        return false;
+    };
+    let raw = &text[t.start..t.end];
+    let body = raw.strip_prefix('!').unwrap_or(raw);
+    let Some(colon) = body.find(':') else {
+        return false;
+    };
+    if t.field.is_none() {
+        return false;
+    }
+    let head = t.start + usize::from(t.not) + colon + 1;
+    let b = text.as_bytes();
+    let quoted = b.get(head) == Some(&b'"');
+    if quoted && c == t.end && c >= 1 && b[c - 1] == b'"' && c - 1 > head {
+        s.borrow_mut().qb.cursor = c - 1;
+        s.borrow_mut().qb.anchor = c - 1;
+        w.set_caret_to((c - 1) as i32);
+        w.set_caret_ask(w.get_caret_ask() + 1);
+        return true;
+    }
+    if quoted && c == head + 1 && b.get(c) == Some(&b'"') {
+        write(
+            w,
+            s,
+            format!("{}{}", &text[..head], &text[head + 2..]),
+            head,
+        );
+        return true;
+    }
+    if c == head && c == t.end {
+        let (query, caret) = lens::replace(&text, &t, "");
+        s.borrow_mut().qb.lenses.close();
+        w.set_lens_open(false);
+        write(w, s, query, caret);
+        return true;
+    }
+    false
+}
+
+/// The launcher shut without a choice: a lone `:` it left goes with it.
+fn drop_launcher(w: &MainWindow, s: &Rc<RefCell<State>>) {
+    s.borrow_mut().qb.lenses.close();
+    w.set_lens_open(false);
+    let text = w.get_query().to_string();
+    if let Some(t) = lens::terms(&text)
+        .into_iter()
+        .find(|t| &text[t.start..t.end] == ":")
+    {
+        let (query, caret) = lens::replace(&text, &t, "");
+        write(w, s, query, caret);
+    }
+}
+
 /// Every callback the bar answers.
 pub fn wire(
     window: &MainWindow,
@@ -643,6 +754,10 @@ pub fn wire(
             let Some(w) = weak.upgrade() else { return };
             let text = w.get_query().to_string();
             let t = state.borrow().qb.field.term_at(&text, line, col);
+            // A press past the end of the text leaves the term there.
+            if t.is_none() && state.borrow().qb.cursor >= text.len() && exit(&w, &state) {
+                return;
+            }
             let named =
                 t.is_some_and(|(t, ..)| t.field.is_some() && lens::lens_of(&text, &t).is_some());
             redraw(if named {
@@ -742,6 +857,41 @@ pub fn wire(
     }
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_lens_exit(move || weak.upgrade().is_some_and(|w| exit(&w, &state)));
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_q_backspace(move || weak.upgrade().is_some_and(|w| frame_backspace(&w, &state)));
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_lens_right(move || {
+            let Some(w) = weak.upgrade() else {
+                return false;
+            };
+            if !state.borrow().qb.lenses.deepens() {
+                return false;
+            }
+            let sel = w.get_lens_sel();
+            w.invoke_lens_pick(sel, true);
+            true
+        });
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_lens_escape(move || {
+            if let Some(w) = weak.upgrade() {
+                if w.get_lens_launching() {
+                    drop_launcher(&w, &state);
+                } else {
+                    state.borrow_mut().qb.lenses.close();
+                    w.set_lens_open(false);
+                }
+            }
+        });
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
         window.on_lens_close(move || {
             state.borrow_mut().qb.lenses.close();
             if let Some(w) = weak.upgrade() {
@@ -756,6 +906,28 @@ pub fn wire(
             move || {
                 let Some(w) = weak.upgrade() else { return };
                 let text = w.get_query().to_string();
+                // Pressed again while it is open: it closes, and takes the
+                // lone `:` it left.
+                if w.get_lens_open() && w.get_lens_launching() {
+                    drop_launcher(&w, &state);
+                    return;
+                }
+                // A `:` already waiting is opened, not joined by another.
+                let waiting = lens::terms(&text).into_iter().find(|t| {
+                    let r = &text[t.start..t.end];
+                    r.starts_with(':') && !r[1..].contains(':')
+                });
+                if let Some(t) = waiting {
+                    {
+                        let mut st = state.borrow_mut();
+                        st.qb.anchor = t.end;
+                        st.qb.cursor = t.end;
+                    }
+                    w.set_caret_to(t.end as i32);
+                    w.set_caret_ask(w.get_caret_ask() + 1);
+                    redraw(Lensing::Asked);
+                    return;
+                }
                 let c = state.borrow().qb.cursor.min(text.len());
                 let lead = if c > 0 && !text[..c].ends_with(char::is_whitespace) {
                     " "

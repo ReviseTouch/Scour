@@ -2629,3 +2629,9 @@ msgstr "Zaman şeridi"
 
 msgid "How old the results are, as bars under the list."
 msgstr "Sonuçların yaşı, listenin altında çubuklarla."
+
+msgid "→ adds or takes one away and stays open; Enter writes it; Tab leaves the term."
+msgstr "→ ekler ya da çıkarır ve açık kalır; Enter yazar; Tab terimden çıkar."
+
+msgid "→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term."
+msgstr "→ klasörün içine girer, geri tuşu bir üste çıkar; Enter seçer; Tab terimden çıkar."

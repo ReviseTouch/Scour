@@ -1339,6 +1339,11 @@ export component MainWindow inherits Window {
     callback lens-step(int);
     callback lens-pick(int, bool);
     callback lens-close();
+    // Leave the term the caret ends: the lens shuts, a space follows it.
+    callback lens-exit() -> bool;
+    callback lens-escape();
+    callback q-backspace() -> bool;
+    callback lens-right() -> bool;
     callback lens-toggle();
     callback lens-launch();
     // With nothing found: one filter left out at a time, and what it finds.
@@ -2138,8 +2143,9 @@ export component MainWindow inherits Window {
         spacing: 0px;
 
         // The search tabs, always: a strip that appears only with a second tab
-        // was never found (17 November). One tab has no ×.
-        if root.tabs-on && root.tab != "report": Rectangle {
+        // was never found (17 November). One tab has no ×. On its right what
+        // is about the window and the list's shape, so the strip is always there.
+        Rectangle {
             height: 36px;
             background: Theme.ground;
 
@@ -2156,7 +2162,8 @@ export component MainWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 2px;
-                alignment: start;
+                if root.tabs-on && root.tab != "report": HorizontalLayout {
+                spacing: 2px;
                 for label[i] in root.tab-labels: VerticalLayout {
                     alignment: center;
                     SearchTabChip {
@@ -2167,12 +2174,106 @@ export component MainWindow inherits Window {
                         closed => { root.tab-closed(i); }
                     }
                 }
-                VerticalLayout {
+                }
+                if root.tabs-on && root.tab != "report": VerticalLayout {
                     alignment: center;
                     Tool {
                         icon: @image-url("icons/tools/plus.svg");
                         has-icon: true;
                         clicked => { root.tab-new(); }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                // Search or report, and what the list looks like: a desktop's
+                // header bar, beside the field rather than in rows of their own.
+                VerticalLayout {
+                    alignment: center;
+                    Choice {
+                        height: 30px;
+                        labels: [root.tab-search, root.tab-report];
+                        values: ["search", "report"];
+                        value: root.tab == "report" ? "report" : "search";
+                        picked(v) => {
+                            root.tab = v;
+                            // Asked for when looked at: weighing a folder is a walk.
+                            if (v == "report") {
+                                root.report-open("");
+                            }
+                        }
+                    }
+                }
+                if root.tab == "report" && root.report-web-ready: VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.report-web;
+                        clicked => {
+                            root.report-in-browser();
+                        }
+                    }
+                }
+                // The window's own controls, then a rule, then the switches for
+                // what is being read rather than what the program is doing.
+                Rectangle { width: 10px; }
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        // A new search tab, beside what is about the window.
+                        if root.tabs-on: Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
+                        Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
+                        // Faces, language, disks, skips and the keys: one page.
+                        Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
+                    }
+                }
+
+                Rectangle { width: 12px; }
+
+                Rectangle {
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                Rectangle { width: 12px; }
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        // With the view switch: a preview panel changes what is
+                        // being read, not what the program is doing.
+                        Tool {
+                            icon: @image-url("icons/tools/peek.svg");
+                            has-icon: true;
+                            on: root.peeking;
+                            clicked => {
+                                root.peek-toggled();
+                            }
+                        }
+                        Tool {
+                            icon: @image-url("icons/tools/detail.svg");
+                            has-icon: true;
+                            on: root.view-mode == "detail";
+                            clicked => {
+                                root.view-clicked("detail");
+                            }
+                        }
+                        Tool {
+                            icon: @image-url("icons/tools/icons.svg");
+                            has-icon: true;
+                            on: root.view-mode == "icons";
+                            clicked => {
+                                root.view-clicked("icons");
+                            }
+                        }
+                        Tool {
+                            icon: @image-url("icons/tools/large.svg");
+                            has-icon: true;
+                            on: root.view-mode == "large";
+                            clicked => {
+                                root.view-clicked("large");
+                            }
+                        }
                     }
                 }
             }
@@ -2318,7 +2419,7 @@ export component MainWindow inherits Window {
                             font-size: 16px;
                             // Operators are heavier: one character that changes
                             // what a whole term means.
-                            font-weight: sp.role == 1 || sp.role == 4 ? 600 : 500;
+                            font-weight: sp.role == 1 || sp.role == 4 || sp.role == 8 ? 600 : 500;
                             vertical-alignment: center;
                             // A misreading is said before a polarity, and an
                             // exclusion before a role: `!kind:zurna` is both,
@@ -2331,6 +2432,7 @@ export component MainWindow inherits Window {
                                  : sp.role == 4 ? Theme.q-not
                                  : sp.role == 6 ? Theme.q-term
                                  : sp.role == 7 ? Theme.ink-3
+                                 : sp.role == 8 ? Theme.q-key
                                  : Theme.ink;
                     }
 
@@ -2402,15 +2504,23 @@ export component MainWindow inherits Window {
                     key-pressed(e) => {
                         // While the lens is open the arrows, Tab, Enter and
                         // Escape are its own.
+                        // Backspace does not take a capsule's frame apart.
+                        if (e.text == Key.Backspace && !e.modifiers.control && !e.modifiers.alt
+                                && root.q-backspace()) {
+                            return accept;
+                        }
+                        // Tab leaves the term, lens or not: the caret goes outside it.
+                        if (e.text == Key.Tab && !e.modifiers.shift && !e.modifiers.control
+                                && !e.modifiers.alt && root.lens-exit()) {
+                            return accept;
+                        }
                         if (root.lens-open) {
                             if (e.text == Key.DownArrow && !e.modifiers.alt) { root.lens-step(1); return accept; }
                             if (e.text == Key.UpArrow && !e.modifiers.alt) { root.lens-step(-1); return accept; }
-                            if (e.text == Key.Tab && !e.modifiers.shift && !e.modifiers.control) {
-                                root.lens-pick(root.lens-sel, true);
-                                return accept;
-                            }
+                            // → goes into a folder, or adds one more value to a list.
+                            if (e.text == Key.RightArrow && root.lens-right()) { return accept; }
                             if (e.text == Key.Return) { root.lens-pick(root.lens-sel, false); return accept; }
-                            if (e.text == Key.Escape) { root.lens-close(); return accept; }
+                            if (e.text == Key.Escape) { root.lens-escape(); return accept; }
                         }
                         // Ctrl+Space: the lens of the term under the caret, or
                         // the filters a query can take.
@@ -2807,98 +2917,6 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                     }
 
-                // Search or report, and what the list looks like: a desktop's
-                // header bar, beside the field rather than in rows of their own.
-                VerticalLayout {
-                    alignment: center;
-                    Choice {
-                        height: 30px;
-                        labels: [root.tab-search, root.tab-report];
-                        values: ["search", "report"];
-                        value: root.tab == "report" ? "report" : "search";
-                        picked(v) => {
-                            root.tab = v;
-                            // Asked for when looked at: weighing a folder is a walk.
-                            if (v == "report") {
-                                root.report-open("");
-                            }
-                        }
-                    }
-                }
-                if root.tab == "report" && root.report-web-ready: VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.report-web;
-                        clicked => {
-                            root.report-in-browser();
-                        }
-                    }
-                }
-                // The window's own controls, then a rule, then the switches for
-                // what is being read rather than what the program is doing.
-                Rectangle { width: 10px; }
-
-                VerticalLayout {
-                    alignment: center;
-                    HorizontalLayout {
-                        spacing: 2px;
-                        // A new search tab, beside what is about the window.
-                        if root.tabs-on: Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
-                        Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
-                        // Faces, language, disks, skips and the keys: one page.
-                        Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
-                    }
-                }
-
-                Rectangle { width: 12px; }
-
-                Rectangle {
-                    width: 1px;
-                    background: Theme.line;
-                }
-
-                Rectangle { width: 12px; }
-
-                VerticalLayout {
-                    alignment: center;
-                    HorizontalLayout {
-                        spacing: 2px;
-                        // With the view switch: a preview panel changes what is
-                        // being read, not what the program is doing.
-                        Tool {
-                            icon: @image-url("icons/tools/peek.svg");
-                            has-icon: true;
-                            on: root.peeking;
-                            clicked => {
-                                root.peek-toggled();
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/detail.svg");
-                            has-icon: true;
-                            on: root.view-mode == "detail";
-                            clicked => {
-                                root.view-clicked("detail");
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/icons.svg");
-                            has-icon: true;
-                            on: root.view-mode == "icons";
-                            clicked => {
-                                root.view-clicked("icons");
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/large.svg");
-                            has-icon: true;
-                            on: root.view-mode == "large";
-                            clicked => {
-                                root.view-clicked("large");
-                            }
-                        }
-                    }
-                }
                 }
             }
         }
