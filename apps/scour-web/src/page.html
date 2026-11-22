@@ -692,6 +692,22 @@
   /* The mark column: the freshness rule and the type glyph share it, and
    * `top: 0; bottom: 0` beats a stated height a fractional row rounds past. */
   td.age { padding: 0 0 0 3px; width: 30px; position: relative; text-align: center; }
+  /* A `content:` query's two-line rows: the cells on the first line, where the
+     file holds the text on the second, across the row. */
+  body.tall:not(.grid) tbody tr { position: relative; }
+  body.tall:not(.grid) tbody td { height: 52px; vertical-align: top; padding-top: 6px; }
+  body.tall:not(.grid) tbody tr.ghost { height: 52px; }
+  tbody .found { display: none; }
+  body.tall:not(.grid) tbody .found {
+    display: block; position: absolute; left: 36px; right: 12px; bottom: 6px;
+    font: 12px var(--mono); color: var(--ink-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  body.tall:not(.grid) tbody .found[hidden] { display: none; }
+  .found .n, .peek-found .n {
+    display: inline-block; min-width: 3em; margin-right: 8px;
+    color: var(--ink-3); text-align: right;
+  }
   td.age i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
   /* The age stripe is the window's choice too: gone. A column of one colour
    * down a list of today's files was the loudest thing on the page. */
@@ -1082,6 +1098,15 @@
     border-top: 1px solid var(--line-soft);
     font: 500 10.5px var(--mono); color: var(--ink-3);
   }
+  .peek-found {
+    flex: none;
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    font: 11.5px var(--mono); color: var(--ink-2);
+    max-height: 30%; overflow: auto;
+  }
+  .peek-found h4 { margin: 0 0 4px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .peek-found div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.7; }
   .peek-facts {
     flex: none; margin: 0;
     border-top: 1px solid var(--line-soft);
@@ -2182,6 +2207,7 @@
         </div>
         <div class="peek-body" id="peek-body"></div>
         <div class="peek-cut" id="peek-cut" hidden></div>
+        <div class="peek-found" id="peek-found" hidden></div>
         <dl class="peek-facts" id="peek-facts"></dl>
       </aside>
       <div class="selbar" id="selbar" hidden></div>
@@ -4084,7 +4110,17 @@
 
   /* Logical and deliberately not measured: at 1.667 scale the same row draws
    * as 30.6 or 30.99 CSS pixels, and a paint must not size the scroller. */
-  const ROW_H = 31;
+  let ROW_H = 31;
+  /* A `content:` query's rows are two lines: the file, and where it holds the
+     text. Every scroll and window reads `ROW_H`, so the switch is this. */
+  const TALL_H = 52;
+  function setTall(on) {
+    const h = on ? TALL_H : 31;
+    if (h === ROW_H) return;
+    ROW_H = h;
+    linePx.detail = h;
+    document.body.classList.toggle("tall", on);
+  }
 
   /* The three shapes are one arithmetic, written in lines: `PER_ROW = 1` and
    * `lineH() = ROW_H` give the single-column case back. `visibleRange` answers
@@ -4622,6 +4658,7 @@
       f.ext || "", f.ctime || 0, f.atime || 0, f.perm || "",
       f.user || "", f.group || "", f.disk || 0, f.items || 0,
       under ? under.disk : "", under ? under.files : "",
+      f.found && f.found.length ? JSON.stringify(f.found[0]) : "",
     ].join("\u0001") : "";
     if (tr.__stamp === stamp && tr.__marks === marks) {
       return;
@@ -4667,6 +4704,40 @@
     for (let c = 0; c < cols.length; c++) {
       cols[c].write(tr.children[c + 1], f, parsed);
     }
+    writeFound(tr, f.found && f.found[0]);
+  }
+
+  /* Where a `content:` query found its text in the row's file, on the row's
+     second line: the line's number, and the line with the find marked. Out
+     of the table's flow, so it spans the row and takes no column. */
+  function writeFound(tr, found) {
+    if (!found) {
+      if (tr.__found) tr.__found.hidden = true;
+      return;
+    }
+    if (!tr.__found) {
+      tr.__found = document.createElement("div");
+      tr.__found.className = "found";
+    }
+    // Again whenever it is not there: a row's cells are rebuilt when the
+    // columns change, and that takes it off with them.
+    if (tr.__found.parentNode !== tr) tr.append(tr.__found);
+    tr.__found.hidden = false;
+    tr.__found.replaceChildren(...foundNodes(found));
+  }
+
+  /* One find as nodes, never HTML: the line is a file's own text. The part
+     before the find keeps its last few dozen characters, so the find is in
+     sight however far into a long line it is. */
+  function foundNodes(found) {
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = found.line != null ? String(found.line) : "";
+    let pre = (found.pre || "").replace(/[\t\r\n]/g, " ").trimStart();
+    if (pre.length > 40) pre = "…" + pre.slice(-40).trimStart();
+    const mark = document.createElement("mark");
+    mark.textContent = (found.hit || "").replace(/[\t\r\n]/g, " ");
+    return [n, pre, mark, (found.post || "").replace(/[\t\r\n]/g, " ")];
   }
 
   /* Ask at once and abandon what the screen has left behind: a page is a slice
@@ -5129,6 +5200,7 @@
            does not recount, so its floor would stick at `1000+`. */
         const keepExact = !queryChanged && LIST.exact && res.capped;
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
+        setTall(READS.test(text));
         /* And so did the selection: a different query is different files. */
         if (queryChanged) {
           focusPath = null;
@@ -6876,6 +6948,20 @@
   const peekBody = document.getElementById("peek-body");
   const peekName = document.getElementById("peek-name");
   const peekFacts = document.getElementById("peek-facts");
+  const peekFound = document.getElementById("peek-found");
+  /* Where the file holds the text a `content:` query asked for. */
+  function peekFoundOf(f) {
+    const found = (f && f.found) || [];
+    peekFound.hidden = found.length === 0;
+    if (!found.length) { peekFound.replaceChildren(); return; }
+    const head = document.createElement("h4");
+    head.textContent = T("Found in the file");
+    peekFound.replaceChildren(head, ...found.map((x) => {
+      const line = document.createElement("div");
+      line.append(...foundNodes(x));
+      return line;
+    }));
+  }
   const peekToggle = document.getElementById("peek-toggle");
   const peekCut = document.getElementById("peek-cut");
   const peekNative = document.getElementById("peek-native");
@@ -7043,6 +7129,7 @@
     if (full === PEEK.path) return;
     PEEK.path = full;
     peekFactsOf(f);
+    peekFoundOf(f);
     clearTimeout(PEEK.timer);
     if (PEEK.ctrl) PEEK.ctrl.abort();
     peekBody.className = "peek-body";
@@ -7696,7 +7783,7 @@
     /* `drawPeek` returns early for the row it shows, so the labels stay. */
     if (PEEK.on && !peek.hidden) {
       const row = focusedRow();
-      if (row && row.__row) peekFactsOf(row.__row);
+      if (row && row.__row) { peekFactsOf(row.__row); peekFoundOf(row.__row); }
     }
     if (window.SCOUR && window.SCOUR.relabel) window.SCOUR.relabel();
     /* The rows carry `ago(...)` and a kind label, and the pool skips a row

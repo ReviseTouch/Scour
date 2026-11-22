@@ -42,10 +42,21 @@ export struct HeadInfo {
     right: bool,
 }
 
+/// One place a `content:` query found its text in a file: the line's number
+/// and the line cut in three at the find. See `scour_core::FoundLine`.
+export struct Found {
+    line: string,
+    pre: string,
+    hit: string,
+    post: string,
+}
+
 export struct Row {
     // One per shown column, in the order they are shown. Rebuilt only when the
     // chosen columns change; widths travel separately in `cw`.
     cells: [Cell],
+    // Where a `content:` query found its text in this file; empty otherwise.
+    found: [Found],
     // The whole name, whether or not the name column is shown: the tiles have
     // no columns, so what they draw cannot come out of the cell list.
     name: string,
@@ -1433,6 +1444,16 @@ export component MainWindow inherits Window {
     in property <float> peek-aspect: 1.414;
     callback peek-page-scrolled(int);
     in property <[Fact]> peek-facts;
+    /// Where the file in the preview holds the text a `content:` query asked
+    /// for, and the heading over them.
+    in property <[Found]> peek-found;
+    in property <string> word-found;
+    /// A `content:` query is in force: each row is two lines, the file and
+    /// where it holds the text. `Theme.row-height` grows with it.
+    in property <bool> tall;
+    /// A row's height when it is one line, which `Theme.row-height` is not
+    /// while the rows are tall.
+    in property <length> base-row: 30px;
     in property <string> peek-close-title;
     callback peek-toggled();
 
@@ -4100,7 +4121,41 @@ export component MainWindow inherits Window {
                             }
 
 
+                            // Where the file holds the text, under its name: the
+                            // line's number, then the line with the find marked.
+                            // Shown, not built, so a slot is never rebuilt.
+                            Rectangle {
+                                visible: root.tall && here.found.length > 0;
+                                x: 12px + (root.iconed ? 24px : 0px);
+                                y: root.base-row - 4px;
+                                width: max(0px, parent.width - self.x - 12px);
+                                height: Theme.row-height - root.base-row;
+                                Text {
+                                    x: 0px;
+                                    width: 44px;
+                                    height: parent.height;
+                                    text: here.found.length > 0 ? here.found[0].line : "";
+                                    color: Theme.ink-3;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    vertical-alignment: center;
+                                }
+                                Marked {
+                                    x: 48px;
+                                    width: max(0px, parent.width - 48px);
+                                    height: parent.height;
+                                    pre: here.found.length > 0 ? here.found[0].pre : "";
+                                    hit: here.found.length > 0 ? here.found[0].hit : "";
+                                    post: here.found.length > 0 ? here.found[0].post : "";
+                                    colour: Theme.ink-2;
+                                }
+                            }
+
+                            // The file's own line. On a tall row it keeps the
+                            // usual height at the top, and the find goes below.
                             HorizontalLayout {
+                                y: 0px;
+                                height: root.tall ? root.base-row : Theme.row-height;
                                 padding-left: 12px;
                                 padding-right: 12px;
                                 spacing: 8px;
@@ -4683,6 +4738,57 @@ export component MainWindow inherits Window {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                             wrap: word-wrap;
+                        }
+                    }
+
+                    // Where the file holds the text a `content:` query asked
+                    // for: each place's line number and the line, the find marked.
+                    if root.peek-found.length > 0: Rectangle {
+                        vertical-stretch: 0;
+                        background: Theme.panel;
+
+                        Rectangle {
+                            y: 0;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 9px;
+                            padding-bottom: 9px;
+                            spacing: 2px;
+                            alignment: start;
+
+                            Text {
+                                text: root.word-found;
+                                color: Theme.ink-3;
+                                font-size: 11px;
+                            }
+                            for f in root.peek-found: Rectangle {
+                                height: 20px;
+                                Text {
+                                    x: 0px;
+                                    width: 40px;
+                                    height: parent.height;
+                                    text: f.line;
+                                    color: Theme.ink-3;
+                                    font-family: Fonts.mono;
+                                    font-size: 11px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                                Marked {
+                                    x: 48px;
+                                    width: max(0px, parent.width - 48px);
+                                    height: parent.height;
+                                    pre: f.pre;
+                                    hit: f.hit;
+                                    post: f.post;
+                                    colour: Theme.ink-2;
+                                }
+                            }
                         }
                     }
 

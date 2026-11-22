@@ -571,6 +571,9 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         "thumb": icons::has_thumbnail(&h.path, h.kind),
                         // And whether one could be: two lookups, no syscall.
                         "make": icons::may_thumbnail(&h.path, h.kind),
+                        // Where a `content:` query found its text, cut in three
+                        // at the find: the page counts in UTF-16, not bytes.
+                        "found": h.found.iter().map(found_json).collect::<Vec<_>>(),
                     })
                 })
                 .collect();
@@ -592,6 +595,22 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }
+}
+
+/// One place a `content:` query found its text, as the page draws it: the
+/// line's number and the line in three pieces, the find in the middle. A find
+/// that does not fall on characters is shown as the line alone.
+fn found_json(f: &scour_core::FoundLine) -> serde_json::Value {
+    let (at, len) = (f.at.0 as usize, f.at.1 as usize);
+    let (pre, hit, post) = match (
+        f.text.get(..at),
+        f.text.get(at..at + len),
+        f.text.get(at + len..),
+    ) {
+        (Some(pre), Some(hit), Some(post)) => (pre, hit, post),
+        _ => (f.text.as_str(), "", ""),
+    };
+    serde_json::json!({ "line": f.line, "pre": pre, "hit": hit, "post": post })
 }
 
 /// The thumbnail somebody has already made for a file. Cacheable, unlike every

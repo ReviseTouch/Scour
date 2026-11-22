@@ -2674,3 +2674,6 @@ msgstr "Hiçbir pencere açık değilken bir değişikliğin indekse en geç ne 
 
 msgid "As configured"
 msgstr "Yapılandırmadaki gibi"
+
+msgid "Found in the file"
+msgstr "Dosyada bulunanlar"

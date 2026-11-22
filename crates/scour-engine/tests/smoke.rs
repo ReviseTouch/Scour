@@ -2400,6 +2400,14 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
         found.hits[0].path
     );
     assert!(found.hits.iter().all(|hit| hit.path.ends_with(".rs")));
+    // Each row says where its file holds the text: the line, and the find in it.
+    for hit in &found.hits {
+        assert_eq!(hit.found.len(), 1, "{}", hit.path);
+        let line = &hit.found[0];
+        assert_eq!(line.line, Some(1));
+        let (at, len) = (line.at.0 as usize, line.at.1 as usize);
+        assert_eq!(&line.text[at..at + len], "İĞNE", "{line:?}");
+    }
     assert_ne!(
         f.engine.status().revision,
         before,
@@ -2416,7 +2424,10 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
 
     // Two needles: a file must hold both.
     settle(&f, |_| !ask("content:iğne content:alpha ext:txt").capped);
-    assert_eq!(ask("content:iğne content:alpha ext:txt").total, 10);
+    let both = ask("content:iğne content:alpha ext:txt");
+    assert_eq!(both.total, 10);
+    // Both found on the one line: shown once.
+    assert!(both.hits.iter().all(|hit| hit.found.len() == 1));
     settle(&f, |_| !ask("content:iğne content:gamma").capped);
     assert_eq!(ask("content:iğne content:gamma").total, 0);
 

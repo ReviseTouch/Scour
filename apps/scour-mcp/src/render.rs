@@ -562,6 +562,7 @@ mod tests {
                 ..scour_core::Meta::UNKNOWN
             },
             under: None,
+            found: Vec::new(),
         };
         let out = human(&Response::Search(SearchResponse {
             hits: vec![hit],

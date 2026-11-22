@@ -17,9 +17,10 @@ pub use entry::{
 pub use error::{Error, Result};
 pub use prefix::{PrefixSet, under};
 pub use search::{
-    AGE_BANDS, ApplyReport, DirUsage, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Hit,
-    IndexStats, MaintReport, Maintenance, PAGE_ROWS, Page, Reading, ReadingStage, ScanRequest,
-    SearchRequest, SearchResponse, Similar, SortKey, Subtree, UsageRequest, UsageResponse,
+    AGE_BANDS, ApplyReport, DirUsage, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse,
+    FoundLine, Hit, IndexStats, MaintReport, Maintenance, PAGE_ROWS, Page, Reading, ReadingStage,
+    ScanRequest, SearchRequest, SearchResponse, Similar, SortKey, Subtree, UsageRequest,
+    UsageResponse,
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};
 pub use status::{Status, TreeNode, Walked};

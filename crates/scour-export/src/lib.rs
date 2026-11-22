@@ -180,6 +180,7 @@ mod tests {
                 ..Meta::UNKNOWN
             },
             under: None,
+            found: Vec::new(),
         }
     }
 

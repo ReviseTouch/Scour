@@ -51,7 +51,7 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, HeadInfo, Kid,
+    Bar, Big, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, Found, HeadInfo, Kid,
     LensRow, MainWindow, MenuItem, Reach, Row, Rule, Scheme, Seg, Sel, Slice, Slot, Span, Theme,
 };
 
@@ -4063,10 +4063,12 @@ fn peek(
         w.set_peek_path(slint::SharedString::new());
         w.set_peek_note(slint::SharedString::new());
         w.set_peek_facts(ModelRc::new(VecModel::from(Vec::<Fact>::new())));
+        w.set_peek_found(ModelRc::default());
         return;
     }
     w.set_peek_name(scour_ui::path::leaf(&path).into());
     w.set_peek_path(path.as_str().into());
+    w.set_peek_found(rows.found_at(selected.max(0) as usize));
     if is_dir {
         w.set_peek_note(slint::SharedString::new());
     } else {
@@ -4663,6 +4665,18 @@ fn apply(
                 w.set_busy(false);
                 return;
             };
+            // A `content:` query's rows are two lines: the file, and where it
+            // holds the text. The height is the theme's, which every scroll
+            // and slot reads, so changing it is the whole of the switch.
+            let tall = scour_ui::lens::reads(&state.borrow().query);
+            if w.get_tall() != tall {
+                w.set_tall(tall);
+                w.global::<Theme>().set_row_height(if tall {
+                    scour_ui::METRICS.row + 22.0
+                } else {
+                    scour_ui::METRICS.row
+                });
+            }
             // What a first page that found nothing nearly found, or nothing.
             if offset == 0 {
                 let offered = r.similar.as_ref().filter(|_| r.total == 0);
@@ -5892,6 +5906,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "While the window is in use, how late a new file may reach the list. Scrolling and searching never wait.",
     ));
     w.set_refresh_labels(list(&["1 s", "2 s", "5 s", "15 s", "1 min"]));
+    w.set_word_found(t(cat, "Found in the file"));
     w.set_set_memory(t(cat, "Give memory back"));
     w.set_set_memory_note(t(
         cat,
@@ -6178,6 +6193,7 @@ fn dress(window: &MainWindow) {
     theme.set_light_scheme(scheme(&scour_ui::LIGHT));
     theme.set_unit(scour_ui::METRICS.unit);
     theme.set_row_height(scour_ui::METRICS.row);
+    window.set_base_row(scour_ui::METRICS.row);
     theme.set_radius(scour_ui::METRICS.radius);
 
     let fonts = window.global::<Fonts>();

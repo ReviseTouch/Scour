@@ -9,7 +9,7 @@ use std::cell::{Cell as Flag, RefCell};
 
 use scour_core::{Hit, Kind, text::Folder};
 
-use crate::{Cell, Row};
+use crate::{Cell, Found, Row};
 
 /// Whether two rows draw the same. Not `==`: the cells are a model, and two
 /// models built from the same text are two models.
@@ -240,6 +240,7 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
     };
     Row {
         cells: slint::ModelRc::new(slint::VecModel::from(cells)),
+        found: found_of(h),
         name: shown_name(h).into(),
         path: h.path.as_str().into(),
         fresh,
@@ -255,6 +256,48 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         has_sys_icon,
         runs: !h.is_dir && scour_core::runs_when_opened(h.name(), h.meta.mode),
     }
+}
+
+/// Where a `content:` query found its text in the file, as a row and the
+/// preview draw it. A line is one line: tabs become spaces, the indent goes,
+/// and only the last few dozen characters before the find are kept, so the
+/// find is in sight however far into the line it is.
+fn found_of(h: &Hit) -> slint::ModelRc<Found> {
+    if h.found.is_empty() {
+        return slint::ModelRc::default();
+    }
+    const BEFORE: usize = 40;
+    let tidy = |s: &str| s.replace(['\t', '\r', '\n'], " ");
+    let found: Vec<Found> = h
+        .found
+        .iter()
+        .map(|f| {
+            let (at, len) = (f.at.0 as usize, f.at.1 as usize);
+            let (pre, hit, post) = match (
+                f.text.get(..at),
+                f.text.get(at..at + len),
+                f.text.get(at + len..),
+            ) {
+                (Some(pre), Some(hit), Some(post)) => (pre, hit, post),
+                _ => (f.text.as_str(), "", ""),
+            };
+            let pre = tidy(pre.trim_start());
+            let kept = pre.chars().count();
+            let pre = if kept > BEFORE {
+                let cut: String = pre.chars().skip(kept - BEFORE).collect();
+                format!("…{}", cut.trim_start())
+            } else {
+                pre
+            };
+            Found {
+                line: f.line.map(|n| n.to_string()).unwrap_or_default().into(),
+                pre: pre.into(),
+                hit: tidy(hit).into(),
+                post: tidy(post).into(),
+            }
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(found))
 }
 
 fn cached_system_icon(h: &Hit) -> (slint::Image, bool) {
@@ -886,6 +929,16 @@ impl Rows {
             .at(row)
             .map(|k| (k.row.path.to_string(), k.row.is_dir, k.bytes))
             .filter(|(p, _, _)| !p.is_empty())
+    }
+
+    /// Where a `content:` query found its text in a row's file, if its page
+    /// is in hand.
+    pub fn found_at(&self, row: usize) -> slint::ModelRc<Found> {
+        let pages = self.pages.borrow();
+        pages
+            .at(row)
+            .map(|k| k.row.found.clone())
+            .unwrap_or_default()
     }
 
     /// The path of a row, if its page is in hand.

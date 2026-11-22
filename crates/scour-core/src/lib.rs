@@ -16,7 +16,7 @@ pub use text::{Catalog, DefaultFolder, Folder, Unaccented};
 pub use traits::{ChangeSink, ContentSink, EntrySink, Extractor, Flow, Index, Source, WatchHandle};
 pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
-    EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Group, Hit,
+    EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, FoundLine, Group, Hit,
     IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Owner, PAGE_ROWS, Page,
     PrefixSet, Reading, ReadingStage, Result, Role, ScanOptions, ScanReport, ScanRequest,
     SearchRequest, SearchResponse, Similar, SortKey, SourceId, SourceInfo, SourceKind, Span,

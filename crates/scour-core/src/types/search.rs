@@ -177,6 +177,23 @@ pub struct Hit {
     /// orders by. `None` for files and where the layout cannot answer it cheaply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<Subtree>,
+    /// For a query with `content:` in it: where the file holds the text, the
+    /// first few places. Empty for every other query.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub found: Vec<FoundLine>,
+}
+
+/// One place a `content:` query found its text in a file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundLine {
+    /// Counted from one; none in a file without lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// The line, or the neighbourhood of the find in a long one, with nothing
+    /// a terminal would obey.
+    pub text: String,
+    /// The find inside `text`: a byte offset and a length.
+    pub at: (u32, u32),
 }
 
 /// What a folder holds, totalled.
@@ -216,6 +233,7 @@ impl From<&Entry> for Hit {
             meta: e.meta,
             // What is under an entry is a question about the index, and this has none.
             under: None,
+            found: Vec::new(),
         }
     }
 }
@@ -466,6 +484,7 @@ mod tests {
             kind: Kind::Doc,
             meta: Meta::UNKNOWN,
             under: None,
+            found: Vec::new(),
         };
         assert_eq!(h.name(), "c.txt");
     }

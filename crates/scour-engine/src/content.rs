@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 use scour_core::{
-    Ast, Error, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest, SearchResponse,
-    SortKey,
+    Ast, Error, FoundLine, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest,
+    SearchResponse, SortKey,
 };
 use scour_grep::{Budget, Enter, Ground, Needle, Options, Outcome, Pattern, Scanner};
 
@@ -285,9 +285,11 @@ impl Contents {
                         expected: e.to_string(),
                     }
                 })?;
-                // Whether, not where: a row is a file, and one find settles it.
+                // Where, too, for the first few: a list shows the line under
+                // the file and a preview the places. A file that holds the
+                // text is read until it has given that many.
                 let options = Options {
-                    hits_per_file: 0,
+                    hits_per_file: FOUND_PER_FILE,
                     ..Options::default()
                 };
                 Ok(Scanner::new(pattern, options, ground.clone()).entering(lent.enter.clone()))
@@ -315,9 +317,11 @@ impl Contents {
                 state.at = state.at.saturating_add(read as u32);
                 state.scanned += read as u64;
                 let grew = !holding.is_empty();
-                state
-                    .hits
-                    .extend(holding.into_iter().map(|row| batch[row].clone()));
+                state.hits.extend(holding.into_iter().map(|(row, found)| {
+                    let mut hit = batch[row].clone();
+                    hit.found = found;
+                    hit
+                }));
                 drop(state);
                 reading.grew.notify_all();
                 // Without a find too, though seldom: the count of files read
@@ -347,21 +351,34 @@ impl Contents {
     }
 }
 
-/// The rows of `batch` whose files hold every needle, in order, and how many
-/// rows from the front were settled — all of them unless the reading stopped.
-fn holding(scanners: &[Scanner], budget: &Budget, batch: &[Hit]) -> (usize, Vec<usize>) {
+/// The rows of `batch` whose files hold every needle, in order, each with
+/// where it holds them, and how many rows from the front were settled — all of
+/// them unless the reading stopped.
+fn holding(
+    scanners: &[Scanner],
+    budget: &Budget,
+    batch: &[Hit],
+) -> (usize, Vec<(usize, Vec<FoundLine>)>) {
     let (places, files) = crate::grep::files_of(batch);
     let mut settled = batch.len();
     // Each needle reads only what held the ones before it.
-    let mut left: Vec<usize> = (0..files.len()).collect();
+    let mut left: Vec<(usize, Vec<FoundLine>)> =
+        (0..files.len()).map(|k| (k, Vec::new())).collect();
     for scanner in scanners {
-        let asked: Vec<_> = left.iter().map(|&k| files[k].clone()).collect();
+        let asked: Vec<_> = left.iter().map(|(k, _)| files[*k].clone()).collect();
         let outcomes = scanner.scan(&asked, budget);
         let mut kept = Vec::with_capacity(left.len());
-        for (k, outcome) in left.iter().zip(outcomes) {
+        for ((k, mut found), outcome) in left.into_iter().zip(outcomes) {
             match outcome {
-                Outcome::Found { .. } => kept.push(*k),
-                Outcome::NotReached => settled = settled.min(places[*k] as usize),
+                Outcome::Found { hits, .. } => {
+                    found.extend(hits.into_iter().map(|h| FoundLine {
+                        line: h.line,
+                        text: h.text,
+                        at: h.at,
+                    }));
+                    kept.push((k, found));
+                }
+                Outcome::NotReached => settled = settled.min(places[k] as usize),
                 _ => {}
             }
         }
@@ -369,11 +386,21 @@ fn holding(scanners: &[Scanner], budget: &Budget, batch: &[Hit]) -> (usize, Vec<
     }
     let rows = left
         .into_iter()
-        .map(|k| places[k] as usize)
-        .filter(|row| *row < settled)
+        .map(|(k, mut found)| {
+            // Two needles may find the same line: shown once, in file order.
+            found.sort_by_key(|f| (f.line, f.at));
+            found.dedup_by(|a, b| a.line.is_some() && a.line == b.line);
+            found.truncate(FOUND_PER_FILE);
+            (places[k] as usize, found)
+        })
+        .filter(|(row, _)| *row < settled)
         .collect();
     (settled, rows)
 }
+
+/// Places a file's row carries: enough for a line under it in a list and a
+/// handful in a preview, few enough that a page of them stays small.
+const FOUND_PER_FILE: usize = 3;
 
 #[cfg(test)]
 mod tests {

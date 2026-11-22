@@ -2551,6 +2551,7 @@ mod tests {
                     kind: scour_core::Kind::File,
                     meta: scour_core::Meta::UNKNOWN,
                     under: None,
+                    found: Vec::new(),
                 }
             })
             .collect()

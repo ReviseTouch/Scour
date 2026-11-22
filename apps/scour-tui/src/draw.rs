@@ -1889,6 +1889,21 @@ fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, cha
     let [rule, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     across(f, rule, theme);
     let mut lines: Vec<Line> = Vec::new();
+    // Where the file holds the text a `content:` query asked for, first and
+    // without waiting for the file's head: it is why the file is listed.
+    if let Some(hit) = app.pages.at(app.cursor)
+        && !hit.found.is_empty()
+    {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", app.say("Found in the file")),
+            Style::new().fg(theme.ink_3()),
+        )));
+        let wide = area.width.saturating_sub(2) as usize;
+        for found in &hit.found {
+            lines.push(found_line(found, wide, theme));
+        }
+        lines.push(Line::from(""));
+    }
     match &app.peek {
         Some(look) => {
             // The content type and not the size: for a symlink the two disagree,
@@ -1944,6 +1959,43 @@ fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, cha
         ))),
     }
     f.render_widget(Paragraph::new(lines), body);
+}
+
+/// One place a `content:` query found its text: the line's number, then the
+/// line with the find drawn as the window marks it, cut to `wide` characters
+/// with the find kept in sight.
+fn found_line(found: &scour_core::FoundLine, wide: usize, theme: &Theme) -> Line<'static> {
+    let (at, len) = (found.at.0 as usize, found.at.1 as usize);
+    let tidy = |s: &str| s.replace(['\t', '\r', '\n'], " ");
+    let (pre, hit, post) = match (
+        found.text.get(..at),
+        found.text.get(at..at + len),
+        found.text.get(at + len..),
+    ) {
+        (Some(pre), Some(hit), Some(post)) => (tidy(pre.trim_start()), tidy(hit), tidy(post)),
+        _ => (tidy(&found.text), String::new(), String::new()),
+    };
+    let number = found
+        .line
+        .map(|n| format!("{n:>5}  "))
+        .unwrap_or_else(|| "       ".into());
+    let room = wide.saturating_sub(number.chars().count());
+    // The part before the find gives way first, from its front.
+    let before = pre.chars().count();
+    let keep = room.saturating_sub(hit.chars().count()).min(before).min(30);
+    let pre: String = if before > keep {
+        let cut: String = pre.chars().skip(before - keep).collect();
+        format!("…{}", cut.chars().skip(1).collect::<String>())
+    } else {
+        pre
+    };
+    let left = room.saturating_sub(pre.chars().count() + hit.chars().count());
+    Line::from(vec![
+        Span::styled(number, Style::new().fg(theme.ink_3())),
+        Span::styled(pre, Style::new().fg(theme.ink_2())),
+        Span::styled(hit, Style::new().bg(theme.key()).fg(theme.back())),
+        Span::styled(cut(&post, left), Style::new().fg(theme.ink_2())),
+    ])
 }
 
 /// The rail: what the matching rows are made of, where they live, how big

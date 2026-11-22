@@ -220,6 +220,8 @@ impl<'a> Segment<'a> {
             // Filled by the engine, which is the layer that knows whether
             // anybody asked for it.
             under: None,
+            // And these by the content reading, the only one that read the file.
+            found: Vec::new(),
             is_dir: self.num(Field::IsDir, row) != 0,
             kind: Kind::from_u8(self.num(Field::Kind, row) as u8).unwrap_or(Kind::File),
             meta: Meta {
