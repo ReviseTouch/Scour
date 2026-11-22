@@ -148,3 +148,12 @@ fn a_field_one_letter_off_is_offered_its_spelling() {
     assert_eq!(near_field("size"), None);
     assert_eq!(near_field("zzzz"), None);
 }
+
+#[test]
+fn only_a_content_term_with_something_in_it_reads_files() {
+    assert!(reads("rapor content:fatura"));
+    assert!(reads("content:\"iki kelime\""));
+    assert!(!reads("rapor content:\"\""));
+    assert!(!reads("rapor content:"));
+    assert!(!reads("rapor"));
+}

@@ -251,12 +251,7 @@ pub fn answered(
 /// would find; with something, take the offers away.
 pub fn searched(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
     let text = s.query.clone();
-    if total > 0
-        || text.trim().is_empty()
-        || lens::terms(&text)
-            .iter()
-            .any(|t| t.field == Some("content"))
-    {
+    if total > 0 || text.trim().is_empty() || lens::reads(&text) {
         s.qb.rescue.clear();
         s.qb.rescue_for.clear();
         show_rescue(w, &s.qb, cat);
@@ -374,7 +369,7 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
     s.qb.chips.clear();
     show_chips(w, &s.qb, cat);
     let ts = lens::terms(&text);
-    if total < 2 || ts.iter().any(|t| t.field == Some("content")) {
+    if total < 2 || lens::reads(&text) {
         return;
     }
     let revision = s.query_revision;

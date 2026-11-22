@@ -454,6 +454,16 @@ fn value_spans(out: &mut Vec<Span>, start: usize, value: &str, f: &fields::Field
         return;
     }
     let folded = DefaultFolder::of(&value.replace('"', ""));
+    // An empty `content:""` is left out of the search, not misread: its
+    // quotes are quotes. See `parse_alt`.
+    if f.name == "content" && folded.trim().is_empty() {
+        for (i, c) in value.char_indices() {
+            if c == '"' {
+                out.push(Span::new(start + i, 1, Role::Quote));
+            }
+        }
+        return;
+    }
     if !fields::accepts(f, &folded, now) {
         out.push(Span::new(start, value.len(), Role::BadValue));
         return;
@@ -620,6 +630,14 @@ fn word_at(input: &str, cursor: usize) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+
+    /// An empty `content:""` is not marked as misread: it is left out.
+    #[test]
+    fn an_empty_content_term_is_not_a_warning() {
+        let spans = spans_at("rapor content:\"\"", 1_800_000_000);
+        assert!(spans.iter().all(|s| !s.role.is_warning()), "{spans:?}");
+        assert!(spans.iter().filter(|s| s.role == Role::Quote).count() == 2);
+    }
     use super::*;
 
     fn roles(q: &str) -> Vec<(Role, &str)> {

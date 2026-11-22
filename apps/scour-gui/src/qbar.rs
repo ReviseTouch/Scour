@@ -87,7 +87,11 @@ impl Field {
             if wrong || !(t.not || named || t.field.is_some()) {
                 continue;
             }
-            let tone = if t.not {
+            // An empty `content:` is left out of the search: drawn idle, a ring
+            // with no tint, until something is typed in it.
+            let tone = if t.field == Some("content") && t.value.trim().is_empty() {
+                3
+            } else if t.not {
                 2
             } else if t.field == Some("content") {
                 1

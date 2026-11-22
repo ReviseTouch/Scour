@@ -76,7 +76,7 @@ pub struct Lenses {
 }
 
 fn reads(q: &str) -> bool {
-    lens::terms(q).iter().any(|t| t.field == Some("content"))
+    lens::reads(q)
 }
 
 fn home_form(home: &str, p: &str) -> String {

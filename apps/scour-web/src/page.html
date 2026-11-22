@@ -228,6 +228,7 @@
   }
   .qshadow .term.cap.read { --cap: var(--cap-read); --cap-ring: var(--cap-read-ring); }
   .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); }
+  .qshadow .term.cap.idle { --cap: transparent; --cap-ring: var(--line); }
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
   /* A capsule's frame — field, colon, quotes — is one colour, the label's:
      it is not typed into. Only the value reads as text. */
@@ -3190,6 +3191,8 @@
     const f = sp && field(sp[0]);
     if (sp && !f) return "word";
     if (f && sp[1] && f.takes !== "none" && !accepts(f, sp[1])) return "word";
+    // An empty `content:` is left out of the search: drawn idle until typed in.
+    if (f && f.name === "content" && !(sp[1] || "").replace(/"/g, "").trim()) return "cap idle";
     if (f) return "cap" + (f.name === "content" ? " read" : "") + (neg ? " neg" : "");
     return neg ? "cap neg" : "word";
   }
@@ -3599,8 +3602,9 @@
     ["<100kb", "under 100 KB"], ["100kb..10mb", "100 KB to 10 MB"],
     ["10mb..1gb", "10 MB to 1 GB"], [">1gb", "over 1 GB"],
   ];
-  /* Counting a query with `content:` in it would start reading files. */
-  const READS = /(^|[\s|(])!?(content|text|icerik|i\u00e7erik):/i;
+  /* Counting a query with `content:` in it would start reading files — with
+     something in it: an empty `content:""` is left out of the search. */
+  const READS = /(^|[\s|(])!?(content|text|icerik|i\u00e7erik):(?!\s|$|[|)]|"\s*("|$))/i;
   const COUNT_CAP = 100000;
 
   /* The term the caret is in or just after, read as `scour_ui::lens::term`. */

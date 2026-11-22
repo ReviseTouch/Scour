@@ -350,6 +350,15 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
     if let Some((field, value)) = split_field(rest) {
         let raw = unquote(value);
         let folded = DefaultFolder::of(&raw);
+        // **An empty `content:` is a filter not written yet**, and is left
+        // out rather than searched for as text: the bar offers it as
+        // `content:""` with the caret inside, and the list has to go on
+        // answering for the rest of the query until something is typed there.
+        if folded.trim().is_empty()
+            && crate::fields::lookup(&field).map(|f| f.name) == Some("content")
+        {
+            return None;
+        }
         // The field table is the only place a field name is written down.
         let m: Option<Match> = match crate::fields::lookup(&field).map(|f| f.name) {
             Some("ext") => {
@@ -793,6 +802,25 @@ mod paren_tests {
 
 #[cfg(test)]
 mod tests {
+    /// An empty `content:` is a filter not written yet: the rest of the query
+    /// answers as if it were not there, not as a search for its text.
+    #[test]
+    fn an_empty_content_term_is_left_out() {
+        for q in [
+            "rapor content:\"\"",
+            "rapor content:",
+            "content:\" \" rapor",
+            "rapor içerik:\"\"",
+        ] {
+            assert_eq!(parse_at(q, 0).groups, parse_at("rapor", 0).groups, "{q}");
+        }
+        assert!(parse_at("content:\"\"", 0).groups.is_empty());
+        // Written, it is a filter.
+        assert!(matches!(
+            parse_at("content:x", 0).groups[0].alts[0].1,
+            Match::ContentContains(_)
+        ));
+    }
     use super::*;
     use scour_core::Kind;
 
@@ -1094,11 +1122,9 @@ mod tests {
             m("içerik:gizli"),
             vec![(false, Match::ContentContains("gizli".into()))]
         );
-        // An empty value is not a content search; it is the literal text.
-        assert_eq!(
-            m("content:"),
-            vec![(false, Match::NameContains("content:".into()))]
-        );
+        // An empty value is a filter not written yet, and left out — not the
+        // literal text, which found nothing while the bar waited for a word.
+        assert_eq!(m("content:"), vec![]);
     }
 
     #[test]

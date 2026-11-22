@@ -2415,9 +2415,13 @@ export component MainWindow inherits Window {
                         visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         border-radius: 5px;
                         border-width: 1px;
-                        background: c.tone == 1 ? Theme.cap-read : c.tone == 2 ? Theme.cap-neg : Theme.cap;
+                        // Tone 3 is an empty `content:`, left out of the search:
+                        // a faint ring and no tint, as a control switched off.
+                        background: c.tone == 1 ? Theme.cap-read : c.tone == 2 ? Theme.cap-neg
+                            : c.tone == 3 ? transparent : Theme.cap;
                         border-color: c.hov ? Theme.ink-3
-                            : c.tone == 1 ? Theme.cap-read-ring : c.tone == 2 ? Theme.cap-neg-ring : Theme.cap-ring;
+                            : c.tone == 1 ? Theme.cap-read-ring : c.tone == 2 ? Theme.cap-neg-ring
+                            : c.tone == 3 ? Theme.line : Theme.cap-ring;
                     }
 
                     // The selection, a line at a time.

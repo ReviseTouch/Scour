@@ -19,6 +19,14 @@ pub struct Term {
     pub value: String,
 }
 
+/// Whether a query reads files: a `content:` term with something in it. An
+/// empty one is a filter not written yet, which the search leaves out.
+pub fn reads(query: &str) -> bool {
+    terms(query)
+        .iter()
+        .any(|t| t.field == Some("content") && !t.value.trim().is_empty())
+}
+
 /// What a lens lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lens {
