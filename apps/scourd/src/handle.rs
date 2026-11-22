@@ -236,6 +236,7 @@ fn run(
         // never gets to write anything.
         Request::SetSettings { change } => {
             let replan = change.moves_sources();
+            let tunes = change.tunes();
             let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
             let before = rules_of(&held);
             // Folded in, not assigned: what it does not name is another
@@ -251,6 +252,9 @@ fn run(
             // How words are read is the engine's to know: every question
             // that takes a query parses it there.
             engine.set_reading(crate::wire::reading(&held));
+            if tunes {
+                crate::wire::tune(&held);
+            }
             if before != after {
                 let was = engine.scan_options();
                 let now = crate::wire::scan_options_with(&kept.config, &held);

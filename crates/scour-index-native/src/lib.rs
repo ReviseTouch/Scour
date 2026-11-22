@@ -43,7 +43,7 @@ pub use index::NativeIndex;
 pub use name_order::NameOrder;
 pub use names::{Folded, NameArena, NameWriter};
 pub use order::PathOrder;
-pub use search::{Found, Plan, Segment, Wanted, run, run_with};
+pub use search::{Found, Plan, Segment, Wanted, run, run_with, set_search_threads};
 pub use segment::Live;
 pub use sizes::Cache as SizeCache;
 pub use spelling::Spelling;

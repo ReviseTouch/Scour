@@ -2699,6 +2699,11 @@ impl Index for NativeIndex {
         for live in &self.inner.read().segments {
             live.release_pages();
         }
+        // And the folder totals, 20 MB on this machine once anything was
+        // ordered by size: rebuilt in a third of a second when next asked,
+        // which an idle service can afford and a small machine cannot the
+        // other way round.
+        self.sizes.write().clear();
         // And what a query's buffers left in glibc's arenas, freed but kept.
         trim_allocator();
     }
@@ -3305,6 +3310,15 @@ impl Index for NativeIndex {
                 children.add_segment(&live.view()?)?;
             }
             return children.finish(started);
+        }
+        if let Some(mut everything) = crate::usage::Everything::new(req, now) {
+            let mut whole = true;
+            for live in &inner.segments {
+                whole &= everything.add_segment(&live.view()?)?;
+            }
+            if whole {
+                return everything.finish(started);
+            }
         }
         let mut rollup = Rollup::new(req, now);
         for live in &inner.segments {

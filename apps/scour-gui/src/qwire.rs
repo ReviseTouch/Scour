@@ -35,11 +35,23 @@ pub struct QueryBar {
     fix: Option<String>,
     /// The narrowing line: the query it is for, its answers, and its chips
     /// as label, count and the term a press writes.
-    narrow_for: String,
+    pub narrow_for: String,
     narrow_total: u64,
+    /// The line switched off in the settings: nothing is asked for it.
+    pub narrow_off: bool,
     narrow_facets: Option<scour_core::FacetResponse>,
     narrow_usage: Option<scour_core::UsageResponse>,
     chips: Vec<(String, u64, String)>,
+}
+
+impl QueryBar {
+    /// A bar, its narrowing line switched off or not.
+    pub fn off(narrow_off: bool) -> QueryBar {
+        QueryBar {
+            narrow_off,
+            ..QueryBar::default()
+        }
+    }
 }
 
 /// Whether drawing also opens, follows or leaves the lens.
@@ -344,6 +356,13 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
 /// the service's CPU and 280 MB of its memory, for chips nobody had touched.
 /// Only crossing the two the line needs asks again.
 pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
+    if s.qb.narrow_off {
+        if !s.qb.chips.is_empty() {
+            s.qb.chips.clear();
+            show_chips(w, &s.qb, cat);
+        }
+        return;
+    }
     let text = s.query.clone();
     if s.qb.narrow_for == text && (s.qb.narrow_total < 2) == (total < 2) {
         return;

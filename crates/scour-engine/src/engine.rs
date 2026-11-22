@@ -276,10 +276,45 @@ const PREPARE_COST: u32 = 10;
 /// ceiling: on 1,474,650 files, everything over a megabyte is 18,723 of them.
 const CANDIDATES: u32 = 200_000;
 
-/// How long after the last query the index's mapped pages are released: long
-/// enough that typing never pays for it, short enough that a burst of searching
-/// is not kept resident for the rest of the day.
-const RELEASE_AFTER: Duration = Duration::from_secs(60);
+/// What the person tuned, for the whole process: an engine is replaced when a
+/// disk comes or goes, and what was chosen in the settings has to outlive it.
+/// See [`tune`].
+static RELEASE_AFTER_MS: AtomicU64 = AtomicU64::new(60_000);
+/// Zero is the configuration's own `commit_idle`.
+static FRESH_WITHIN_MS: AtomicU64 = AtomicU64::new(0);
+
+/// How the service trades memory and CPU for speed, as the settings say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tuning {
+    /// How long after the last query the index's mapped pages and the folder
+    /// table are released. A minute by default: typing never pays for it, and
+    /// a burst of searching is not kept resident for the rest of the day.
+    pub release_after: Duration,
+    /// How stale the index may get while nothing is watching it; `None` keeps
+    /// the configuration's `commit_idle`.
+    pub fresh_within: Option<Duration>,
+}
+
+/// Take these from now on, in every engine of the process.
+pub fn tune(t: &Tuning) {
+    RELEASE_AFTER_MS.store(t.release_after.as_millis() as u64, Ordering::Relaxed);
+    FRESH_WITHIN_MS.store(
+        t.fresh_within.map_or(0, |d| d.as_millis().max(1) as u64),
+        Ordering::Relaxed,
+    );
+}
+
+fn release_after() -> Duration {
+    Duration::from_millis(RELEASE_AFTER_MS.load(Ordering::Relaxed))
+}
+
+/// How long an unwatched trickle may wait: the setting, or the configuration's.
+fn commit_idle(opts: &EngineOptions) -> Duration {
+    match FRESH_WITHIN_MS.load(Ordering::Relaxed) {
+        0 => opts.commit_idle,
+        ms => Duration::from_millis(ms),
+    }
+}
 
 /// How much CSV goes into one frame of an export. A frame is a line of JSON, so a
 /// row per frame pays an envelope and a write each; 128 KB is about two thousand.
@@ -1414,7 +1449,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             let patience = if watched {
                 shared.opts.commit_watched
             } else {
-                shared.opts.commit_idle
+                commit_idle(&shared.opts)
             };
             let batch = if watched {
                 shared.opts.commit_batch
@@ -1443,7 +1478,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             deadline!("persist", last_persist + shared.opts.persist_every);
         }
         if shared.read_since_release.load(Ordering::Relaxed) {
-            deadline!("release", *shared.last_read.lock() + RELEASE_AFTER);
+            deadline!("release", *shared.last_read.lock() + release_after());
         }
         // The held walks, flushed below in the same turn, so this cannot spin.
         if let Some(at) =
@@ -1572,7 +1607,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                         // The ones that waited out a walk; see the scan arm.
                         if overdue {
                             overdue = false;
-                            last_commit = Instant::now() - shared.opts.commit_idle;
+                            last_commit = Instant::now() - commit_idle(&shared.opts);
                         }
                     }
                     // A watcher that lost track becomes a walk of the subtree it lost,
@@ -1689,7 +1724,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
         let patience = if watched {
             shared.opts.commit_watched
         } else {
-            shared.opts.commit_idle
+            commit_idle(&shared.opts)
         };
         if dirty && waited >= shared.opts.commit_interval && (enough || waited >= patience) {
             match shared.index.publish() {
@@ -1751,7 +1786,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
 
         // A minute after the last query, the pages it read go back to the kernel.
         if shared.read_since_release.load(Ordering::Relaxed)
-            && shared.last_read.lock().elapsed() >= RELEASE_AFTER
+            && shared.last_read.lock().elapsed() >= release_after()
         {
             shared.read_since_release.store(false, Ordering::Relaxed);
             shared.index.release_memory();

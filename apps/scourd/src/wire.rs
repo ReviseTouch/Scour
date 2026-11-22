@@ -106,6 +106,68 @@ pub fn engine(
 
 /// How queries are read, as a person set it: [`scour_settings::Settings`]'s
 /// two search fields, in the engine's words. An unknown word offers.
+/// What the settings say about memory and CPU, put into effect for the whole
+/// process: the engine's release and patience, and how wide a search goes.
+pub fn tune(kept: &scour_settings::Settings) {
+    scour_engine::tune(&scour_engine::Tuning {
+        release_after: kept.release_after(machine_memory()),
+        fresh_within: (kept.fresh_within > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(kept.fresh_within))),
+    });
+    scour_index_native::set_search_threads(kept.search_threads as usize);
+}
+
+/// The machine's memory in bytes, or zero where it cannot be read — which
+/// the settings take as not a small machine. Read once.
+fn machine_memory() -> u64 {
+    static BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(read_machine_memory)
+}
+
+#[cfg(target_os = "linux")]
+fn read_machine_memory() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|kib| kib.parse::<u64>().ok())
+        })
+        .map_or(0, |kib| kib * 1024)
+}
+
+#[cfg(windows)]
+fn read_machine_memory() -> u64 {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: a struct of plain numbers, its length set as the call requires.
+    unsafe {
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            status.ullTotalPhys
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_machine_memory() -> u64 {
+    std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn read_machine_memory() -> u64 {
+    0
+}
+
 pub fn reading(kept: &scour_settings::Settings) -> scour_engine::Reading {
     scour_engine::Reading {
         exact_accents: kept.accents_exact,

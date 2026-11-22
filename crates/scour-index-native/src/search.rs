@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::sync::atomic::Ordering;
 
 use memchr::memmem::Finder;
 use scour_core::text::{DefaultFolder, Folder, Unaccented};
@@ -1220,18 +1221,29 @@ const SPLIT_AFTER: usize = 16;
 /// Threads one search may use. `SCOUR_SEARCH_THREADS` overrides, for measuring;
 /// 1 keeps every walk whole.
 fn search_threads() -> usize {
-    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *N.get_or_init(|| {
+    static ENV: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let env = *ENV.get_or_init(|| {
         std::env::var("SCOUR_SEARCH_THREADS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map_or(1, |n| n.get())
-                    .min(8)
-            })
-            .max(1)
-    })
+    });
+    let chosen = env.unwrap_or_else(|| match SEARCH_THREADS.load(Ordering::Relaxed) {
+        0 => std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(8),
+        n => n,
+    });
+    chosen.max(1)
+}
+
+/// How many threads one large walk is split over, as the settings say; zero
+/// is the measured default, the cores up to eight. `SCOUR_SEARCH_THREADS`
+/// still wins, which is how the measurements pin it.
+static SEARCH_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Split large walks over this many threads from now on; zero for the default.
+pub fn set_search_threads(n: usize) {
+    SEARCH_THREADS.store(n, Ordering::Relaxed);
 }
 
 /// One walk made as several, over equal shares of its candidate blocks. Each

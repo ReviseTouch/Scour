@@ -131,14 +131,16 @@ impl Prefix {
             .map(|row| row as u32)
             .collect();
         rows.shrink_to_fit();
+        // Placed before the tables are reserved, so the pass's working set and
+        // what is kept do not peak together.
+        let placed = ids.and_then(|ids| place(seg, ids, &rows));
         self.by_row.reserve_exact(rows.len());
         self.scopes.reserve_exact(rows.len());
-        let placed = ids.and_then(|ids| place(seg, ids, &rows));
         let mut parents = ParentPaths::default();
         let mut path = String::new();
         for (i, &row) in rows.iter().enumerate() {
-            let bounds = match placed.as_ref().map(|p| p.bounds[i]) {
-                Some(Some(bounds)) => bounds,
+            let bounds = match placed.as_ref().and_then(|p| p.bounds(i)) {
+                Some(bounds) => bounds,
                 // Read by name: nothing placed it, and something may be below.
                 _ => {
                     let Some(name) = seg.names.get(row as usize) else {
@@ -356,6 +358,11 @@ impl Cache {
         self.per_segment.get(&segment).map(|p| &p.by_row[..])
     }
 
+    /// Drop every table; the next question builds what it needs.
+    pub fn clear(&mut self) {
+        self.per_segment = HashMap::new();
+    }
+
     /// What the cache is holding, for the memory line in `stats`.
     pub fn bytes(&self) -> u64 {
         self.per_segment
@@ -372,71 +379,49 @@ impl Cache {
     }
 }
 
-/// Where each directory row's subtree lies, found without its name: `None` at
-/// a row that has to be read by name. `bounds[i]` is for `rows[i]`.
+/// Where each directory row's subtree lies, found without its name: its own
+/// directory's number, [`NOTHING_BELOW`], or [`BY_NAME`]. `own[i]` is for
+/// `rows[i]`; a directory's descendants are `lo[d]..hi[d]`.
 struct Placed {
-    bounds: Vec<Option<[u32; 3]>>,
+    own: Vec<u32>,
+    lo: Vec<u32>,
+    hi: Vec<u32>,
 }
 
-/// Nothing below, and no directory of its own: a scope that totals zero.
-const EMPTY: [u32; 3] = [u32::MAX, 0, 0];
+impl Placed {
+    /// The row's scope as [`Prefix::scopes`] keeps it, or `None` to read it by
+    /// name.
+    fn bounds(&self, i: usize) -> Option<[u32; 3]> {
+        match self.own[i] {
+            BY_NAME => None,
+            // Nothing below, and no directory of its own: a scope of zero.
+            NOTHING_BELOW => Some([u32::MAX, 0, 0]),
+            dir => {
+                let d = dir as usize;
+                Some(if self.hi[d] > 0 {
+                    [dir, self.lo[d], self.hi[d]]
+                } else {
+                    [dir, 0, 0]
+                })
+            }
+        }
+    }
+}
+
 const NONE: u32 = u32::MAX;
+const BY_NAME: u32 = u32::MAX;
+const NOTHING_BELOW: u32 = u32::MAX - 1;
 
 /// See [`Prefix::build_rows`]. `rows` are the live directory rows, ascending.
 /// `None` when the table cannot be read through.
 fn place(seg: &Segment<'_>, ids: &IdMap<'_>, rows: &[u32]) -> Option<Placed> {
     let n = seg.dirs.len();
-    // Every table directory's nearest ancestor *in the table*, and whether that
-    // is its parent. Paths come sorted, and a path's ancestors are prefixes of
-    // it ending before a `/`; a prefix ending before `-`, which sorts before
-    // `/`, is a sibling's, and stays open for the descendants still to come.
-    let mut up = vec![NONE; n];
-    let mut direct = vec![false; n];
-    let mut stack: Vec<(u32, usize)> = Vec::new();
-    let mut prev: Vec<u8> = Vec::new();
-    let mut root = NONE;
-    // The directory of rows with no directory, whose children's paths have no
-    // `/` and so no ancestors to find: read by name.
-    let mut nowhere = NONE;
-    let mut read = 0usize;
-    seg.dirs.each_bytes(|id, path| {
-        read += 1;
-        let common = prev.iter().zip(path).take_while(|(a, b)| a == b).count();
-        while let Some(&(_, len)) = stack.last() {
-            let stays = len <= common
-                && path.len() > len
-                && (path[len] <= b'/' || (len == 1 && path[0] == b'/'));
-            if stays {
-                break;
-            }
-            stack.pop();
-        }
-        let ancestor = stack
-            .iter()
-            .rev()
-            .find(|&&(_, len)| path[len] == b'/' || (len == 1 && path[0] == b'/'));
-        if let Some(&(at, len)) = ancestor {
-            up[id] = at;
-            // The parent is the path up to its last `/`, or `/` for a child of
-            // the root.
-            let last = path.iter().rposition(|&b| b == b'/').unwrap_or(0);
-            direct[id] = last == len || (last == 0 && len == 1);
-        }
-        if path == b"/" {
-            root = id as u32;
-        }
-        if path.is_empty() {
-            nowhere = id as u32;
-        }
-        if !path.is_empty() {
-            stack.push((id as u32, path.len()));
-        }
-        prev.clear();
-        prev.extend_from_slice(path);
-    });
-    if read != n {
-        return None;
-    }
+    let crate::dirs::Ancestry {
+        up,
+        direct,
+        root,
+        nowhere,
+    } = seg.dirs.ancestry()?;
 
     // Descendants are contiguous, and every one is below its nearest ancestor:
     // a pass from the deepest numbers up gathers each directory's run.
@@ -478,7 +463,9 @@ fn place(seg: &Segment<'_>, ids: &IdMap<'_>, rows: &[u32]) -> Option<Placed> {
             };
         }
     }
-    let mut keys: Vec<(u32, u32, u32)> = Vec::new();
+    // Eight bytes a directory: under a parent two sources share the digest
+    // is taken once a source, and the row's source is not checked there.
+    let mut keys: Vec<(u32, u32)> = Vec::new();
     seg.dirs.each_bytes(|id, path| {
         if !direct[id] || id as u32 == root {
             return;
@@ -486,65 +473,63 @@ fn place(seg: &Segment<'_>, ids: &IdMap<'_>, rows: &[u32]) -> Option<Placed> {
         let Ok(path) = std::str::from_utf8(path) else {
             return;
         };
-        let mut key = |source: u32| {
-            keys.push((IdMap::key_of(SourceId(source), path), id as u32, source));
-        };
         match source_in[up[id] as usize] {
             // No directory row sits in its parent, so neither does its own.
             NONE => {}
-            MIXED => sources.iter().for_each(|&s| key(s)),
-            source => key(source),
+            MIXED => {
+                for &s in &sources {
+                    keys.push((IdMap::key_of(SourceId(s), path), id as u32));
+                }
+            }
+            source => keys.push((IdMap::key_of(SourceId(source), path), id as u32)),
         }
     });
+    drop(direct);
     keys.sort_unstable();
+    keys.dedup();
+    // Each row's own directory; a row two directories claim is read by name.
+    const DOUBT: u32 = u32::MAX - 2;
     let mut own: Vec<u32> = vec![NONE; rows.len()];
-    let mut doubtful = vec![false; rows.len()];
     ids.join(
         keys.len(),
         |j| keys[j].0,
         |row, j| {
-            let (_, dir, source) = keys[j];
+            let dir = keys[j].1;
             let Ok(at) = rows.binary_search(&row) else {
                 return;
             };
-            // A digest is half a path's: the row has to be a directory of
-            // this source sitting in this directory's parent.
-            if seg.source_of(row as usize).0 != source
-                || seg.dir_id(row as usize) != up[dir as usize]
+            // A digest is half a path's: the row has to sit in this
+            // directory's parent, and be of the source that parent's are.
+            let parent = up[dir as usize];
+            let source = source_in[parent as usize];
+            if seg.dir_id(row as usize) != parent
+                || (source != MIXED && seg.source_of(row as usize).0 != source)
             {
                 return;
             }
-            match own[at] {
-                NONE => own[at] = dir,
-                held if held != dir => doubtful[at] = true,
-                _ => {}
-            }
+            own[at] = match own[at] {
+                NONE => dir,
+                held if held == dir => held,
+                _ => DOUBT,
+            };
         },
     );
+    drop(keys);
+    drop(source_in);
 
-    let bounds = rows
-        .iter()
-        .enumerate()
-        .map(|(i, &row)| {
-            if doubtful[i] || seg.dir_id(row as usize) == nowhere {
-                return None;
-            }
-            match own[i] {
-                NONE => {
-                    let parent = seg.dir_id(row as usize) as usize;
-                    // Nothing below it in the table, unless its parent has
-                    // a descendant whose own directory is missing.
-                    (!gapped.get(parent).copied().unwrap_or(true)).then_some(EMPTY)
-                }
-                dir => {
-                    let d = dir as usize;
-                    let below = if hi[d] > 0 { [lo[d], hi[d]] } else { [0, 0] };
-                    Some([dir, below[0], below[1]])
-                }
-            }
-        })
-        .collect();
-    Some(Placed { bounds })
+    for (i, &row) in rows.iter().enumerate() {
+        let parent = seg.dir_id(row as usize);
+        own[i] = match own[i] {
+            _ if parent == nowhere => BY_NAME,
+            DOUBT => BY_NAME,
+            // Nothing below it in the table, unless its parent has a
+            // descendant whose own directory is missing.
+            NONE if gapped.get(parent as usize).copied().unwrap_or(true) => BY_NAME,
+            NONE => NOTHING_BELOW,
+            dir => dir,
+        };
+    }
+    Some(Placed { own, lo, hi })
 }
 
 /// Small decode working set; collisions replace a slot without changing lookup.
@@ -667,9 +652,9 @@ mod tests {
                 )
                 .expect("placed");
                 assert!(
-                    placed.bounds.iter().filter(|b| b.is_none()).count() <= 6,
+                    placed.own.iter().filter(|&&o| o == BY_NAME).count() <= 6,
                     "rows read by name: {:?}",
-                    placed.bounds
+                    placed.own
                 );
             }
         });

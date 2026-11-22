@@ -92,6 +92,24 @@ pub struct Settings {
     /// that moves under a busy machine, 13 to 21% of a core for the window.
     #[serde(default)]
     pub refresh_every: u32,
+    /// How soon the service gives back what a query brought into memory — the
+    /// index's pages and the folder table — once nobody asks: `now`, a few
+    /// seconds after the last question, `1m`, `5m`, or `""` to go by the
+    /// machine: under [`SMALL_MACHINE`] `now`, `1m` above. Not validated here.
+    #[serde(default)]
+    pub memory: String,
+    /// The narrowing line under the query bar, switched off: its two walks are
+    /// then never asked.
+    #[serde(default)]
+    pub narrow_off: bool,
+    /// Threads one large search is split over. Zero is the default, the cores
+    /// up to eight; one keeps a search off every core but one.
+    #[serde(default)]
+    pub search_threads: u32,
+    /// Seconds the index may stay stale while nothing is watching it. Zero
+    /// keeps `config.toml`'s `commit_idle_ms`.
+    #[serde(default)]
+    pub fresh_within: u32,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -241,6 +259,14 @@ pub struct Change {
     pub folders_every: Option<u32>,
     /// See [`Settings::refresh_every`].
     pub refresh_every: Option<u32>,
+    /// `now`, `1m`, `5m`, or `""` to go by the machine. See [`Settings::memory`].
+    pub memory: Option<String>,
+    /// See [`Settings::narrow_off`].
+    pub narrow_off: Option<bool>,
+    /// See [`Settings::search_threads`].
+    pub search_threads: Option<u32>,
+    /// See [`Settings::fresh_within`].
+    pub fresh_within: Option<u32>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -255,6 +281,12 @@ pub struct Change {
 }
 
 impl Change {
+    /// Whether this changes how the service spends memory and CPU, so it is
+    /// tuned again. See [`Settings::release_after`].
+    pub fn tunes(&self) -> bool {
+        self.memory.is_some() || self.search_threads.is_some() || self.fresh_within.is_some()
+    }
+
     /// Whether this changes what is indexed — the disks asked about, the
     /// folders added — so the service plans its sources again.
     pub fn moves_sources(&self) -> bool {
@@ -366,6 +398,18 @@ impl Change {
         if let Some(v) = self.refresh_every {
             to.refresh_every = v;
         }
+        if let Some(v) = self.memory {
+            to.memory = v;
+        }
+        if let Some(v) = self.narrow_off {
+            to.narrow_off = v;
+        }
+        if let Some(v) = self.search_threads {
+            to.search_threads = v;
+        }
+        if let Some(v) = self.fresh_within {
+            to.fresh_within = v;
+        }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;
         }
@@ -408,7 +452,24 @@ fn merge(into: &mut Value, patch: Value) {
     }
 }
 
+/// Below this much memory a machine gives back what a query used at once, if
+/// nobody chose otherwise: 8 GiB.
+pub const SMALL_MACHINE: u64 = 8 << 30;
+
 impl Settings {
+    /// How long after the last question the service keeps what it read, on a
+    /// machine with `memory` bytes. See [`Settings::memory`].
+    pub fn release_after(&self, memory: u64) -> std::time::Duration {
+        let seconds = match self.memory.as_str() {
+            "now" => 3,
+            "5m" => 300,
+            "1m" => 60,
+            _ if memory > 0 && memory < SMALL_MACHINE => 3,
+            _ => 60,
+        };
+        std::time::Duration::from_secs(seconds)
+    }
+
     /// How long a face in use waits between refreshes. See [`Settings::refresh_every`].
     pub fn refresh_after(&self) -> std::time::Duration {
         std::time::Duration::from_secs(match self.refresh_every {
@@ -857,5 +918,26 @@ mod tests {
         }
         .apply(&mut s);
         assert_eq!(s.tabs.len(), TABS);
+    }
+
+    #[test]
+    fn memory_is_given_back_at_once_on_a_small_machine_unless_somebody_chose() {
+        use std::time::Duration;
+        let mut s = Settings::default();
+        assert_eq!(s.release_after(4 << 30), Duration::from_secs(3));
+        assert_eq!(s.release_after(32 << 30), Duration::from_secs(60));
+        // Unknown memory is not a small machine.
+        assert_eq!(s.release_after(0), Duration::from_secs(60));
+        s.memory = "5m".into();
+        assert_eq!(s.release_after(4 << 30), Duration::from_secs(300));
+        s.memory = "now".into();
+        assert_eq!(s.release_after(32 << 30), Duration::from_secs(3));
+        let change = Change {
+            memory: Some(String::new()),
+            ..Change::default()
+        };
+        assert!(change.tunes() && !change.moves_sources());
+        change.apply(&mut s);
+        assert_eq!(s.release_after(32 << 30), Duration::from_secs(60));
     }
 }

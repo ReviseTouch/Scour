@@ -61,6 +61,7 @@ libc = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_System_Services",
+    "Win32_System_SystemInformation",
     "Win32_System_Console",
     "Win32_System_RemoteDesktop",
     "Win32_Security",

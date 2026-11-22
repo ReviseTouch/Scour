@@ -2015,6 +2015,7 @@
         <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
         <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
         <button type="button" data-sec="index"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg><span data-t="Index"></span></button>
+        <button type="button" data-sec="performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/><path d="M8 20h8"/></svg><span data-t="Performance"></span></button>
         <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
           <div class="set-restart" id="set-restart" hidden>
             <p id="set-restart-what"></p>
@@ -2091,6 +2092,14 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Reset and scan again"></div><div class="desc" id="index-reset-desc"></div></div><span id="index-reset-btns"></span></div>
             </div>
             <p class="set-lead" id="index-said"></p>
+          </section>
+          <section data-sec="performance" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Give memory back"></div><div class="desc" data-t="What a search brought into memory is given back once nobody asks. Automatic is at once under 8 GB of memory and after a minute above it; at once costs the next search a little time."></div></div><div class="seg" id="seg-memory"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Narrowing line"></div><div class="desc" data-t="The suggestions under the query bar. Switched off, a new query asks nothing for them: about half a second of the service's work less."></div></div><div class="seg" id="seg-narrow"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Cores for one search"></div><div class="desc" data-t="How many cores a large search is split over. Fewer leaves the machine more to itself and makes a large search slower."></div></div><div class="seg" id="seg-threads"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Up to date within"></div><div class="desc" data-t="While no window is open, how late a change may reach the index. Sooner writes to the disk more often."></div></div><div class="seg" id="seg-fresh"></div></div>
+            </div>
           </section>
           <section data-sec="about" hidden><pre id="set-about"></pre></section>
         </div>
@@ -4258,7 +4267,7 @@
     clearTimeout(narrowTimer);
     const mine = ++narrowGen;
     if (narrowStop) narrowStop.abort();
-    if (READS.test(text) || total < 2) { CHIPS = []; drawNarrow(); return; }
+    if (READS.test(text) || total < 2 || (KEPT && KEPT.narrow_off)) { CHIPS = []; drawNarrow(); return; }
     narrowTimer = setTimeout(() => {
       narrowStop = new AbortController();
       const signal = narrowStop.signal;
@@ -8278,6 +8287,7 @@
     rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
     keys: ["Keyboard", "The key that opens Scour, what the keys do, and what the query understands."],
     index: ["Index", "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong."],
+    performance: ["Performance", "How Scour spends memory and the processor. Less of either costs a little speed."],
     about: ["About", "What is running, and what it holds."],
   };
   let SECTION = "general";
@@ -8334,6 +8344,25 @@
       [["1", T("1 s")], ["2", T("2 s")], ["5", T("5 s")], ["15", T("15 s")], ["60", T("1 min")]],
       String(k.refresh_every || 2),
       (v) => { KEPT.refresh_every = Number(v); keep({ refresh_every: Number(v) }); drawSettings(); });
+    /* The performance section: the service takes each as it is written. */
+    seg("seg-memory",
+      [["", T("Automatic")], ["now", T("At once")], ["1m", T("1 min")], ["5m", T("5 min")]],
+      k.memory || "",
+      (v) => { KEPT.memory = v; keep({ memory: v }); drawSettings(); });
+    seg("seg-narrow", [["on", T("On")], ["off", T("Off")]], k.narrow_off ? "off" : "on", (v) => {
+      KEPT.narrow_off = v === "off";
+      keep({ narrow_off: KEPT.narrow_off });
+      if (KEPT.narrow_off) { CHIPS = []; drawNarrow(); }
+      drawSettings();
+    });
+    seg("seg-threads",
+      [["0", T("Automatic")], ["1", "1"], ["2", "2"], ["4", "4"], ["8", "8"]],
+      String(k.search_threads || 0),
+      (v) => { KEPT.search_threads = Number(v); keep({ search_threads: Number(v) }); drawSettings(); });
+    seg("seg-fresh",
+      [["0", T("As configured")], ["1", T("1 s")], ["5", T("5 s")], ["15", T("15 s")], ["60", T("1 min")]],
+      String(k.fresh_within || 0),
+      (v) => { KEPT.fresh_within = Number(v); keep({ fresh_within: Number(v) }); drawSettings(); });
     seg("seg-tabs", [["on", T("On")], ["off", T("Off")]], k.tabs_off ? "off" : "on", (v) => {
       KEPT.tabs_off = v === "off";
       drawTabs();

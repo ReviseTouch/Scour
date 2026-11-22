@@ -1767,7 +1767,7 @@ export component MainWindow inherits Window {
     in-out property <string> settings-section: "general";
     in property <string> settings-title;
     in property <string> settings-foot;
-    in property <[string]> section-ids: ["general", "search", "view", "disks", "rules", "keys", "index", "about"];
+    in property <[string]> section-ids: ["general", "search", "view", "disks", "rules", "keys", "index", "performance", "about"];
     // Where the section in sight stands in that list: its title and its lead.
     property <int> section-at: root.settings-section == "search" ? 1
         : root.settings-section == "view" ? 2
@@ -1775,7 +1775,8 @@ export component MainWindow inherits Window {
         : root.settings-section == "rules" ? 4
         : root.settings-section == "keys" ? 5
         : root.settings-section == "index" ? 6
-        : root.settings-section == "about" ? 7 : 0;
+        : root.settings-section == "performance" ? 7
+        : root.settings-section == "about" ? 8 : 0;
     // The heads inside a section: the folders under the disks, the keys'
     // table under the key that opens Scour.
     in property <string> set-help;
@@ -1849,6 +1850,26 @@ export component MainWindow inherits Window {
     /// How often the list in sight is re-read once the index moved, in
     /// seconds, as `scour_settings::Settings::refresh_every` says it.
     in property <string> refresh-choice;
+    /// The performance section, as `scour_settings::Settings` says each:
+    /// `memory`, `narrow_off`, `search_threads` and `fresh_within`.
+    in property <string> memory-choice;
+    in property <[string]> memory-labels;
+    in property <string> set-memory;
+    in property <string> set-memory-note;
+    in property <bool> narrow-on: true;
+    in property <string> set-narrow;
+    in property <string> set-narrow-note;
+    in property <string> threads-choice;
+    in property <[string]> threads-labels;
+    in property <string> set-threads;
+    in property <string> set-threads-note;
+    in property <string> fresh-choice;
+    in property <[string]> fresh-labels;
+    in property <string> set-fresh;
+    in property <string> set-fresh-note;
+    /// `kind` is `memory`, `narrow`, `threads` or `fresh`; `value` one of its
+    /// row's values.
+    callback perf-picked(/* kind */ string, /* value */ string);
     in property <[string]> refresh-labels;
     in property <string> set-refresh;
     in property <string> set-refresh-note;
@@ -5666,6 +5687,12 @@ export component MainWindow inherits Window {
                         }
                         NavRow {
                             label: root.section-labels[7];
+                            icon: @image-url("icons/tools/settings-performance.svg");
+                            on: root.settings-section == "performance";
+                            clicked => { root.settings-picked("performance"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[8];
                             icon: @image-url("icons/tools/settings-about.svg");
                             on: root.settings-section == "about";
                             clicked => { root.settings-picked("about"); }
@@ -6517,6 +6544,55 @@ export component MainWindow inherits Window {
                 vertical-alignment: top;
             }
         
+                            }
+
+                            if root.settings-section == "performance": VerticalLayout {
+                                spacing: 6px;
+                                Card {
+                                    SettingRow {
+                                        label: root.set-memory;
+                                        note: root.set-memory-note;
+                                        Choice {
+                                            labels: root.memory-labels;
+                                            values: ["", "now", "1m", "5m"];
+                                            value: root.memory-choice;
+                                            picked(v) => { root.perf-picked("memory", v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-narrow;
+                                        note: root.set-narrow-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.narrow-on ? "on" : "off";
+                                            picked(v) => { root.perf-picked("narrow", v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-threads;
+                                        note: root.set-threads-note;
+                                        Choice {
+                                            labels: root.threads-labels;
+                                            values: ["0", "1", "2", "4", "8"];
+                                            value: root.threads-choice;
+                                            picked(v) => { root.perf-picked("threads", v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-fresh;
+                                        note: root.set-fresh-note;
+                                        Choice {
+                                            labels: root.fresh-labels;
+                                            values: ["0", "1", "5", "15", "60"];
+                                            value: root.fresh-choice;
+                                            picked(v) => { root.perf-picked("fresh", v); }
+                                        }
+                                    }
+                                }
                             }
 
                             if root.settings-section == "index": VerticalLayout {

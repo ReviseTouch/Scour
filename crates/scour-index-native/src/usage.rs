@@ -362,6 +362,121 @@ impl<'a> Children<'a> {
     }
 }
 
+/// A report with no scope, which `scour du` and a report opened on everything
+/// ask for: every source's total, and its maximal directories — those with no
+/// ancestor anywhere in the index, here one, `/`. The general roll-up named
+/// and totalled every directory to find them, a 324 MB peak. A directory is
+/// sent to the topmost of its ancestors this segment's table holds instead,
+/// and the few tops are merged across segments by path.
+pub struct Everything<'a> {
+    req: &'a UsageRequest,
+    now: i64,
+    /// Every segment's tops, by path, with what lies at or below them there.
+    tops: HashMap<String, Own>,
+}
+
+impl<'a> Everything<'a> {
+    pub fn new(req: &'a UsageRequest, now: i64) -> Option<Everything<'a>> {
+        req.path
+            .trim_end_matches('/')
+            .is_empty()
+            .then(|| Everything {
+                req,
+                now,
+                tops: HashMap::new(),
+            })
+    }
+
+    /// `false` for a segment the table cannot be read through, which the caller
+    /// then answers the general way.
+    pub fn add_segment(&mut self, seg: &Segment<'_>) -> Result<bool> {
+        let Some(ancestry) = seg.dirs.ancestry() else {
+            return Ok(false);
+        };
+        let n = seg.dirs.len();
+        // Ancestors have smaller numbers, so one pass down the table hands each
+        // directory its top's bucket.
+        let mut tops: Vec<u32> = Vec::new();
+        let mut bucket = vec![0u32; n];
+        for id in 0..n {
+            match ancestry.up[id] {
+                crate::dirs::NO_DIR => {
+                    bucket[id] = tops.len() as u32;
+                    tops.push(id as u32);
+                }
+                up => bucket[id] = bucket[up as usize],
+            }
+        }
+        let mut owns = vec![Own::default(); tops.len()];
+        let mut charge_row = |row: usize| {
+            if let Some(own) = cost(seg, row, self.now)
+                && let Some(&at) = bucket.get(seg.dir_id(row) as usize)
+            {
+                owns[at as usize].add(&own);
+            }
+        };
+        let plan = Plan::compile(&self.req.query, seg)?;
+        if plan.is_empty() {
+            for row in 0..seg.rows() {
+                if seg.is_alive(row) {
+                    charge_row(row);
+                }
+            }
+        } else {
+            walk_matches(seg, &plan, |row| {
+                charge_row(row);
+                true
+            });
+        }
+        for (&id, own) in tops.iter().zip(&owns) {
+            let path = seg.dirs.get(id).unwrap_or_default();
+            self.tops.entry(path).or_default().add(own);
+        }
+        Ok(true)
+    }
+
+    pub fn finish(self, started: Instant) -> Result<UsageResponse> {
+        let mut tops: Vec<(String, Own)> = self.tops.into_iter().collect();
+        tops.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        // One segment's top may sit below another's: the maximal ones, in the
+        // general roll-up's own pass, each taking what is below it.
+        let mut maximal: Vec<(String, Own)> = Vec::new();
+        for (path, own) in tops {
+            match maximal
+                .iter_mut()
+                .find(|(top, _)| strictly_below(&path, top))
+            {
+                Some((_, total)) => total.add(&own),
+                None => maximal.push((path, own)),
+            }
+        }
+        let usage = |path: String, o: &Own| DirUsage {
+            path,
+            bytes: o.bytes,
+            disk: o.disk,
+            files: o.files,
+            age: o.age,
+        };
+        let mut all = Own::default();
+        for (_, own) in &maximal {
+            all.add(own);
+        }
+        let child_count = maximal.len() as u32;
+        let mut children: Vec<DirUsage> = maximal
+            .iter()
+            .map(|(path, own)| usage(path.clone(), own))
+            .collect();
+        children.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
+        children.truncate(self.req.top.max(1) as usize);
+        Ok(UsageResponse {
+            root: usage(String::new(), &all),
+            children,
+            child_count,
+            took_us: started.elapsed().as_micros() as u64,
+        })
+    }
+}
+
 /// What one row adds to the directory it sits in, or nothing for a directory
 /// row: its own `size` is its entry table, not part of what it contains.
 fn cost(seg: &Segment<'_>, row: usize, now: i64) -> Option<Own> {
@@ -452,6 +567,158 @@ mod tests {
         // which a naive range scan swallows: `-` is 0x2D and `/` is 0x2F.
         assert!(!is_child("/a-1/b", "/a"));
         assert!(!strictly_below("/a-1", "/a"));
+    }
+
+    /// The two ways that keep a total per child or per top count what the
+    /// files say: over siblings that sort between a folder and its children —
+    /// which the general roll-up's stack gets wrong, closing `/h/a` at
+    /// `/h/a-b` and handing `/h/a/x` to the parent — a directory the table
+    /// skips, two sources, two segments, dead rows and a filter.
+    #[test]
+    fn a_report_kept_per_child_is_the_report_rolled_up() {
+        use scour_core::{Index, SourceId};
+
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = crate::NativeIndex::open_or_create(tmp.path()).expect("create");
+        let entry = |source: u32, path: &str, size: i64, dir: bool| scour_core::Entry {
+            id: scour_core::EntryId::path_hash(SourceId(source), path),
+            path: path.to_owned(),
+            is_dir: dir,
+            meta: scour_core::Meta {
+                mtime: 1_000_000 - size * 86_400,
+                size,
+                disk: size * 2,
+                ..scour_core::Meta::UNKNOWN
+            },
+        };
+        let mut first = Vec::new();
+        for (source, top) in [(0u32, "/h"), (1, "/m")] {
+            for d in ["", "/a", "/a-b", "/a-b/c", "/a/x", "/a.old", "/empty"] {
+                first.push(entry(source, &format!("{top}{d}"), 4_096, true));
+            }
+            for (i, f) in [
+                "/a/f",
+                "/a-b/f",
+                "/a-b/c/rapor",
+                "/a/x/f",
+                "/a.old/rapor",
+                "/f",
+            ]
+            .iter()
+            .enumerate()
+            {
+                first.push(entry(
+                    source,
+                    &format!("{top}{f}"),
+                    10 * (i as i64 + 1),
+                    false,
+                ));
+            }
+            first.push(entry(source, &format!("{top}/g/h/i/rapor"), 77, false));
+        }
+        index
+            .apply(&mut first.into_iter().map(scour_core::Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+        let second: Vec<_> = (0..30)
+            .map(|i| entry(0, &format!("/h/a/x/n{i}"), i, i % 4 == 0))
+            .chain([entry(0, "/elsewhere/f", 5, false)])
+            .collect();
+        index
+            .apply(&mut second.into_iter().map(scour_core::Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+        index
+            .apply(
+                &mut [scour_core::Change::RemoveSubtree {
+                    path: "/h/a-b/c".into(),
+                }]
+                .into_iter(),
+            )
+            .expect("remove");
+        index.commit().expect("commit");
+
+        for path in ["", "/", "/h", "/h/", "/h/a", "/m", "/h/g", "/nothing"] {
+            for query in ["", "rapor", "n1"] {
+                let req = UsageRequest {
+                    path: path.to_owned(),
+                    top: 50,
+                    query: scour_query::parse(query),
+                };
+                // Counted from the files themselves: what lies under the scope,
+                // and under each child of it by the path's next part.
+                let files: Vec<scour_core::Hit> = index
+                    .search(&scour_core::SearchRequest {
+                        query: scour_query::parse(query),
+                        page: scour_core::Page::new(0, 10_000),
+                        ..Default::default()
+                    })
+                    .expect("search")
+                    .hits
+                    .into_iter()
+                    .filter(|h| !h.is_dir)
+                    .collect();
+                let scope = path.trim_end_matches('/');
+                let mut root = Own::default();
+                let mut kids: std::collections::BTreeMap<String, Own> = Default::default();
+                for h in &files {
+                    let Some(rest) = h.path.strip_prefix(&format!("{scope}/")) else {
+                        continue;
+                    };
+                    let mut own = Own {
+                        bytes: h.meta.size as u64,
+                        disk: h.meta.disk as u64,
+                        files: 1,
+                        ..Own::default()
+                    };
+                    own.age[band(1_000_000 - h.meta.mtime)] = own.bytes;
+                    root.add(&own);
+                    if let Some((child, _)) = rest.split_once('/') {
+                        kids.entry(child.to_owned()).or_default().add(&own);
+                    }
+                }
+                let got = index
+                    .with_segments(|segments| {
+                        if let Some(mut c) = Children::new(&req, 1_000_000) {
+                            for live in segments {
+                                c.add_segment(&live.view()?)?;
+                            }
+                            return c.finish(Instant::now());
+                        }
+                        let mut e = Everything::new(&req, 1_000_000).expect("no scope");
+                        for live in segments {
+                            assert!(e.add_segment(&live.view()?)?);
+                        }
+                        e.finish(Instant::now())
+                    })
+                    .expect("kept per child");
+                let at = format!("path {path:?} query {query:?}");
+                assert_eq!(
+                    (got.root.bytes, got.root.disk, got.root.files, got.root.age),
+                    (root.bytes, root.disk, root.files, root.age),
+                    "{at}"
+                );
+                if scope.is_empty() {
+                    // Everything lies under `/`, the one top this index has.
+                    assert_eq!(got.children.len(), 1, "{at}");
+                    assert_eq!(got.children[0].path, "/", "{at}");
+                    assert_eq!(got.children[0].files, root.files, "{at}");
+                    continue;
+                }
+                let shown: std::collections::BTreeMap<String, (u64, u64, u64)> = got
+                    .children
+                    .iter()
+                    .filter(|c| c.files > 0)
+                    .map(|c| (c.path.clone(), (c.bytes, c.disk, c.files)))
+                    .collect();
+                let counted: std::collections::BTreeMap<String, (u64, u64, u64)> = kids
+                    .iter()
+                    .map(|(k, o)| (format!("{scope}/{k}"), (o.bytes, o.disk, o.files)))
+                    .collect();
+                assert_eq!(shown, counted, "{at}");
+                assert!(got.child_count as usize >= counted.len(), "{at}");
+            }
+        }
     }
 
     #[test]

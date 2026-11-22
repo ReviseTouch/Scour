@@ -739,7 +739,7 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
-        qb: Default::default(),
+        qb: qwire::QueryBar::off(kept.narrow_off),
         similar: String::new(),
         mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
@@ -848,6 +848,10 @@ fn main() -> Result<()> {
     });
     window.set_removable_choice(kept.removable.as_str().into());
     window.set_refresh_choice(kept.refresh_after().as_secs().to_string().into());
+    window.set_memory_choice(kept.memory.as_str().into());
+    window.set_narrow_on(!kept.narrow_off);
+    window.set_threads_choice(kept.search_threads.to_string().into());
+    window.set_fresh_choice(kept.fresh_within.to_string().into());
     window.set_every_choice(
         match kept.folders_every {
             0 => 10,
@@ -1578,6 +1582,39 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
             });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        window.on_perf_picked(move |kind, value| {
+            let Some(w) = weak.upgrade() else { return };
+            let mut change = scour_settings::Change::default();
+            match kind.as_str() {
+                "memory" => {
+                    w.set_memory_choice(value.clone());
+                    change.memory = Some(value.to_string());
+                }
+                "narrow" => {
+                    let on = value == "on";
+                    w.set_narrow_on(on);
+                    change.narrow_off = Some(!on);
+                    let mut s = state.borrow_mut();
+                    s.qb.narrow_off = !on;
+                    // Asked again on the next page, for the query in sight.
+                    s.qb.narrow_for = "\u{0}".into();
+                }
+                "threads" => {
+                    w.set_threads_choice(value.clone());
+                    change.search_threads = value.parse().ok();
+                }
+                _ => {
+                    w.set_fresh_choice(value.clone());
+                    change.fresh_within = value.parse().ok();
+                }
+            }
+            link.send(Ask::Remember { change });
         });
     }
     {
@@ -5782,6 +5819,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Skipped",
         "Keyboard",
         "Index",
+        "Performance",
         "About",
     ]));
     w.set_set_help(t(cat, "Keys and the query"));
@@ -5793,6 +5831,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
         "The key that opens Scour, what the keys do, and what the query understands.",
         "Where the list of files is kept. It is built from the disks and kept current by itself; building it again is for when something looks wrong.",
+        "How Scour spends memory and the processor. Less of either costs a little speed.",
         "What is running, and what it holds.",
     ]));
     w.set_word_show_rail(t(cat, "Show the sidebar"));
@@ -5853,6 +5892,29 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "While the window is in use, how late a new file may reach the list. Scrolling and searching never wait.",
     ));
     w.set_refresh_labels(list(&["1 s", "2 s", "5 s", "15 s", "1 min"]));
+    w.set_set_memory(t(cat, "Give memory back"));
+    w.set_set_memory_note(t(
+        cat,
+        "What a search brought into memory is given back once nobody asks. Automatic is at once under 8 GB of memory and after a minute above it; at once costs the next search a little time.",
+    ));
+    w.set_memory_labels(list(&["Automatic", "At once", "1 min", "5 min"]));
+    w.set_set_narrow(t(cat, "Narrowing line"));
+    w.set_set_narrow_note(t(
+        cat,
+        "The suggestions under the query bar. Switched off, a new query asks nothing for them: about half a second of the service's work less.",
+    ));
+    w.set_set_threads(t(cat, "Cores for one search"));
+    w.set_set_threads_note(t(
+        cat,
+        "How many cores a large search is split over. Fewer leaves the machine more to itself and makes a large search slower.",
+    ));
+    w.set_threads_labels(list(&["Automatic", "1", "2", "4", "8"]));
+    w.set_set_fresh(t(cat, "Up to date within"));
+    w.set_set_fresh_note(t(
+        cat,
+        "While no window is open, how late a change may reach the index. Sooner writes to the disk more often.",
+    ));
+    w.set_fresh_labels(list(&["As configured", "1 s", "5 s", "15 s", "1 min"]));
     w.set_set_zoom(t(cat, "Zoom"));
     w.set_set_zoom_note(t(
         cat,

@@ -726,8 +726,8 @@ between them but the age bands, which moved with the clock.
 | narrowing line: usage under home | 654–670 ms | 295–296 ms | 283 → 4 MB | 82 → 82 MB |
 | usage under home, `rapor` | 426–427 ms | 16–17 ms | 306 → 5 MB | 89 → 89 MB |
 | rail: facets by kind and age | 332–339 ms | 115–118 ms | 3 → 3 MB | 18 → 17 MB |
-| first page by size, after a page's folder sizes | 974–999 ms | 300–307 ms | 42 → 85 MB | 222 → 147 MB |
-| usage with no scope (`scour du`) | 870–913 ms | unchanged | 323 MB | 87 MB |
+| first page by size, after a page's folder sizes | 966–985 ms | 309–331 ms | 42 → 49 MB | 246 → 176 MB |
+| usage with no scope (`scour du`, the report on everything) | 876–907 ms | 324–327 ms | 299 → 8 MB | 88 → 86 MB |
 
 **The window asked twice a second's work behind every refresh.** The
 narrowing line asked again whenever the total moved, and the empty query's
@@ -753,8 +753,22 @@ directory its descendants, and the segment's path digests give each its own
 row: 742 rows of 734,121 still read their name, under a folder with a gap below
 it. Its anonymous peak is higher by 43 MB, the tables of the pass.
 
+**Usage with no scope rolled the whole tree up too**, to find one maximal
+directory, `/`. A directory now goes to the topmost of its ancestors its
+segment's table holds, and the few tops merge by path. The roll-up kept as the
+fallback had a wrong total besides: its stack closed `/a` at `/a-b`, which
+sorts between `/a` and `/a/x`, and handed what is under `/a/x` to the parent.
+The two new ways are tested against totals counted from the files.
+
+**And it is given back.** What a query brought in — the index's pages and now
+the folder table, which nothing released before — goes back once nobody asks:
+after a minute, or a few seconds on a machine under 8 GB, or as Settings →
+Performance says. Idle on this machine after a window by size, before this:
+146 MB, 130 of it the service's own; idle before any window, 70 MB.
+
 What is left: usage still walks every row's columns, 295 ms; the size-order
-table is still built once a segment, 300 ms.
+table is built again after every release, 300 ms; the opening walk peaks at
+126 MB of the service's own and 317 MB of pages.
 
 ```sh
 cargo run --release -p scour-index-native --example windowcost -- /var/tmp/idx/native /home/hasan

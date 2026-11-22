@@ -150,6 +150,22 @@ impl DirWriter {
     }
 }
 
+/// No directory: an ancestor the table does not hold.
+pub(crate) const NO_DIR: u32 = u32::MAX;
+
+/// What [`DirTable::ancestry`] finds.
+pub(crate) struct Ancestry {
+    /// Each directory's nearest ancestor in the table, or [`NO_DIR`].
+    pub up: Vec<u32>,
+    /// Whether that ancestor is its parent.
+    pub direct: Vec<bool>,
+    /// The number of `/`, if the table holds it.
+    pub root: u32,
+    /// The number of the empty path — the directory of rows with no directory,
+    /// whose children have no `/` and so no ancestors to find.
+    pub nowhere: u32,
+}
+
 /// A directory table, read in place out of a mapped file.
 #[derive(Debug, Clone, Copy)]
 pub struct DirTable<'a> {
@@ -326,6 +342,59 @@ impl<'a> DirTable<'a> {
                 f(id, &path);
             }
         }
+    }
+
+    /// Every directory's nearest ancestor *in the table*, in one pass, and
+    /// whether that is its parent. Paths come sorted, and a path's ancestors
+    /// are prefixes of it ending before a `/`; a prefix ending before `-`,
+    /// which sorts before `/`, is a sibling's, and stays open for the
+    /// descendants still to come. `None` when the table cannot be read through.
+    pub(crate) fn ancestry(&self) -> Option<Ancestry> {
+        let n = self.count;
+        let mut out = Ancestry {
+            up: vec![NO_DIR; n],
+            direct: vec![false; n],
+            root: NO_DIR,
+            nowhere: NO_DIR,
+        };
+        let mut stack: Vec<(u32, usize)> = Vec::new();
+        let mut prev: Vec<u8> = Vec::new();
+        let mut read = 0usize;
+        self.each_bytes(|id, path| {
+            read += 1;
+            let common = prev.iter().zip(path).take_while(|(a, b)| a == b).count();
+            while let Some(&(_, len)) = stack.last() {
+                let stays = len <= common
+                    && path.len() > len
+                    && (path[len] <= b'/' || (len == 1 && path[0] == b'/'));
+                if stays {
+                    break;
+                }
+                stack.pop();
+            }
+            let ancestor = stack
+                .iter()
+                .rev()
+                .find(|&&(_, len)| path[len] == b'/' || (len == 1 && path[0] == b'/'));
+            if let Some(&(at, len)) = ancestor {
+                out.up[id] = at;
+                // The parent is the path up to its last `/`, or `/` for a child
+                // of the root.
+                let last = path.iter().rposition(|&b| b == b'/').unwrap_or(0);
+                out.direct[id] = last == len || (last == 0 && len == 1);
+            }
+            if path == b"/" {
+                out.root = id as u32;
+            }
+            if path.is_empty() {
+                out.nowhere = id as u32;
+            } else {
+                stack.push((id as u32, path.len()));
+            }
+            prev.clear();
+            prev.extend_from_slice(path);
+        });
+        (read == n).then_some(out)
     }
 
     /// What every row's name is appended to, flattened, in table order, so two

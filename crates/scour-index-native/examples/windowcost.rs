@@ -119,7 +119,11 @@ fn measure(
     index: &NativeIndex,
     run: impl FnOnce() -> scour_core::Result<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    index.release_memory();
+    // Not before the size page: a release takes the folder table with it now,
+    // and the page is measured as a window meets it, after the folder sizes.
+    if what != "first page by size" {
+        index.release_memory();
+    }
     let before = memory();
     let running = Arc::new(AtomicBool::new(true));
     let peak_anon = Arc::new(AtomicU64::new(before.1));

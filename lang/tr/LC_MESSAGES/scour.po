@@ -2635,3 +2635,42 @@ msgstr "→ ekler ya da çıkarır ve açık kalır; Enter yazar; Tab terimden �
 
 msgid "→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term."
 msgstr "→ klasörün içine girer, geri tuşu bir üste çıkar; Enter seçer; Tab terimden çıkar."
+
+msgid "Performance"
+msgstr "Performans"
+
+msgid "How Scour spends memory and the processor. Less of either costs a little speed."
+msgstr "Scour'un belleği ve işlemciyi nasıl harcadığı. İkisinden de azı biraz hıza mal olur."
+
+msgid "Give memory back"
+msgstr "Belleği geri ver"
+
+msgid "What a search brought into memory is given back once nobody asks. Automatic is at once under 8 GB of memory and after a minute above it; at once costs the next search a little time."
+msgstr "Bir aramanın belleğe getirdiği, kimse sormayınca geri verilir. Otomatik: 8 GB'tan az bellekte hemen, üstünde bir dakika sonra; hemen vermek bir sonraki aramaya biraz zaman ekler."
+
+msgid "Automatic"
+msgstr "Otomatik"
+
+msgid "At once"
+msgstr "Hemen"
+
+msgid "Narrowing line"
+msgstr "Daraltma şeridi"
+
+msgid "The suggestions under the query bar. Switched off, a new query asks nothing for them: about half a second of the service's work less."
+msgstr "Sorgu çubuğunun altındaki öneriler. Kapalıyken yeni bir sorgu onlar için hiçbir şey sormaz: servise yarım saniye kadar daha az iş."
+
+msgid "Cores for one search"
+msgstr "Bir arama için çekirdek"
+
+msgid "How many cores a large search is split over. Fewer leaves the machine more to itself and makes a large search slower."
+msgstr "Büyük bir aramanın kaç çekirdeğe bölüneceği. Azı makineye daha çok pay bırakır, büyük aramayı yavaşlatır."
+
+msgid "Up to date within"
+msgstr "Güncellik payı"
+
+msgid "While no window is open, how late a change may reach the index. Sooner writes to the disk more often."
+msgstr "Hiçbir pencere açık değilken bir değişikliğin indekse en geç ne zaman ulaşacağı. Daha kısası diske daha sık yazar."
+
+msgid "As configured"
+msgstr "Yapılandırmadaki gibi"

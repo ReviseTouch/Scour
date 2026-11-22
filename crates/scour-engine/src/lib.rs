@@ -10,5 +10,5 @@ mod grep;
 mod reconcile;
 mod tree;
 
-pub use engine::{Engine, EngineOptions, Explained, Keeping, Reading, Typos};
+pub use engine::{Engine, EngineOptions, Explained, Keeping, Reading, Tuning, Typos, tune};
 pub use grep::{GrepAsk, Grepped, GreppedFile};
