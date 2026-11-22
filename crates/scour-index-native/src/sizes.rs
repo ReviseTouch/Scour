@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
+use scour_core::SourceId;
+
 use crate::columns::Field;
+use crate::ids::IdMap;
 use crate::search::Segment;
 use crate::segment::Live;
 
@@ -110,37 +113,53 @@ impl Prefix {
 
     /// What each directory row has under it, for an order by size: its scope
     /// and its total, the build's less what died since. Asked for, not kept.
-    fn build_rows(&mut self, seg: &Segment<'_>) {
-        let directory_rows = seg.dirs.len();
-        // The rows that *are* directories. `dir_id` is the parent; a bounded
-        // cache reuses decoded parents rather than retaining one String each.
+    ///
+    /// **Without the names.** A directory row's scope was its path's, built
+    /// from its name and looked up in the table: 941,000 names read from all
+    /// over the name arena and as many bisections of the table, 0.97 s and
+    /// 230 MB of the index brought in, the first time a window opened by
+    /// size. The table is read once in order instead, which gives every
+    /// directory its descendants, and the segment's path digests give every
+    /// table directory its own row. A row the digests cannot place reads its
+    /// name as before, when anything could be under it: an ambiguous digest,
+    /// or a parent with a descendant whose own directory the table skips.
+    fn build_rows(&mut self, seg: &Segment<'_>, ids: Option<&IdMap<'_>>) {
         self.by_row.clear();
-        self.by_row.reserve_exact(directory_rows);
         self.scopes.clear();
-        self.scopes.reserve_exact(directory_rows);
+        let mut rows: Vec<u32> = (0..seg.rows())
+            .filter(|&row| seg.is_alive(row) && seg.num_of(Field::IsDir, row) != 0)
+            .map(|row| row as u32)
+            .collect();
+        rows.shrink_to_fit();
+        self.by_row.reserve_exact(rows.len());
+        self.scopes.reserve_exact(rows.len());
+        let placed = ids.and_then(|ids| place(seg, ids, &rows));
         let mut parents = ParentPaths::default();
         let mut path = String::new();
-        for row in 0..seg.rows() {
-            if !seg.is_alive(row) || seg.num_of(Field::IsDir, row) == 0 {
-                continue;
-            }
-            let Some(name) = seg.names.get(row) else {
-                continue;
+        for (i, &row) in rows.iter().enumerate() {
+            let bounds = match placed.as_ref().map(|p| p.bounds[i]) {
+                Some(Some(bounds)) => bounds,
+                // Read by name: nothing placed it, and something may be below.
+                _ => {
+                    let Some(name) = seg.names.get(row as usize) else {
+                        continue;
+                    };
+                    let parent = parents.get(&seg.dirs, seg.dir_id(row as usize));
+                    path.clear();
+                    path.push_str(parent);
+                    if !parent.is_empty() && parent != "/" {
+                        path.push('/');
+                    }
+                    path.push_str(&name);
+                    let scope = seg.dirs.subtree(&path);
+                    [
+                        scope.own.unwrap_or(u32::MAX),
+                        scope.below.start,
+                        scope.below.end,
+                    ]
+                }
             };
-            let parent = parents.get(&seg.dirs, seg.dir_id(row));
-            path.clear();
-            path.push_str(parent);
-            if !parent.is_empty() && parent != "/" {
-                path.push('/');
-            }
-            path.push_str(&name);
-            let scope = seg.dirs.subtree(&path);
-            let bounds = [
-                scope.own.unwrap_or(u32::MAX),
-                scope.below.start,
-                scope.below.end,
-            ];
-            self.by_row.push((row as u32, self.scope_total(bounds)));
+            self.by_row.push((row, self.scope_total(bounds)));
             self.scopes.push(bounds);
         }
 
@@ -325,7 +344,7 @@ impl Cache {
             if prefix.rows_ready {
                 prefix.refresh_rows();
             } else {
-                prefix.build_rows(&seg);
+                prefix.build_rows(&seg, live.ids().ok().as_ref());
             }
         }
     }
@@ -353,6 +372,181 @@ impl Cache {
     }
 }
 
+/// Where each directory row's subtree lies, found without its name: `None` at
+/// a row that has to be read by name. `bounds[i]` is for `rows[i]`.
+struct Placed {
+    bounds: Vec<Option<[u32; 3]>>,
+}
+
+/// Nothing below, and no directory of its own: a scope that totals zero.
+const EMPTY: [u32; 3] = [u32::MAX, 0, 0];
+const NONE: u32 = u32::MAX;
+
+/// See [`Prefix::build_rows`]. `rows` are the live directory rows, ascending.
+/// `None` when the table cannot be read through.
+fn place(seg: &Segment<'_>, ids: &IdMap<'_>, rows: &[u32]) -> Option<Placed> {
+    let n = seg.dirs.len();
+    // Every table directory's nearest ancestor *in the table*, and whether that
+    // is its parent. Paths come sorted, and a path's ancestors are prefixes of
+    // it ending before a `/`; a prefix ending before `-`, which sorts before
+    // `/`, is a sibling's, and stays open for the descendants still to come.
+    let mut up = vec![NONE; n];
+    let mut direct = vec![false; n];
+    let mut stack: Vec<(u32, usize)> = Vec::new();
+    let mut prev: Vec<u8> = Vec::new();
+    let mut root = NONE;
+    // The directory of rows with no directory, whose children's paths have no
+    // `/` and so no ancestors to find: read by name.
+    let mut nowhere = NONE;
+    let mut read = 0usize;
+    seg.dirs.each_bytes(|id, path| {
+        read += 1;
+        let common = prev.iter().zip(path).take_while(|(a, b)| a == b).count();
+        while let Some(&(_, len)) = stack.last() {
+            let stays = len <= common
+                && path.len() > len
+                && (path[len] <= b'/' || (len == 1 && path[0] == b'/'));
+            if stays {
+                break;
+            }
+            stack.pop();
+        }
+        let ancestor = stack
+            .iter()
+            .rev()
+            .find(|&&(_, len)| path[len] == b'/' || (len == 1 && path[0] == b'/'));
+        if let Some(&(at, len)) = ancestor {
+            up[id] = at;
+            // The parent is the path up to its last `/`, or `/` for a child of
+            // the root.
+            let last = path.iter().rposition(|&b| b == b'/').unwrap_or(0);
+            direct[id] = last == len || (last == 0 && len == 1);
+        }
+        if path == b"/" {
+            root = id as u32;
+        }
+        if path.is_empty() {
+            nowhere = id as u32;
+        }
+        if !path.is_empty() {
+            stack.push((id as u32, path.len()));
+        }
+        prev.clear();
+        prev.extend_from_slice(path);
+    });
+    if read != n {
+        return None;
+    }
+
+    // Descendants are contiguous, and every one is below its nearest ancestor:
+    // a pass from the deepest numbers up gathers each directory's run.
+    let mut lo = vec![NONE; n];
+    let mut hi = vec![0u32; n];
+    // A parent one of whose descendants has no directory of its own here, so a
+    // row the table does not hold may still have something below it.
+    let mut gapped = vec![false; n];
+    for id in (0..n).rev() {
+        let p = up[id];
+        if p == NONE {
+            continue;
+        }
+        let p = p as usize;
+        lo[p] = lo[p].min(lo[id]).min(id as u32);
+        hi[p] = hi[p].max(hi[id]).max(id as u32 + 1);
+        if !direct[id] {
+            gapped[p] = true;
+        }
+    }
+
+    // Each table directory's own row, by its path's digest, which names a
+    // source too. A directory's row is of the source its parent's other
+    // directory rows are, so one digest a directory, except under a parent
+    // two sources share — `/`, `/home` — where it is one a source.
+    const MIXED: u32 = u32::MAX - 1;
+    let mut source_in = vec![NONE; n];
+    let mut sources: Vec<u32> = Vec::new();
+    for &row in rows {
+        let source = seg.source_of(row as usize).0;
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+        if let Some(slot) = source_in.get_mut(seg.dir_id(row as usize) as usize) {
+            *slot = match *slot {
+                NONE => source,
+                held if held == source => held,
+                _ => MIXED,
+            };
+        }
+    }
+    let mut keys: Vec<(u32, u32, u32)> = Vec::new();
+    seg.dirs.each_bytes(|id, path| {
+        if !direct[id] || id as u32 == root {
+            return;
+        }
+        let Ok(path) = std::str::from_utf8(path) else {
+            return;
+        };
+        let mut key = |source: u32| {
+            keys.push((IdMap::key_of(SourceId(source), path), id as u32, source));
+        };
+        match source_in[up[id] as usize] {
+            // No directory row sits in its parent, so neither does its own.
+            NONE => {}
+            MIXED => sources.iter().for_each(|&s| key(s)),
+            source => key(source),
+        }
+    });
+    keys.sort_unstable();
+    let mut own: Vec<u32> = vec![NONE; rows.len()];
+    let mut doubtful = vec![false; rows.len()];
+    ids.join(
+        keys.len(),
+        |j| keys[j].0,
+        |row, j| {
+            let (_, dir, source) = keys[j];
+            let Ok(at) = rows.binary_search(&row) else {
+                return;
+            };
+            // A digest is half a path's: the row has to be a directory of
+            // this source sitting in this directory's parent.
+            if seg.source_of(row as usize).0 != source
+                || seg.dir_id(row as usize) != up[dir as usize]
+            {
+                return;
+            }
+            match own[at] {
+                NONE => own[at] = dir,
+                held if held != dir => doubtful[at] = true,
+                _ => {}
+            }
+        },
+    );
+
+    let bounds = rows
+        .iter()
+        .enumerate()
+        .map(|(i, &row)| {
+            if doubtful[i] || seg.dir_id(row as usize) == nowhere {
+                return None;
+            }
+            match own[i] {
+                NONE => {
+                    let parent = seg.dir_id(row as usize) as usize;
+                    // Nothing below it in the table, unless its parent has
+                    // a descendant whose own directory is missing.
+                    (!gapped.get(parent).copied().unwrap_or(true)).then_some(EMPTY)
+                }
+                dir => {
+                    let d = dir as usize;
+                    let below = if hi[d] > 0 { [lo[d], hi[d]] } else { [0, 0] };
+                    Some([dir, below[0], below[1]])
+                }
+            }
+        })
+        .collect();
+    Some(Placed { bounds })
+}
+
 /// Small decode working set; collisions replace a slot without changing lookup.
 struct ParentPaths {
     slots: Vec<(u32, String)>,
@@ -377,5 +571,107 @@ impl ParentPaths {
             *held = id;
         }
         path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scour_core::Index;
+
+    /// The table built without names is the table built with them: every
+    /// directory row's total, over directories that sort between a folder and
+    /// its children, empty ones, one whose own row the table skips, two
+    /// sources and a segment with dead rows.
+    #[test]
+    fn folder_totals_without_names_are_the_totals_with_them() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = crate::NativeIndex::open_or_create(tmp.path()).expect("create");
+        let entry = |source: u32, path: &str, size: i64, dir: bool| scour_core::Entry {
+            id: scour_core::EntryId::path_hash(SourceId(source), path),
+            path: path.to_owned(),
+            is_dir: dir,
+            meta: scour_core::Meta {
+                mtime: 1_000 + size,
+                size,
+                disk: size * 2,
+                ..scour_core::Meta::UNKNOWN
+            },
+        };
+        let mut first = Vec::new();
+        for (source, top) in [(0u32, "/h"), (1, "/m")] {
+            for d in [
+                "", "/a", "/a-b", "/a-b/c", "/a/x", "/a.old", "/a/x/y", "/empty", "/e-1",
+            ] {
+                first.push(entry(source, &format!("{top}{d}"), 4_096, true));
+            }
+            for (i, f) in [
+                "/a/f", "/a-b/f", "/a-b/c/f", "/a/x/f", "/a/x/y/f", "/a.old/f", "/f",
+            ]
+            .iter()
+            .enumerate()
+            {
+                first.push(entry(
+                    source,
+                    &format!("{top}{f}"),
+                    10 * (i as i64 + 1),
+                    false,
+                ));
+            }
+            // A file three levels down whose middle directory has no row:
+            // its parent holds a descendant without a directory of its own.
+            first.push(entry(source, &format!("{top}/g"), 4_096, true));
+            first.push(entry(source, &format!("{top}/g/h/i"), 4_096, true));
+            first.push(entry(source, &format!("{top}/g/h/i/f"), 77, false));
+        }
+        first.push(entry(0, "/usr", 4_096, true));
+        first.push(entry(0, "/usr/f", 5, false));
+        index
+            .apply(&mut first.into_iter().map(scour_core::Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+        let second: Vec<_> = (0..40)
+            .map(|i| entry(0, &format!("/h/a/x/n{i}"), i, i % 3 == 0))
+            .collect();
+        index
+            .apply(&mut second.into_iter().map(scour_core::Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+        index
+            .apply(
+                &mut [scour_core::Change::RemoveSubtree {
+                    path: "/h/a-b/c".into(),
+                }]
+                .into_iter(),
+            )
+            .expect("remove");
+        index.commit().expect("commit");
+
+        index.with_segments(|segments| {
+            assert!(segments.len() >= 2, "{} segments", segments.len());
+            for live in segments {
+                let seg = live.view().expect("view");
+                let ids = live.ids().expect("ids");
+                let mut by_name = Prefix::of(&seg, live.deaths());
+                by_name.build_rows(&seg, None);
+                let mut without = Prefix::of(&seg, live.deaths());
+                without.build_rows(&seg, Some(&ids));
+                assert!(!by_name.by_row.is_empty());
+                // Read by name: only the rows under a folder with a gap below it —
+                // `g`, `empty` and `e-1`, in each source.
+                assert_eq!(without.by_row, by_name.by_row, "segment {}", live.number);
+                let placed = place(
+                    &seg,
+                    &ids,
+                    &without.by_row.iter().map(|r| r.0).collect::<Vec<_>>(),
+                )
+                .expect("placed");
+                assert!(
+                    placed.bounds.iter().filter(|b| b.is_none()).count() <= 6,
+                    "rows read by name: {:?}",
+                    placed.bounds
+                );
+            }
+        });
     }
 }

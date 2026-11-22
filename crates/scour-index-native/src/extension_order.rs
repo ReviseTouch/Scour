@@ -76,6 +76,17 @@ impl<'a> ExtensionOrder<'a> {
         crate::name_order::group_at_or_before(self.groups, self.rows, i)
     }
 
+    /// Whether position `i` begins an equal-extension group. One bit, where
+    /// [`ExtensionOrder::group_at_or_before`] scans back to the group's start —
+    /// asked of every position of a large group, a square of it.
+    pub(crate) fn starts_group(&self, i: usize) -> bool {
+        i < self.rows
+            && self
+                .groups
+                .get(i / 8)
+                .is_some_and(|byte| byte >> (i % 8) & 1 != 0)
+    }
+
     /// The rows of one chunk, or nothing where its bytes do not hold them.
     fn decode(&self, chunk: usize, out: &mut [u32; CHUNK]) -> Option<()> {
         let offset = |c: usize| -> Option<usize> {
@@ -316,6 +327,7 @@ mod tests {
             for i in 0..rows {
                 let start = (0..=i).rev().find(|&j| groups[j / 8] >> (j % 8) & 1 != 0);
                 assert_eq!(stored.group_at_or_before(i), start);
+                assert_eq!(stored.starts_group(i), start == Some(i));
             }
         }
     }

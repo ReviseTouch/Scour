@@ -337,9 +337,15 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
 /// A first page landed: ask what the narrowing line shows for this query —
 /// one `facets` walk and one `usage` under home. Nothing for a query that
 /// reads files, or that found fewer than two.
+///
+/// **Once a query**, as the page does it. Asked again whenever the total moved,
+/// the empty query — whose total is every live row, and moves with every file
+/// written anywhere — had the two walks re-run behind each refresh: 1.3 s of
+/// the service's CPU and 280 MB of its memory, for chips nobody had touched.
+/// Only crossing the two the line needs asks again.
 pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
     let text = s.query.clone();
-    if s.qb.narrow_for == text && s.qb.narrow_total == total {
+    if s.qb.narrow_for == text && (s.qb.narrow_total < 2) == (total < 2) {
         return;
     }
     s.qb.narrow_for = text.clone();
@@ -374,9 +380,12 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
         link.send(Ask::Narrow {
             query_revision: revision,
             slot: 1,
+            // Every child, not the top eight: the answer ranks them by bytes
+            // and the line picks the two with the most files, which the
+            // largest eight need not hold.
             request: scour_proto::Request::Usage {
                 path: home,
-                top: 8,
+                top: u32::MAX,
                 query: text,
             },
         });

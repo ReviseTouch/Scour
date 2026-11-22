@@ -713,6 +713,53 @@ cargo run --release -p scour-index-native --example deepcheck -- /var/tmp/idx/na
 SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example deepcheck -- /var/tmp/idx/native > walk.txt
 ```
 
+## What a window costs the service as it opens (2026-11-22)
+
+A window opened on the empty query sent the service from 30 MB to 490 MB and
+held it there. Two builds alternated twice on one copy of this machine's index
+(6.94 M rows), each request from released pages; every answer identical
+between them but the age bands, which moved with the clock.
+
+| request | before | after | anonymous peak | file pages read |
+|---|---:|---:|---:|---:|
+| narrowing line: facets by kind, extension, age | 683–734 ms | 172–198 ms | 2 → 2 MB | 203 → 92 MB |
+| narrowing line: usage under home | 654–670 ms | 295–296 ms | 283 → 4 MB | 82 → 82 MB |
+| usage under home, `rapor` | 426–427 ms | 16–17 ms | 306 → 5 MB | 89 → 89 MB |
+| rail: facets by kind and age | 332–339 ms | 115–118 ms | 3 → 3 MB | 18 → 17 MB |
+| first page by size, after a page's folder sizes | 974–999 ms | 300–307 ms | 42 → 85 MB | 222 → 147 MB |
+| usage with no scope (`scour du`) | 870–913 ms | unchanged | 323 MB | 87 MB |
+
+**The window asked twice a second's work behind every refresh.** The
+narrowing line asked again whenever the total moved, and the empty query's
+total is every live row, which moves with every file written anywhere. It now
+asks once a query, as the page did.
+
+**Facets counted a kind and an age band by string**: a `String` made for each,
+for every row, 14 million allocations for the rail. They are counted by number
+now. Asked with an age, the count is exact and every name was read for its
+extension, all 200 MB of the name arena; on the empty query the extension
+order says it instead, a group an extension and one name a group — 6,789 in
+the largest segment.
+
+**Usage under a folder rolled the whole tree up** to read two levels of it: a
+path and a total for every directory, 700,000 under home. A directory is now
+sent to the child of the scope it lies under as the table is read, and a row is
+charged to that child. The line also asked for the largest eight by bytes and
+picked the two with the most files among them; it asks for every child.
+
+**The size order's folder table read every directory row's name** to find its
+path in the table. The table is read once in order instead, which gives every
+directory its descendants, and the segment's path digests give each its own
+row: 742 rows of 734,121 still read their name, under a folder with a gap below
+it. Its anonymous peak is higher by 43 MB, the tables of the pass.
+
+What is left: usage still walks every row's columns, 295 ms; the size-order
+table is still built once a segment, 300 ms.
+
+```sh
+cargo run --release -p scour-index-native --example windowcost -- /var/tmp/idx/native /home/hasan
+```
+
 ## Reproducing
 
 ```sh

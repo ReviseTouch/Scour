@@ -213,25 +213,185 @@ impl<'a> Rollup<'a> {
     }
 }
 
-/// Add one row to the directory it sits in. Shared by both walks, so a filtered
-/// report and an unfiltered one cannot drift apart. A directory row is skipped:
-/// its own `size` is its entry table, not part of what it contains.
-fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], now: i64) {
-    if seg.num_of(Field::IsDir, row) != 0 {
-        return;
+/// A scoped report, which is what every caller but `scour du` with no path
+/// asks for: the scope's total and its children's. **Kept per child, not per
+/// directory.** The general roll-up gave every directory of the scope a path
+/// and a total — 700,000 strings in a map under a home folder, a 280 MB peak
+/// and 670 ms — and then read two levels of it. Here a directory is sent to
+/// the child it lies under as the table is read in order, and a row is
+/// charged to that child: a few dozen totals, merged by name across segments.
+pub struct Children<'a> {
+    req: &'a UsageRequest,
+    now: i64,
+    scope: String,
+    /// The scope's own row, wherever any segment holds a directory of it.
+    root: Option<Own>,
+    /// By child name: what lies at or below `scope/name`.
+    kids: HashMap<String, Own>,
+}
+
+/// Where a directory's rows are charged: not wanted, the scope itself, or the
+/// child with this number in the segment's list.
+const OUT: u32 = u32::MAX;
+const ROOT: u32 = u32::MAX - 1;
+
+impl<'a> Children<'a> {
+    /// `None` for a request this cannot answer: one without a scope, whose
+    /// root is every source's and whose children are the maximal directories.
+    pub fn new(req: &'a UsageRequest, now: i64) -> Option<Children<'a>> {
+        let scope = req.path.trim_end_matches('/').to_owned();
+        (!scope.is_empty()).then(|| Children {
+            req,
+            now,
+            scope,
+            root: None,
+            kids: HashMap::new(),
+        })
     }
-    let d = seg.dir_id(row) as usize;
-    if d >= per_dir.len() || !wanted[d] {
-        return;
+
+    pub fn add_segment(&mut self, seg: &Segment<'_>) -> Result<()> {
+        let n_dirs = seg.dirs.len();
+        let within = seg.dirs.subtree(&self.scope);
+        if within.own.is_none() && within.below.is_empty() {
+            return Ok(());
+        }
+        let mut bucket = vec![OUT; n_dirs];
+        if let Some(own) = within.own
+            && let Some(slot) = bucket.get_mut(own as usize)
+        {
+            *slot = ROOT;
+        }
+        // The children this segment knows, in the order first met. A
+        // directory's path is `scope/child[/…]`; runs of one child are long,
+        // so the last child is compared before the map is asked.
+        let mut names: Vec<Box<[u8]>> = Vec::new();
+        let mut number: HashMap<Box<[u8]>, u32> = HashMap::new();
+        let head = self.scope.len() + 1;
+        let below = within.below.start as usize..within.below.end as usize;
+        seg.dirs.each_bytes_in(below, |id, path| {
+            let Some(rest) = path.get(head..) else {
+                return;
+            };
+            let child = rest.split(|&b| b == b'/').next().unwrap_or(rest);
+            let at = match names.last() {
+                Some(last) if &**last == child => names.len() as u32 - 1,
+                _ => match number.get(child) {
+                    Some(&at) => at,
+                    None => {
+                        let at = names.len() as u32;
+                        names.push(child.into());
+                        number.insert(child.into(), at);
+                        at
+                    }
+                },
+            };
+            if let Some(slot) = bucket.get_mut(id) {
+                *slot = at;
+            }
+        });
+
+        let mut root = Own::default();
+        let mut kids = vec![Own::default(); names.len()];
+        let mut charge_row = |row: usize| {
+            let Some(own) = cost(seg, row, self.now) else {
+                return;
+            };
+            match bucket.get(seg.dir_id(row) as usize).copied() {
+                Some(ROOT) => root.add(&own),
+                Some(OUT) | None => {}
+                Some(at) => kids[at as usize].add(&own),
+            }
+        };
+        let plan = Plan::compile(&self.req.query, seg)?;
+        if plan.is_empty() {
+            for row in 0..seg.rows() {
+                if seg.is_alive(row) {
+                    charge_row(row);
+                }
+            }
+        } else {
+            walk_matches(seg, &plan, |row| {
+                charge_row(row);
+                true
+            });
+        }
+
+        // A directory the scope holds, even an empty one, is a child the old
+        // roll-up listed, and the scope is a root once any segment holds it.
+        self.root.get_or_insert_with(Own::default).add(&root);
+        for (name, own) in names.iter().zip(kids) {
+            self.kids
+                .entry(String::from_utf8_lossy(name).into_owned())
+                .or_default()
+                .add(&own);
+        }
+        Ok(())
+    }
+
+    pub fn finish(self, started: Instant) -> Result<UsageResponse> {
+        let Some(mut total) = self.root else {
+            return Ok(UsageResponse {
+                took_us: started.elapsed().as_micros() as u64,
+                ..UsageResponse::default()
+            });
+        };
+        let usage = |path: String, o: &Own| DirUsage {
+            path,
+            bytes: o.bytes,
+            disk: o.disk,
+            files: o.files,
+            age: o.age,
+        };
+        for own in self.kids.values() {
+            total.add(own);
+        }
+        let mut children: Vec<DirUsage> = self
+            .kids
+            .iter()
+            .map(|(name, own)| usage(format!("{}/{name}", self.scope), own))
+            .collect();
+        let child_count = children.len() as u32;
+        children.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
+        children.truncate(self.req.top.max(1) as usize);
+        Ok(UsageResponse {
+            root: usage(self.scope.clone(), &total),
+            children,
+            child_count,
+            took_us: started.elapsed().as_micros() as u64,
+        })
+    }
+}
+
+/// What one row adds to the directory it sits in, or nothing for a directory
+/// row: its own `size` is its entry table, not part of what it contains.
+fn cost(seg: &Segment<'_>, row: usize, now: i64) -> Option<Own> {
+    if seg.num_of(Field::IsDir, row) != 0 {
+        return None;
     }
     // One name's share of a file that may have several.
     let links = seg.num_of(Field::Links, row).max(1) as u64;
     let bytes = seg.num_of(Field::Size, row).max(0) as u64 / links;
-    let o = &mut per_dir[d];
-    o.bytes += bytes;
-    o.disk += seg.num_of(Field::Disk, row).max(0) as u64 / links;
-    o.files += 1;
-    o.age[band(now - seg.num_of(Field::Mtime, row))] += bytes;
+    let mut age = [0; AGE_BANDS];
+    age[band(now - seg.num_of(Field::Mtime, row))] = bytes;
+    Some(Own {
+        bytes,
+        disk: seg.num_of(Field::Disk, row).max(0) as u64 / links,
+        files: 1,
+        age,
+    })
+}
+
+/// Add one row to the directory it sits in. Shared by both walks, so a filtered
+/// report and an unfiltered one cannot drift apart; what a row weighs is
+/// [`cost`]'s, shared with [`Children`].
+fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], now: i64) {
+    let d = seg.dir_id(row) as usize;
+    if d >= per_dir.len() || !wanted[d] {
+        return;
+    }
+    if let Some(own) = cost(seg, row, now) {
+        per_dir[d].add(&own);
+    }
 }
 
 /// Is `path` **strictly** below `prefix`? Not [`scour_core::under`]: a rollup

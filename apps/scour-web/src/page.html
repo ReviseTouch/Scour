@@ -4238,7 +4238,8 @@
   /* The narrowing strip: what the results hold, each a term a press adds —
      the commonest kinds and extensions, the folders under home that hold the
      most, and the last week. One `facets` walk and one `usage`, after the
-     search has landed; nothing for a query that reads files. */
+     search has landed; nothing for a query that reads files. The usage names
+     every child: it ranks them by bytes, the strip by files. */
   const chipsBox = document.getElementById("chips");
   const narrowLbl = document.getElementById("narrow-lbl");
   let narrowGen = 0, narrowStop = null, narrowTimer = 0, CHIPS = [];
@@ -4264,7 +4265,7 @@
       const has = (f) => terms(text).some(([a, b]) => new RegExp("^" + f + ":", "i").test(text.slice(a, b)));
       Promise.all([
         SERVICE.get("facets", { q: text, by: "kind,ext,age", edges: "7" }, signal).catch(() => null),
-        HOME && !has("under") && !has("parent") ? SERVICE.get("usage", { path: HOME, top: 8, q: text }, signal).catch(() => null) : null,
+        HOME && !has("under") && !has("parent") ? SERVICE.get("usage", { path: HOME, top: 4294967295, q: text }, signal).catch(() => null) : null,
       ]).then(([f, u]) => {
         if (mine !== narrowGen || q.value !== text) return;
         const out = [];

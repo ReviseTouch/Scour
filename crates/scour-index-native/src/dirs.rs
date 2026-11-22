@@ -287,12 +287,27 @@ impl<'a> DirTable<'a> {
     /// predecessor truncated and extended, so it costs its own suffix; `get`
     /// per number restarts a block and allocates, and a query that asked it of
     /// every directory spent 330 ms rebuilding 564,000 paths.
-    pub(crate) fn each_bytes(&self, mut f: impl FnMut(usize, &[u8])) {
-        let Some(mut at) = self.restart_at(0) else {
+    pub(crate) fn each_bytes(&self, f: impl FnMut(usize, &[u8])) {
+        self.each_bytes_in(0..self.count, f);
+    }
+
+    /// The same over the numbers in `range`: decoded from the restart before
+    /// its start, so a subtree costs itself and at most a block more.
+    pub(crate) fn each_bytes_in(
+        &self,
+        range: std::ops::Range<usize>,
+        mut f: impl FnMut(usize, &[u8]),
+    ) {
+        let end = range.end.min(self.count);
+        if range.start >= end {
+            return;
+        }
+        let first = range.start / RESTART * RESTART;
+        let Some(mut at) = self.restart_at(first / RESTART) else {
             return;
         };
         let mut path: Vec<u8> = Vec::new();
-        for id in 0..self.count {
+        for id in first..end {
             let Some((shared, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
                 break;
             };
@@ -307,7 +322,9 @@ impl<'a> DirTable<'a> {
             at += rest as usize;
             path.truncate(shared as usize);
             path.extend_from_slice(bytes);
-            f(id, &path);
+            if id >= range.start {
+                f(id, &path);
+            }
         }
     }
 
