@@ -39,6 +39,12 @@ export struct Scheme {
     q-term: brush,
     q-not: brush,
     q-bad: brush,
+    cap: brush,
+    cap-ring: brush,
+    cap-read: brush,
+    cap-read-ring: brush,
+    cap-neg: brush,
+    cap-neg-ring: brush,
 }
 
 export global Theme {
@@ -100,6 +106,12 @@ export global Theme {
     out property <brush> q-term: c.q-term;
     out property <brush> q-not: c.q-not;
     out property <brush> q-bad: c.q-bad;
+    out property <brush> cap: c.cap;
+    out property <brush> cap-ring: c.cap-ring;
+    out property <brush> cap-read: c.cap-read;
+    out property <brush> cap-read-ring: c.cap-read-ring;
+    out property <brush> cap-neg: c.cap-neg;
+    out property <brush> cap-neg-ring: c.cap-neg-ring;
 
     // --- metrics ----------------------------------------------------------
     // Filled from `scour_ui::METRICS`; both virtual lists are built on the pitch.

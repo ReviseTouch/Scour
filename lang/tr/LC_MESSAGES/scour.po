@@ -2425,3 +2425,171 @@ msgstr "Sistem simgeleri"
 
 msgid "The desktop's own file and folder icons instead of built-in glyphs."
 msgstr "Yerleşik çizimler yerine masaüstünün kendi dosya ve klasör simgeleri."
+
+msgid "file name  ·  : starts a filter  ·  ext:pdf  ·  dm:7d"
+msgstr "dosya adı  ·  : süzgeç başlatır  ·  ext:pdf  ·  dm:7d"
+
+msgid "add a filter (:)"
+msgstr "süzgeç ekle (:)"
+
+msgid "add a filter"
+msgstr "süzgeç ekle"
+
+msgid "Choices"
+msgstr "Seçenekler"
+
+msgid "Add a filter"
+msgstr "Süzgeç ekle"
+
+msgid "Type a few letters to narrow it. Enter starts the filter."
+msgstr "Birkaç harfle daralt. Enter süzgeci başlatır."
+
+msgid "below a folder"
+msgstr "bir klasörün altında"
+
+msgid "Type"
+msgstr "Tür"
+
+msgid "document, code, image…"
+msgstr "belge, kod, görsel…"
+
+msgid "pdf, rs, docx…"
+msgstr "pdf, rs, docx…"
+
+msgid "how big"
+msgstr "ne kadar büyük"
+
+msgid "Similar spelling"
+msgstr "Benzer yazım"
+
+msgid "one letter off still matches"
+msgstr "bir harf farkla da bulur"
+
+msgid "reads the files"
+msgstr "dosyaları okur"
+
+msgid "When it last changed"
+msgstr "Ne zaman değişti"
+
+msgid "Or type one: 24h, 2w, 2026-03-01, >2026-06-01"
+msgstr "Ya da yaz: 24h, 2w, 2026-03-01, >2026-06-01"
+
+msgid "Or type one: >10mb, <1kb, 1mb..50mb"
+msgstr "Ya da yaz: >10mb, <1kb, 1mb..50mb"
+
+msgid "yesterday"
+msgstr "dün"
+
+msgid "last 7 days"
+msgstr "son 7 gün"
+
+msgid "last 30 days"
+msgstr "son 30 gün"
+
+msgid "last year"
+msgstr "son bir yıl"
+
+msgid "under 100 KB"
+msgstr "100 KB altı"
+
+msgid "100 KB to 10 MB"
+msgstr "100 KB – 10 MB"
+
+msgid "10 MB to 1 GB"
+msgstr "10 MB – 1 GB"
+
+msgid "over 1 GB"
+msgstr "1 GB üstü"
+
+msgid "How “{w}” is read"
+msgstr "“{w}” nasıl okunsun"
+
+msgid "Only this word changes. Every word at once: Settings → Searching."
+msgstr "Yalnız bu kelime değişir. Bütün kelimeler için: Ayarlar → Arama."
+
+msgid "as typed"
+msgstr "yazıldığı gibi"
+
+msgid "a letter off still matches"
+msgstr "bir harf farkla da olur"
+
+msgid "these letters in this order"
+msgstr "bu harfler bu sırayla"
+
+msgid "inside the files"
+msgstr "dosyaların içinde"
+
+msgid "stop excluding it"
+msgstr "dışlamayı kaldır"
+
+msgid "exclude it"
+msgstr "bunu dışla"
+
+msgid "Inside the files"
+msgstr "Dosyaların içinde"
+
+msgid "Only the files the rest of the query names are read: narrow the place and the type first."
+msgstr "Yalnız sorgunun geri kalanının seçtiği dosyalar okunur: önce konumu ve türü daralt."
+
+msgid "in names instead"
+msgstr "içinde değil, adında ara"
+
+msgid "Tab adds or takes one away and stays open; Enter writes it and closes."
+msgstr "Tab ekler ya da çıkarır ve açık kalır; Enter yazar ve kapatır."
+
+msgid "Tab goes into a folder; Enter chooses it. Backspace climbs back out."
+msgstr "Tab klasörün içine girer; Enter seçer. Geri tuşu bir üste çıkar."
+
+msgid "Where"
+msgstr "Nerede"
+
+msgid "Places"
+msgstr "Yerler"
+
+msgid "not indexed — choose to index it"
+msgstr "indekste değil — seçersen indekslenir"
+
+msgid "this folder"
+msgstr "bu klasör"
+
+msgid "only what is directly inside"
+msgstr "yalnız doğrudan içindekiler"
+
+msgid "everything below"
+msgstr "altındaki her şey"
+
+msgid "reading the folder…"
+msgstr "klasör okunuyor…"
+
+msgid "results it would leave"
+msgstr "kalacak sonuç"
+
+msgid "reads files"
+msgstr "dosyaları okur"
+
+msgid "The disk is being indexed."
+msgstr "Disk indeksleniyor."
+
+msgid "Read it as typed"
+msgstr "Yazıldığı gibi oku"
+
+msgid "Find it a letter off too"
+msgstr "Bir harf farkla da bul"
+
+msgid "Left out, one of these would find something:"
+msgstr "Biri olmadan sonuç çıkıyor:"
+
+msgid "without it: {n} results"
+msgstr "olmadan: {n} sonuç"
+
+msgid "mean {f}?"
+msgstr "{f} mi demek istedin?"
+
+msgid "Inside"
+msgstr "İçinde"
+
+msgid "the {n} heaviest of {all}"
+msgstr "{all} klasörün en ağır {n} tanesi"
+
+msgid "no folder here by that name"
+msgstr "burada bu adda klasör yok"

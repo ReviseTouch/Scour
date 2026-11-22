@@ -238,8 +238,53 @@ export struct Span {
     // Part of a term that must NOT match. The role does not say: `pdf` in
     // `!ext:pdf` is a value, and the exclusion role covers the `!` alone.
     not: bool,
-    // CHARACTERS of the query before this run, not bytes.
+    // The column it starts at, in CHARACTERS, on its `line`.
     at: int,
+    // Which drawn line of the query it is on, counted from the first.
+    line: int,
+}
+
+// A capsule behind a filter in the query, one per line it is drawn on.
+export struct Cap {
+    line: int,
+    at: int,
+    len: int,
+    // 0 a filter · 1 `content:`, which reads files · 2 excluded
+    tone: int,
+    // The pointer is on it.
+    hov: bool,
+}
+
+// Part of the query's selection, on one line.
+export struct Sel {
+    line: int,
+    at: int,
+    len: int,
+}
+
+// Byte offsets into the query, from and to.
+export struct Reach {
+    from: int,
+    to: int,
+}
+
+// One line of the lens under a term.
+export struct LensRow {
+    label: string,
+    hint: string,
+    // A heading drawn above it; one space is a rule alone.
+    group: string,
+    // What choosing it would leave, said; empty when not counted.
+    n: string,
+    // That number against the largest in the lens.
+    bar: float,
+    zero: bool,
+    // Waiting for an answer: not a choice yet.
+    wait: bool,
+    // Choosing it reads files, so it has no number.
+    reads: bool,
+    // Tab writes it and keeps the lens open.
+    stays: bool,
 }
 
 export struct FolderRow {
@@ -872,39 +917,30 @@ component DiskRow inherits Rectangle {
 }
 
 /// A filter in the query, and the `×` that takes it out.
-component Chip inherits Rectangle {
-    in property <string> term;
-    callback dropped();
-
-    height: 20px;
-    width: label.preferred-width + 30px;
-    border-radius: 10px;
-    border-width: Theme.hair;
-    border-color: shut.has-hover ? Theme.ink-3 : Theme.line;
-    background: Theme.panel-2;
-
-    label := Text {
-        x: 9px;
-        text: root.term;
-        color: Theme.ink-2;
-        font-family: Fonts.mono;
-        font-size: 11px;
+// One of the buttons over a term: round, a glyph, pressed on the way down so
+// the field keeps the keyboard.
+component PairButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback pressed();
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: on ? Theme.q-key : hit.has-hover ? Theme.ink-3 : Theme.line-soft;
+    Text {
+        text: root.label;
+        color: root.on || hit.has-hover ? Theme.panel : Theme.ink-2;
+        font-size: 10px;
+        font-weight: 700;
+        horizontal-alignment: center;
         vertical-alignment: center;
-        height: parent.height;
     }
-    shut := TouchArea {
-        x: parent.width - 20px;
-        width: 18px;
+    hit := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.dropped(); }
-        Text {
-            text: "×";
-            color: shut.has-hover ? Theme.ink : Theme.ink-3;
-            font-size: 13px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            width: parent.width;
-            height: parent.height;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.pressed();
+            }
         }
     }
 }
@@ -1260,6 +1296,58 @@ export component MainWindow inherits Window {
     // --- what Rust sets ---------------------------------------------------
     in property <[Row]> rows;
     in property <[Span]> spans;
+    // The query bar, as Rust lays it out: see `qbar.rs`.
+    in property <[Cap]> caps;
+    in property <[Sel]> sels;
+    // Lines the field shows (one to three), and the first of them.
+    in property <int> q-shown: 1;
+    in property <int> q-first: 0;
+    in property <int> caret-line;
+    in property <int> caret-col;
+    // Characters a line holds, measured here and wrapped by there.
+    callback q-cols(int);
+    callback q-caret(int, int);
+    // A shown line and a column to a byte offset of the query.
+    pure callback q-hit(int, int) -> int;
+    // The term around a byte offset, for a double press.
+    pure callback q-word(int) -> Reach;
+    callback q-hover(int, int);
+    callback q-pressed(int, int);
+    // The term under the pointer, and where its buttons go.
+    in property <bool> hov-on;
+    in property <int> hov-line;
+    in property <int> hov-col;
+    in property <bool> hov-not;
+    in property <bool> hov-fz;
+    in property <bool> hov-fz-on;
+    callback term-act(string);
+    // Where Rust wants the caret after it wrote the query.
+    in property <int> caret-to;
+    in property <int> caret-ask;
+    changed caret-ask => { input.set-selection-offsets(root.caret-to, root.caret-to); }
+    // The lens.
+    in property <bool> lens-open;
+    in property <bool> lens-launching;
+    in property <[LensRow]> lens-rows;
+    in property <int> lens-sel;
+    in property <string> lens-title;
+    in property <string> lens-said;
+    in property <string> lens-foot;
+    in property <string> lens-reads;
+    in property <int> lens-line;
+    in property <int> lens-col;
+    callback lens-step(int);
+    callback lens-pick(int, bool);
+    callback lens-close();
+    callback lens-toggle();
+    callback lens-launch();
+    // With nothing found: one filter left out at a time, and what it finds.
+    in property <string> offers-said;
+    in property <[string]> offers;
+    callback offer-taken(int);
+    // A field name one letter off a real one, and the spelling it meant.
+    in property <string> fix-said;
+    callback fix-taken();
     in property <[Facet]> facets;
     in property <[Facet]> scopes;
     in property <[Facet]> sizes;
@@ -1997,8 +2085,6 @@ export component MainWindow inherits Window {
     /// The terms of the query that name a field, each a chip whose `×` takes
     /// it out of the text in one press. Asked of Rust with the text, so the
     /// row follows every keystroke.
-    pure callback chips-of(string) -> [string];
-    callback chip-dropped(string);
 
     // `SCOUR_TRACE=1`: print what the two layers of the query field measure on
     // every caret move. They have to agree character for character.
@@ -2043,7 +2129,8 @@ export component MainWindow inherits Window {
         Rectangle {
             // 16px above the box, 12px below, the box 26px of 20px monospace.
             // Taller when the query is read back — see `reading`.
-            height: root.reading == "" && root.chips-of(root.query).length == 0 ? 56px : 77px;
+            // And a line taller for each line the query wraps onto, up to three.
+            height: (root.q-shown - 1) * 22px + (root.reading == "" && root.fix-said == "" ? 56px : 77px);
             background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
@@ -2063,7 +2150,7 @@ export component MainWindow inherits Window {
 
             HorizontalLayout {
                 // The box's own height, so the reading under it moves nothing.
-                height: 32px;
+                height: 32px + (root.q-shown - 1) * 22px;
                 spacing: 10px;
 
                 // The mark: the desktop's icon, then letter-spaced small capitals.
@@ -2091,29 +2178,33 @@ export component MainWindow inherits Window {
                 // moment anything is typed.
                 field := Rectangle {
                     horizontal-stretch: 1;
-                    // Or the scrolled text paints across the window.
-                    clip: true;
+                    // Unclipped: the buttons over a term stand above the box.
+                    // Nothing else reaches past it — lines past the third are
+                    // not drawn, and the text never scrolls sideways.
+                    clip: false;
                     background: Theme.panel;
                     border-radius: 8px;
                     border-width: Theme.hair;
                     border-color: input.has-focus ? Theme.focus : Theme.line;
                     animate border-color { duration: 120ms; }
-                    // One number for all three layers: the coloured text, the
-                    // placeholder and the input must start at the same place.
+                    // One number for every layer: the runs, the capsules, the
+                    // caret and a press are all placed from it.
                     property <length> pad: 9px;
-                    // What is visible inside the padding, minus the chevron's
-                    // room. Never negative: `cursor-position-changed` derives
-                    // `shift` from it, and all three layers move by `shift`.
-                    property <length> room: max(0px, field.width - field.pad * 2
+                    // What a line holds: the width less the padding and the two
+                    // buttons at the end, the filter's and the past's.
+                    property <length> room: max(0px, field.width - field.pad * 2 - 24px
                         - (root.has-past ? 24px : 0px));
-                    property <length> shift: 0px;
                     // One character's width, measured over forty because a
                     // layout rounds each run to whole pixels and the error
-                    // accumulates. Runs are placed by offset times this. One
-                    // width for every character: a double-width face slides.
+                    // accumulates. One width for every character: the query's
+                    // face is monospace, and Rust wraps it by that.
                     property <length> advance: ruler.preferred-width / 40;
-                    // Where the caret is, and whether it is in its lit half.
-                    property <length> caret-x: field.pad;
+                    property <int> cols: max(8, Math.floor(field.room / max(1px, field.advance)));
+                    changed cols => { root.q-cols(self.cols); }
+                    init => { root.q-cols(self.cols); }
+                    // The lines start this far down, so one line sits in the
+                    // middle of the box as it always did.
+                    property <length> top: (field.height - root.q-shown * 22px) / 2;
                     property <bool> caret-lit: true;
 
                     // This window draws its own caret: on Linux Slint's takes
@@ -2136,9 +2227,36 @@ export component MainWindow inherits Window {
                         visible: false;
                     }
 
+                    // A filter is a capsule: a tint and a hairline ring, both
+                    // outside the letters, so nothing moves when one appears.
+                    for c in root.caps: Rectangle {
+                        x: field.pad + field.advance * c.at - 3px;
+                        y: field.top + (c.line - root.q-first) * 22px + 1px;
+                        width: field.advance * c.len + 6px;
+                        height: 20px;
+                        visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        background: c.tone == 1 ? Theme.cap-read : c.tone == 2 ? Theme.cap-neg : Theme.cap;
+                        border-color: c.hov ? Theme.ink-3
+                            : c.tone == 1 ? Theme.cap-read-ring : c.tone == 2 ? Theme.cap-neg-ring : Theme.cap-ring;
+                    }
+
+                    // The selection, a line at a time.
+                    for s in root.sels: Rectangle {
+                        x: field.pad + field.advance * s.at;
+                        y: field.top + (s.line - root.q-first) * 22px + 1px;
+                        width: field.advance * s.len;
+                        height: 20px;
+                        visible: s.line >= root.q-first && s.line < root.q-first + root.q-shown;
+                        background: Theme.selection;
+                    }
+
                     for sp[i] in root.spans: Text {
-                            x: field.pad + field.shift + field.advance * sp.at;
-                            height: parent.height;
+                            x: field.pad + field.advance * sp.at;
+                            y: field.top + (sp.line - root.q-first) * 22px;
+                            height: 22px;
+                            visible: sp.line >= root.q-first && sp.line < root.q-first + root.q-shown;
                             text: sp.text;
                             font-family: Fonts.mono;
                             font-size: 16px;
@@ -2160,23 +2278,9 @@ export component MainWindow inherits Window {
                                  : Theme.ink;
                     }
 
-                    // What stands in between a keystroke and the runs the
-                    // service sends back: the input itself is transparent, so
-                    // without this the gap shows nothing at all.
-                    if root.spans.length == 0 && root.query != "": Text {
-                        x: field.pad + field.shift;
-                        width: max(parent.width - field.pad * 2, self.preferred-width);
-                        text: root.query;
-                        color: Theme.ink;
-                        font-family: Fonts.mono;
-                        font-size: 16px;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                    }
-
                     if root.spans.length == 0 && root.query == "": Text {
-                        x: field.pad + field.shift;
-                        width: parent.width - field.pad * 2;
+                        x: field.pad;
+                        width: field.room;
                         text: root.hint;
                         color: Theme.ink-3;
                         font-family: Fonts.mono;
@@ -2186,76 +2290,40 @@ export component MainWindow inherits Window {
                         overflow: elide;
                     }
 
-                // Under the field: the right button, which the field leaves
-                // alone, opens cut, copy and paste. The left one is the field's.
-                TouchArea {
-                    x: 0;
-                    y: 0;
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: text;
-                    pointer-event(e) => {
-                        if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
-                            input.focus();
-                            root.query-menu-at(self.absolute-position.x + self.mouse-x,
-                                self.absolute-position.y + self.mouse-y);
-                        }
-                    }
-                }
-
                 input := TextInput {
-                    // A child of a `Rectangle` gets its preferred size, and a
-                    // text input's preferred width is its text — which leaves
-                    // most of the field with nothing to click.
-                    x: field.pad + field.shift;
-                    // Never narrower than its text, so it never scrolls itself,
-                    // and never narrower than the box, so all of it is clickable.
+                    // One invisible line that owns the text, the keys, the
+                    // clipboard and the input method. What is drawn is the
+                    // layers above, placed by Rust; presses go to `press`.
+                    x: field.pad;
+                    y: field.top;
                     width: max(field.room, self.preferred-width);
-                    height: parent.height;
+                    height: 22px;
                     text <=> root.query;
-                    // Where the caret is, so this window can draw one.
+                    // Where the caret and the selection are, for Rust to draw.
                     cursor-position-changed(p) => {
-                        // Keep the caret inside the visible part, and no further
-                        // left than the start of the text.
-                        if (p.x + field.shift < 0px) {
-                            field.shift = -p.x;
-                        }
-                        if (p.x + field.shift > field.room - 2px) {
-                            field.shift = field.room - 2px - p.x;
-                        }
-                        if (field.shift > 0px) {
-                            field.shift = 0px;
-                        }
-                        field.caret-x = field.pad + field.shift + p.x;
+                        root.q-caret(self.anchor-position-byte-offset, self.cursor-position-byte-offset);
                         if (root.trace) {
-                            debug("query field: input caret x " + p.x / 1px
-                                + "  by the ruler " + field.advance * root.query.character-count / 1px
-                                + "  stand-in width " + self.preferred-width / 1px
-                                + "  chars " + root.query.character-count
+                            debug("query field: caret " + self.cursor-position-byte-offset
                                 + "  selection " + self.anchor-position-byte-offset
-                                + ".." + self.cursor-position_byte-offset);
+                                + "  chars " + root.query.character-count);
                         }
                         // Typing restarts the lit half: a caret blinking while
                         // letters arrive reads as a dropped keystroke.
                         field.caret-lit = true;
                         blink.restart();
                     }
-                    // Invisible ink: what the reader sees is the coloured layer
-                    // underneath. This takes Slint's own caret with it, which
-                    // is why the window draws one of its own.
+                    changed has-focus => {
+                        if (!self.has-focus) { root.lens-close(); }
+                    }
                     color: transparent;
                     font-size: 16px;
                     font-weight: 500;
                     font-family: Fonts.mono;
                     single-line: true;
                     vertical-alignment: center;
-                    // Said here: the default comes from a style, and this
-                    // window links none.
-                    text-cursor-width: 2px;
-                    selection-background-color: Theme.selection;
-                    // Invisible for the selection too, or selecting draws the
-                    // real text opaquely over the coloured layer. The
-                    // translucent wash is what says a selection.
+                    text-cursor-width: 0px;
+                    // The selection is drawn above, a line at a time.
+                    selection-background-color: transparent;
                     selection-foreground-color: transparent;
 
                     edited => {
@@ -2273,10 +2341,27 @@ export component MainWindow inherits Window {
                         root.query-changed(self.text);
                     }
 
-
                     // Down and up move through the results without leaving the
                     // field: type, glance, press Enter.
                     key-pressed(e) => {
+                        // While the lens is open the arrows, Tab, Enter and
+                        // Escape are its own.
+                        if (root.lens-open) {
+                            if (e.text == Key.DownArrow && !e.modifiers.alt) { root.lens-step(1); return accept; }
+                            if (e.text == Key.UpArrow && !e.modifiers.alt) { root.lens-step(-1); return accept; }
+                            if (e.text == Key.Tab && !e.modifiers.shift && !e.modifiers.control) {
+                                root.lens-pick(root.lens-sel, true);
+                                return accept;
+                            }
+                            if (e.text == Key.Return) { root.lens-pick(root.lens-sel, false); return accept; }
+                            if (e.text == Key.Escape) { root.lens-close(); return accept; }
+                        }
+                        // Ctrl+Space: the lens of the term under the caret, or
+                        // the filters a query can take.
+                        if (e.modifiers.control && e.text == " ") {
+                            root.lens-toggle();
+                            return accept;
+                        }
                         // Ctrl+C with nothing selected here copies what is
                         // selected in the preview: the drag there may not have
                         // taken the keyboard with it.
@@ -2434,6 +2519,87 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // Presses, drags and the pointer's place, by line and column:
+                // the input underneath is one line, the drawing is up to three.
+                q-press := TouchArea {
+                    x: 0;
+                    y: 0;
+                    width: parent.width - 24px - (root.has-past ? 24px : 0px);
+                    height: parent.height;
+                    mouse-cursor: text;
+                    property <int> anchor: 0;
+                    function line-at(y: length) -> int {
+                        return clamp(Math.floor((y - field.top) / 22px), 0, root.q-shown - 1);
+                    }
+                    function col-at(x: length) -> int {
+                        return max(0, Math.round((x - field.pad) / max(1px, field.advance)));
+                    }
+                    function track() {
+                        if (self.pressed) {
+                            input.set-selection-offsets(self.anchor,
+                                root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x)));
+                        } else if (self.has-hover) {
+                            root.q-hover(self.line-at(self.mouse-y),
+                                Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
+                        }
+                    }
+                    changed mouse-x => { self.track(); }
+                    changed mouse-y => { self.track(); }
+                    changed has-hover => {
+                        if (!self.has-hover) { root.q-hover(-1, -1); }
+                    }
+                    pointer-event(e) => {
+                        if (e.kind != PointerEventKind.down) { return; }
+                        input.focus();
+                        if (e.button == PointerEventButton.right) {
+                            root.query-menu-at(self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
+                            return;
+                        }
+                        if (e.button != PointerEventButton.left) { return; }
+                        let o = root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x));
+                        if (e.modifiers.shift) {
+                            input.set-selection-offsets(input.anchor-position-byte-offset, o);
+                            return;
+                        }
+                        self.anchor = o;
+                        input.set-selection-offsets(o, o);
+                        // A filter opens its lens when it is pressed.
+                        root.q-pressed(self.line-at(self.mouse-y),
+                            Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
+                    }
+                    double-clicked => {
+                        let w = root.q-word(root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x)));
+                        input.set-selection-offsets(w.from, w.to);
+                    }
+                }
+
+                    // Starts a filter, as `:` does: the lens of everything a
+                    // query can take.
+                    Rectangle {
+                        x: field.width - (root.has-past ? 50px : 26px);
+                        width: 22px;
+                        height: 22px;
+                        y: (field.height - 22px) / 2;
+                        border-radius: 3px;
+                        background: add-touch.has-hover ? Theme.hover : transparent;
+                        Text {
+                            text: "+";
+                            color: root.lens-open && root.lens-launching ? Theme.ink : Theme.ink-3;
+                            font-size: 15px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        add-touch := TouchArea {
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    input.focus();
+                                    root.lens-launch();
+                                }
+                            }
+                        }
+                    }
+
                     // What says `Alt+↓` is there. Inside the field at its
                     // trailing edge, because the box stretches and a button
                     // outside it would move with every resize.
@@ -2463,14 +2629,52 @@ export component MainWindow inherits Window {
                         }
                     }
 
+
                     // Painted last, so a letter cannot cover it.
                     Rectangle {
-                        x: field.caret-x;
-                        y: (field.height - 19px) / 2;
+                        x: field.pad + field.advance * root.caret-col - 1px;
+                        y: field.top + (root.caret-line - root.q-first) * 22px + 1.5px;
                         width: 2px;
                         height: 19px;
                         background: Theme.q-key;
-                        visible: input.has-focus && field.caret-lit;
+                        visible: input.has-focus && field.caret-lit && root.sels.length == 0
+                            && root.caret-line >= root.q-first && root.caret-line < root.q-first + root.q-shown;
+                    }
+
+                    // Over the right end of the term the pointer is on: take
+                    // it out, exclude it, or read a word a letter off.
+                    pair := Rectangle {
+                        visible: root.hov-on || pair-touch.has-hover;
+                        x: clamp(field.pad + field.advance * root.hov-col - self.width + 5px,
+                            0px, field.width - self.width);
+                        y: field.top + root.hov-line * 22px - 18px;
+                        width: pair-row.preferred-width + 4px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Theme.panel;
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        drop-shadow-blur: 4px;
+                        drop-shadow-color: #00000030;
+                        drop-shadow-offset-y: 1px;
+                        pair-touch := TouchArea { }
+                        pair-row := HorizontalLayout {
+                            padding: 2px;
+                            spacing: 2px;
+                            if root.hov-fz: PairButton {
+                                label: "≈";
+                                on: root.hov-fz-on;
+                                pressed => { root.term-act("fz"); }
+                            }
+                            PairButton {
+                                label: root.hov-not ? "+" : "!";
+                                pressed => { root.term-act("neg"); }
+                            }
+                            PairButton {
+                                label: "✕";
+                                pressed => { root.term-act("drop"); }
+                            }
+                        }
                     }
 
                 }
@@ -2572,13 +2776,31 @@ export component MainWindow inherits Window {
                 // What the engine read, in words: the colours say what each
                 // piece is, this says why the answer is what it is. Shown only
                 // when there is something worth saying — `Role::is_telling`.
-                if root.reading != "" || root.chips-of(root.query).length > 0: HorizontalLayout {
-                    spacing: 6px;
+                if root.reading != "" || root.fix-said != "": HorizontalLayout {
+                    spacing: 8px;
                     height: 20px;
 
-                    for chip in root.chips-of(root.query): Chip {
-                        term: chip;
-                        dropped => { root.chip-dropped(chip); }
+                    // `siz:` is searched for as text; this offers `size:`.
+                    if root.fix-said != "": Rectangle {
+                        width: fix-text.preferred-width + 12px;
+                        height: 18px;
+                        y: 1px;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        border-color: Theme.q-bad;
+                        fix-text := Text {
+                            text: root.fix-said;
+                            color: Theme.q-bad;
+                            font-family: Fonts.mono;
+                            font-size: 11px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.fix-taken(); }
+                        }
                     }
                     Text {
                         text: root.reading;
@@ -4889,6 +5111,171 @@ export component MainWindow inherits Window {
 
         }
 
+
+        // The lens: under the term the caret is on, the term's choices, each
+        // with what it would leave. Opaque, above the list; it never takes
+        // the keyboard, which stays in the field.
+        if root.lens-open && root.lens-rows.length > 0: Rectangle {
+            x: clamp(field.absolute-position.x + field.pad + field.advance * root.lens-col - 12px,
+                8px, root.width - self.width - 8px);
+            y: field.absolute-position.y + field.top + (root.lens-line + 1) * 22px + 6px;
+            width: 420px;
+            height: min(lens-body.preferred-height, 360px);
+            background: Theme.panel-2;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            border-radius: 9px;
+            clip: true;
+            drop-shadow-blur: 14px;
+            drop-shadow-color: #00000055;
+            drop-shadow-offset-y: 6px;
+
+            lens-flick := Flickable {
+                viewport-height: lens-body.preferred-height;
+                // The chosen line in sight: rows are 26px, a heading 20px more.
+                property <int> sel: root.lens-sel;
+                changed sel => {
+                    let at = 30px + self.sel * 26px;
+                    if (at + 30px + self.viewport-y > self.height) {
+                        self.viewport-y = self.height - at - 30px;
+                    }
+                    if (at + self.viewport-y < 30px) {
+                        self.viewport-y = min(0px, 30px - at);
+                    }
+                }
+                lens-body := VerticalLayout {
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        height: 24px;
+                        Text {
+                            text: root.lens-title;
+                            color: Theme.ink-2;
+                            font-size: 11.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.lens-said;
+                            color: Theme.ink-3;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for row[i] in root.lens-rows: VerticalLayout {
+                        if row.group != "": Rectangle {
+                            height: row.group == " " ? 7px : 20px;
+                            Rectangle {
+                                visible: row.group == " ";
+                                y: 3px;
+                                height: 1px;
+                                background: Theme.line;
+                            }
+                            Text {
+                                x: 12px;
+                                visible: row.group != " ";
+                                text: row.group;
+                                color: Theme.ink-3;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: bottom;
+                                height: parent.height - 2px;
+                            }
+                        }
+                        Rectangle {
+                            height: 26px;
+                            background: i == root.lens-sel ? Theme.selection
+                                      : lens-touch.has-hover ? Theme.hover : transparent;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: row.label;
+                                        color: row.zero || row.wait ? Theme.ink-3 : Theme.ink;
+                                        font-size: 12.5px;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: row.hint;
+                                        color: Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                                if row.reads: Text {
+                                    text: root.lens-foot == "" ? "" : root.lens-reads;
+                                    color: Theme.q-bad;
+                                    font-size: 11.5px;
+                                    vertical-alignment: center;
+                                }
+                                if !row.reads: Rectangle {
+                                    width: 56px;
+                                    Rectangle {
+                                        y: (parent.height - 5px) / 2;
+                                        height: 5px;
+                                        border-radius: 3px;
+                                        background: row.n == "" ? transparent : Theme.line-soft;
+                                        Rectangle {
+                                            x: 0;
+                                            width: parent.width * row.bar;
+                                            height: parent.height;
+                                            border-radius: 3px;
+                                            background: Theme.k3;
+                                        }
+                                    }
+                                }
+                                if !row.reads: Text {
+                                    width: 72px;
+                                    text: row.n;
+                                    color: row.zero ? Theme.ink-3 : Theme.ink-2;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            lens-touch := TouchArea {
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        root.lens-pick(i, row.stays);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 6px;
+                        padding-bottom: 2px;
+                        Text {
+                            text: root.lens-foot;
+                            color: Theme.ink-3;
+                            font-size: 11.5px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
         // A press anywhere outside an open panel closes it, and goes no
         // further: it is not also a press on the row under it. Before the
         // panels, so a press on one reaches the panel first.
@@ -6109,6 +6496,49 @@ export component MainWindow inherits Window {
                 TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.similar-clicked(); }
+                }
+            }
+        }
+    }
+
+
+    // Nothing found: each filter, left out on its own, and what would then be
+    // found. A press takes that filter out.
+    if root.offers.length > 0 && root.panel == "": Rectangle {
+        x: list.absolute-position.x + (list.width - self.width) / 2;
+        y: list.absolute-position.y + 104px;
+        width: max(offers-col.preferred-width, 200px);
+        height: offers-col.preferred-height;
+        offers-col := VerticalLayout {
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: root.offers-said;
+                color: Theme.ink-3;
+                font-size: 12.5px;
+                horizontal-alignment: center;
+            }
+            for o[i] in root.offers: Rectangle {
+                height: 26px;
+                border-radius: 6px;
+                border-width: Theme.hair;
+                border-color: offer-touch.has-hover ? Theme.ink-3 : Theme.line;
+                background: Theme.panel;
+                // A layout, so the button is as wide as what it says.
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    Text {
+                        text: o;
+                        color: offer-touch.has-hover ? Theme.ink : Theme.ink-2;
+                        font-size: 12.5px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                offer-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.offer-taken(i); }
                 }
             }
         }

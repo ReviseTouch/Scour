@@ -47,8 +47,10 @@ pub fn reading_said(running: bool, done: bool) -> &'static str {
         (false, false) => READ_HALF,
     }
 }
+pub mod lens;
 pub mod menu;
 pub mod query;
+pub mod wrap;
 
 /// A colour, and the one representation both sides can be built from. Alpha is
 /// carried so a row that is both matched and selected stays legible: at 15% the
@@ -163,6 +165,15 @@ pub struct Palette {
     /// Looks like a field, was searched for as text. Amber: a warning that the
     /// query does not mean what it looks like, not an error.
     pub q_bad: Rgba,
+    /// A filter in the query, drawn as a capsule: its tint and its ring.
+    pub cap: Rgba,
+    pub cap_ring: Rgba,
+    /// A `content:` capsule — files will be read.
+    pub cap_read: Rgba,
+    pub cap_read_ring: Rgba,
+    /// An excluded term's capsule.
+    pub cap_neg: Rgba,
+    pub cap_neg_ring: Rgba,
 }
 
 /// The dark scheme: the desktop's own greys, a dark list under lighter chrome,
@@ -208,6 +219,12 @@ pub const DARK: Palette = Palette {
     q_glob: Rgba::hex(0xb48ce0),
     q_not: Rgba::hex(0xff6b6b),
     q_bad: Rgba::hex(0xe8a33d),
+    cap: Rgba::hex(0x2b3444),
+    cap_ring: Rgba::hex(0x3e4c63),
+    cap_read: Rgba::hex(0x3d3218),
+    cap_read_ring: Rgba::hex(0x6b5523),
+    cap_neg: Rgba::hex(0x45262a),
+    cap_neg_ring: Rgba::hex(0x6e3a3f),
 };
 
 /// The light scheme: a white list, grey chrome, no tint. The warm paper tried
@@ -251,6 +268,12 @@ pub const LIGHT: Palette = Palette {
     q_glob: Rgba::hex(0x6b3fa0),
     q_not: Rgba::hex(0xc0392b),
     q_bad: Rgba::hex(0x9a6a10),
+    cap: Rgba::hex(0xe8eef7),
+    cap_ring: Rgba::hex(0xc3d1e6),
+    cap_read: Rgba::hex(0xfbf0d6),
+    cap_read_ring: Rgba::hex(0xe5c886),
+    cap_neg: Rgba::hex(0xfbe7e5),
+    cap_neg_ring: Rgba::hex(0xeab4ad),
 };
 
 /// The numbers that are not colours: pixels at the same nominal scale in both
@@ -323,6 +346,12 @@ pub fn css_vars(p: &Palette) -> String {
     put("q-glob", &p.q_glob);
     put("q-not", &p.q_not);
     put("q-bad", &p.q_bad);
+    put("cap", &p.cap);
+    put("cap-ring", &p.cap_ring);
+    put("cap-read", &p.cap_read);
+    put("cap-read-ring", &p.cap_read_ring);
+    put("cap-neg", &p.cap_neg);
+    put("cap-neg-ring", &p.cap_neg_ring);
     s
 }
 

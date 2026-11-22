@@ -134,8 +134,17 @@ removes `/api/thumb`. `rescan` and `maintain` are not routed.
 Faces like the CLI: no index, no engine. The window never waits — every call is
 on a worker lane and comes back as an event; a stale answer is dropped by its
 generation, never drawn. Neither parses queries: what a term means is
-`explain`'s answer, with two narrow exceptions — `terms_of` (which words to
-highlight) and `scour_query::without` (a rail dropping its own term).
+`explain`'s answer, with three narrow exceptions — `terms_of` (which words to
+highlight), `scour_query::without` (a rail dropping its own term) and
+`scour_ui::lens` (which term the caret is in, which lens that opens, and the
+term a choice writes in its place — never what any term means).
+
+The query bar is the same in both: filters drawn as capsules over the text
+itself, up to three lines, the lens under the term with each choice's count
+(`count`, `facets`, `usage`, `volumes`), `:` or Ctrl+Space for the filters a
+query can take, and, when nothing is found, each filter left out on its own.
+The window draws its own lines (`scour_ui::wrap`) over an invisible one-line
+`TextInput`; the page wraps a text area and colours a layer under it.
 
 A face that finds nothing listening starts `scourd` through `scour-launch`:
 beside its own binary, then on `PATH`, detached, once per process, output to

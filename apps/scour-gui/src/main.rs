@@ -17,6 +17,9 @@ mod link;
 mod paste;
 mod peek;
 mod pixels;
+mod qbar;
+mod qlens;
+mod qwire;
 mod report;
 mod rows;
 mod service_mode;
@@ -48,8 +51,8 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, HeadInfo, Kid, MainWindow,
-    MenuItem, Row, Rule, Scheme, Seg, Slice, Slot, Span, Theme,
+    Bar, Big, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, HeadInfo, Kid,
+    LensRow, MainWindow, MenuItem, Reach, Row, Rule, Scheme, Seg, Sel, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -137,6 +140,8 @@ const CHEAP_PAGE_US: u64 = 20_000;
 const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
+    /// The query field: its layout, the caret, the lens. See `qwire`.
+    qb: qwire::QueryBar,
     /// The query that shows what the search in sight nearly found, when it
     /// found nothing and the service offered. See `SearchResponse::similar`.
     similar: String,
@@ -734,6 +739,7 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
+        qb: Default::default(),
         similar: String::new(),
         mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
@@ -1233,9 +1239,14 @@ fn main() -> Result<()> {
             }
             // Laid over the text as it is now, so a deletion shows this frame.
             if let Some(w) = weak.upgrade() {
+                qwire::draw(
+                    &w,
+                    &mut state.borrow_mut(),
+                    &link,
+                    &cat.borrow(),
+                    qwire::Lensing::Follow,
+                );
                 let s = state.borrow();
-                let runs = painted(&s.query, &s.spans);
-                w.set_spans(ModelRc::new(VecModel::from(runs)));
                 if w.get_past_open() {
                     let lines = past_matching(&s.past, &s.query);
                     w.set_past_open(!lines.is_empty());
@@ -1351,22 +1362,7 @@ fn main() -> Result<()> {
             }
         });
     }
-    window.on_chips_of(|text| {
-        let chips: Vec<slint::SharedString> = scour_ui::query::filters(&text)
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        ModelRc::new(VecModel::from(chips))
-    });
-    // The same toggle a rail press is: the term is in the text, so it goes.
-    {
-        let weak = window.as_weak();
-        window.on_chip_dropped(move |term| {
-            if let Some(w) = weak.upgrade() {
-                w.invoke_facet_clicked(term);
-            }
-        });
-    }
+    qwire::wire(&window, &state, &link, &cat);
 
     // Two buttons: one writes a file, the other opens the settings. A second
     // press closes them.
@@ -4450,6 +4446,7 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
             text: slice.into(),
             role,
             not,
+            line: 0,
         });
         *chars += slice.chars().count() as i32;
     };
@@ -4635,6 +4632,7 @@ fn apply(
                     None => slint::SharedString::new(),
                 });
                 state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
+                qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total);
             }
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
@@ -4971,6 +4969,19 @@ fn apply(
         // The query, read back and cut into runs, painted under the box. Two of
         // the engine's roles say *this is not what you think it is*: without them
         // a mistyped `sizE:>1mb` answers `0 of 0`, like a query matching nothing.
+        Got::Lens {
+            generation,
+            slot,
+            reply,
+        } => qwire::answered(
+            w,
+            &mut state.borrow_mut(),
+            link,
+            cat,
+            generation,
+            slot,
+            *reply,
+        ),
         Got::Explain {
             query_revision,
             reply,
@@ -4990,8 +5001,8 @@ fn apply(
             };
             let query = state.borrow().query.clone();
             state.borrow_mut().spans = spans;
-            let runs = painted(&query, &state.borrow().spans);
-            w.set_spans(ModelRc::new(VecModel::from(runs)));
+            qwire::draw(w, &mut state.borrow_mut(), link, cat, qwire::Lensing::Keep);
+            qwire::explained(w, &mut state.borrow_mut(), cat);
             // The colours say what a piece is; this says what the whole asks.
             let spans = &state.borrow().spans;
             let warn = spans.iter().any(|sp| sp.role.is_warning());
@@ -5416,6 +5427,11 @@ fn apply(
                 return;
             };
             state.borrow_mut().mounts = p.mounts.clone();
+            state.borrow_mut().qb.places = p
+                .places
+                .iter()
+                .map(|pl| (pl.label.clone(), pl.path.clone()))
+                .collect();
             let scopes: Vec<Facet> = p
                 .places
                 .iter()
@@ -6403,6 +6419,12 @@ pub(crate) fn scheme(p: &scour_ui::Palette) -> Scheme {
         q_glob: c(&p.q_glob),
         q_not: c(&p.q_not),
         q_bad: c(&p.q_bad),
+        cap: c(&p.cap),
+        cap_ring: c(&p.cap_ring),
+        cap_read: c(&p.cap_read),
+        cap_read_ring: c(&p.cap_read_ring),
+        cap_neg: c(&p.cap_neg),
+        cap_neg_ring: c(&p.cap_neg_ring),
     }
 }
 
@@ -7127,6 +7149,7 @@ mod tests {
     #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
+            qb: Default::default(),
             similar: String::new(),
             mounts: Vec::new(),
             indexed: 0,
@@ -7201,6 +7224,7 @@ mod tests {
     #[test]
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
+            qb: Default::default(),
             similar: String::new(),
             mounts: Vec::new(),
             stirred: std::time::Instant::now(),

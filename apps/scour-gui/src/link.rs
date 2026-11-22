@@ -122,6 +122,14 @@ pub enum Ask {
         query_revision: u64,
         query: String,
     },
+    /// Something the query bar's lens wants: a count beside a choice, the
+    /// values of a list, a folder's own folders, the disks. `slot` says which
+    /// part of the lens it is for; a newer `generation` makes it stale.
+    Lens {
+        generation: u64,
+        slot: u32,
+        request: Request,
+    },
     Stop,
 }
 
@@ -146,6 +154,11 @@ pub enum Got {
     },
     Count {
         query_revision: u64,
+        reply: Box<Response>,
+    },
+    Lens {
+        generation: u64,
+        slot: u32,
         reply: Box<Response>,
     },
     Places(Box<Response>),
@@ -229,6 +242,7 @@ pub struct Link {
 struct Freshness {
     search: Arc<AtomicU64>,
     query: Arc<AtomicU64>,
+    lens: Arc<AtomicU64>,
 }
 
 impl Freshness {
@@ -249,6 +263,9 @@ impl Freshness {
             | Ask::Count { query_revision, .. } => {
                 self.query.fetch_max(*query_revision, Ordering::Release);
             }
+            Ask::Lens { generation, .. } => {
+                self.lens.fetch_max(*generation, Ordering::Release);
+            }
             _ => {}
         }
     }
@@ -261,6 +278,7 @@ impl Freshness {
             | Ask::Explain { query_revision, .. } => {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
+            Ask::Lens { generation, .. } => *generation == self.lens.load(Ordering::Acquire),
             // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
@@ -365,6 +383,7 @@ impl Link {
             // And this one reads the head of a file off a disk.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
+            | Ask::Lens { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -430,6 +449,8 @@ enum Lane {
     Status,
     /// The long poll that keeps the list live.
     Await,
+    /// The query bar's lens.
+    Lens,
 }
 
 /// Have a service at `addr`, starting one if nobody else has. At most once for
@@ -520,6 +541,10 @@ fn spawn_lane(
             let half = match ask {
                 Ask::Facets { half, .. } => half,
                 _ => Half::Both,
+            };
+            let slot = match ask {
+                Ask::Lens { slot, .. } => slot,
+                _ => 0,
             };
             let (revision, request, facets) = match ask {
                 Ask::Search {
@@ -695,6 +720,11 @@ fn spawn_lane(
                     },
                     Lane::Count,
                 ),
+                Ask::Lens {
+                    generation,
+                    request,
+                    ..
+                } => (generation, request, Lane::Lens),
                 Ask::Stop => break,
             };
             // The page this request asked for, read back off the request so the
@@ -716,6 +746,11 @@ fn spawn_lane(
                         },
                         Lane::Count => Got::Count {
                             query_revision: revision,
+                            reply,
+                        },
+                        Lane::Lens => Got::Lens {
+                            generation: revision,
+                            slot,
                             reply,
                         },
                         Lane::Search => Got::Search {
@@ -763,6 +798,9 @@ fn spawn_lane(
                         client = None;
                         was_down = true;
                         sink(Got::Down(e.to_string()));
+                    } else if matches!(facets, Lane::Lens) {
+                        // A choice whose count was refused keeps no number;
+                        // nothing else is said about it.
                     } else if matches!(facets, Lane::Peek) && is_preview {
                         sink(Got::Peek {
                             path: weighed,
@@ -783,6 +821,7 @@ fn spawn_lane(
                             | Lane::Dupes
                             | Lane::Thumbnails
                             | Lane::Peek
+                            | Lane::Lens
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

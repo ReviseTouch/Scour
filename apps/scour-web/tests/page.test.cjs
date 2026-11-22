@@ -647,3 +647,30 @@ test('clicking the selection bar text scrolls an off-screen selected row into vi
   assert.equal(c.focusPath, '/data/target.docx');
   assert.equal(focused, true, 'focused the selected row');
 });
+
+// The lens: the same reading of a term the window's `scour_ui::lens` gives.
+test('the lens names its fields, places and kinds as the window does', () => {
+  const c = context();
+  c.HOME = '/home/u';
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_LAUNCH'), c);
+  vm.runInContext(section('  function lensKindOf(t) {', '\n  const quoteIf = '), c);
+  vm.runInContext(section('  const quoteIf = ', '\n  function lensClose()'), c);
+  const run = (src) => vm.runInContext(src, c);
+  assert.equal(run('JSON.stringify(placeParts("~/Bel"))'), '["~","Bel"]');
+  assert.equal(run('JSON.stringify(placeParts("/"))'), '["/",""]');
+  assert.equal(run('JSON.stringify(placeParts("~/Belgeler/"))'), '["~/Belgeler",""]');
+  assert.equal(run('JSON.stringify(placeParts(""))'), '["",""]');
+  assert.equal(run('homeForm("/home/u/Belgeler")'), '~/Belgeler');
+  assert.equal(run('homeForm("/home/uu")'), '/home/uu');
+  assert.equal(run('fullForm("~/x")'), '/home/u/x');
+  assert.equal(run('quoteIf("My Files")'), '"My Files"');
+  const kind = (t) => run(`lensKindOf(${JSON.stringify(t)})`);
+  assert.equal(kind({ raw: ':', named: false, field: null, value: ':' }), 'launch');
+  assert.equal(kind({ raw: ':de', named: false, field: null, value: ':de' }), 'launch');
+  assert.equal(kind({ raw: 'in:~/x', named: true, field: run('LENS_FIELDS.in'), value: '~/x' }), 'place');
+  assert.equal(kind({ raw: 'dm:', named: true, field: 'dm', value: '' }), 'time');
+  assert.equal(kind({ raw: 'perm:x', named: true, field: null, value: 'x' }), null);
+  assert.equal(kind({ raw: 'rapor', named: false, field: null, value: 'rapor' }), 'word');
+  assert.equal(kind({ raw: 'a', named: false, field: null, value: 'a' }), null);
+  assert.equal(run('LENS_FIELDS["t\\u00fcr"]'), 'kind');
+});
