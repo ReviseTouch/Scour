@@ -7,6 +7,13 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
+pub mod doc;
+pub mod office;
+pub mod ooxml;
+mod pdf_macos;
+mod pdf_win;
+mod ppm;
+
 /// The desktop's own quick-look command, if one is installed: GNOME's `sushi` or
 /// macOS `qlmanage`. Found on `PATH`, not from `XDG_CURRENT_DESKTOP`.
 pub fn quicklook(chosen: Option<&str>) -> Option<Vec<String>> {
@@ -17,39 +24,55 @@ pub fn quicklook(chosen: Option<&str>) -> Option<Vec<String>> {
     const CANDIDATES: &[&[&str]] = &[
         // `-p` previews; without it qlmanage writes thumbnails into the cwd.
         &["qlmanage", "-p"],
-        // GNOME has shipped the binary under both names.
+        // GNOME, Cinnamon, and GTK quick-look viewers.
         &["sushi"],
         &["gnome-sushi"],
+        &["nemo-preview"],
+        &["gloobus-preview"],
+        &["QuickLook.exe"],
     ];
-    CANDIDATES
+    if let Some(found) = CANDIDATES
         .iter()
         .find(|c| on_path(c[0]))
         .map(|c| c.iter().map(|s| (*s).to_owned()).collect())
+    {
+        return Some(found);
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let ql = std::path::PathBuf::from(local).join(r"Programs\QuickLook\QuickLook.exe");
+        if ql.is_file() {
+            return Some(vec![ql.to_string_lossy().into_owned()]);
+        }
+    }
+    None
 }
 
 /// Is this program on `PATH`? A lookup, never a shell — a shell would take the
 /// name as a script.
 fn on_path(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let p = dir.join(name);
-                p.is_file() && {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        std::fs::metadata(&p)
-                            .map(|m| m.permissions().mode() & 0o111 != 0)
-                            .unwrap_or(false)
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        true
-                    }
+    find_on_path(name).is_some()
+}
+
+pub(crate) fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|p| {
+            p.is_file() && {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::metadata(p)
+                        .map(|m| m.permissions().mode() & 0o111 != 0)
+                        .unwrap_or(false)
                 }
-            })
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            }
         })
-        .unwrap_or(false)
 }
 
 /// How much text is worth sending: the head of any source file or config, far
@@ -133,6 +156,15 @@ pub fn look_at(path: &std::path::Path, is_dir: bool) -> Look {
         look.head = head;
         look.cut = !whole;
         look.len = len;
+    } else if office::is_office(path)
+        && let Some((head, cut)) = ooxml::extract_text(path)
+    {
+        if shape == Shape::Nothing {
+            look.shape = "text".to_owned();
+            look.kind = "text/plain".to_owned();
+        }
+        look.head = head;
+        look.cut = cut;
     }
     look
 }
@@ -183,6 +215,9 @@ pub fn shape_of(path: &std::path::Path, is_dir: bool) -> Shape {
         .unwrap_or_default();
     if let Some((_, shape)) = DRAWN.iter().find(|(e, _)| *e == ext) {
         return *shape;
+    }
+    if office::is_office(path) && office::can_convert() {
+        return Shape::Streamed("application/pdf");
     }
     // Everything else is decided by the bytes, not by a list of every extension
     // anyone ever gave a text file.

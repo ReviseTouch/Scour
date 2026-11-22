@@ -20,3 +20,14 @@ workspace = true
 # frontends stop each having their own idea of what is readable.
 [dependencies]
 serde = { workspace = true }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Data_Pdf",
+    "Graphics_Imaging",
+    "Storage",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+] }

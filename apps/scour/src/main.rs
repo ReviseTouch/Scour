@@ -340,13 +340,13 @@ impl From<Level> for Maintenance {
 /// that varies with an attached terminal cannot be scripted against.
 fn fits() -> u32 {
     use std::io::IsTerminal;
+    fits_for(std::io::stdout().is_terminal())
+}
+
+fn fits_for(is_terminal: bool) -> u32 {
     const PIPED: u32 = 40;
     const SHOWN: u32 = 5;
-    if std::io::stdout().is_terminal() {
-        SHOWN
-    } else {
-        PIPED
-    }
+    if is_terminal { SHOWN } else { PIPED }
 }
 
 fn main() -> Result<()> {
@@ -679,9 +679,9 @@ mod tests {
 
     #[test]
     fn the_default_count_leaves_room_for_the_summary_and_the_prompt() {
-        let n = fits();
-        assert!((5..=40).contains(&n), "outside the range: {n}");
-        // Output is captured here, so this is the piped answer, which is fixed.
-        assert_eq!(n, 40, "piped output should not follow a terminal");
+        use std::io::IsTerminal;
+        assert_eq!(fits_for(true), 5, "a terminal gets five rows");
+        assert_eq!(fits_for(false), 40, "piped output gets forty rows");
+        assert_eq!(fits(), fits_for(std::io::stdout().is_terminal()));
     }
 }

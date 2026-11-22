@@ -5,7 +5,7 @@
 //! whose value will not parse, becomes a search for the raw text.
 
 use scour_core::text::DefaultFolder;
-use scour_core::{Ast, Cmp, Group, Kind, Match, TimeField};
+use scour_core::{Ast, Cmp, Group, Match, TimeField};
 
 use crate::time::{now_secs, parse_time};
 
@@ -220,19 +220,13 @@ fn tokenize(input: &str) -> Vec<String> {
 }
 
 /// Cut a token at every `;` that separates two terms: between terms `;` means
-/// what a space means, both, while inside a field's value it stays "any of
-/// these". After `join_lists`, which glues `ext:rs ; toml`, and before
-/// `split_bangs`, so `a;!b` reaches it as `a` and `!b`.
+/// what a space means, both, while inside a list field's value (`ext:`, `kind:`)
+/// it stays "any of these". After `join_lists`, which glues `ext:rs ; toml`,
+/// and before `split_bangs`, so `a;!b` reaches it as `a` and `!b`.
 fn split_semicolons(tokens: Vec<String>) -> Vec<String> {
     let mut out = Vec::with_capacity(tokens.len());
     for t in tokens {
-        if t.starts_with('"')
-            || token_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some())
-        {
-            out.push(t);
-            continue;
-        }
-        for piece in split_outside_quotes(&t, ';') {
+        for piece in cut_semicolons(&t) {
             if !piece.is_empty() {
                 out.push(piece.to_owned());
             }
@@ -273,24 +267,15 @@ fn split_bangs(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Close up the spaces around a `;` inside a field's value, so `ext:rs ; toml`
-/// is one filter. Only after a real field: `rapor ; pdf` has no list to extend.
+/// Close up the spaces around a `;` inside a list field's value (`ext:`, `kind:`),
+/// so `ext:rs ; toml` is one filter while `size:>1mb ; dm:7d` stays two.
 fn join_lists(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
-    // Set when the previous token ended in a way that wants what comes next.
     let mut open = false;
     for t in tokens {
-        if t.starts_with('"') {
-            out.push(t);
-            open = false;
-            continue;
-        }
-        // Both sides must be a real field's value, or `rapor ; pdf` invents a
-        // list where there was none.
-        let after_field = out.last().is_some_and(|p| token_field(p).is_some());
-        if after_field && (open || t.starts_with(';')) {
-            let prev = out.last_mut().expect("checked by after_field");
-            // The separator stays exactly once, however it was spaced.
+        let after_list = out.last().is_some_and(|p| is_openable_list(p));
+        if after_list && can_join_list(&t) && (open || t.starts_with(';')) {
+            let prev = out.last_mut().expect("checked by after_list");
             if !prev.ends_with(';') {
                 prev.push(';');
             }
@@ -299,7 +284,7 @@ fn join_lists(tokens: Vec<String>) -> Vec<String> {
             out.push(t);
         }
         let last = out.last().map(String::as_str).unwrap_or("");
-        open = last.ends_with(';') && token_field(last).is_some();
+        open = last.ends_with(';') && is_openable_list(last);
     }
     out
 }
@@ -329,6 +314,7 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
         }
         if !quoted && t == "!" {
             pending_bang = true;
+            want_alt |= trailing_alt;
             continue;
         }
         if t.is_empty() {
@@ -366,14 +352,15 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
         let folded = DefaultFolder::of(&raw);
         // The field table is the only place a field name is written down.
         let m: Option<Match> = match crate::fields::lookup(&field).map(|f| f.name) {
-            Some("ext") => Some(Match::Ext(
-                folded
+            Some("ext") => {
+                let exts: Vec<String> = folded
                     .split(';')
                     .map(|e| e.trim_start_matches('.'))
                     .filter(|e| !e.is_empty())
                     .map(str::to_owned)
-                    .collect(),
-            )),
+                    .collect();
+                (!exts.is_empty()).then_some(Match::Ext(exts))
+            }
             Some("path") => Some(Match::PathContains(folded)),
             // Paths are compared as the filesystem stores them: folding would
             // make `under:` disagree with the tokens the index holds.
@@ -383,7 +370,7 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
             Some("folder") => Some(Match::IsDir(true)),
             Some("size") => parse_size(&folded),
             // Turkish spellings are aliases on purpose; see `Kind::from_name`.
-            Some("kind") => Kind::from_name(&folded).map(|k| Match::Kind(k.to_vec())),
+            Some("kind") => crate::fields::parse_kinds(&folded).map(Match::Kind),
             Some("dm") => parse_time(TimeField::Modified, &folded, now),
             Some("dc") => parse_time(TimeField::Created, &folded, now),
             Some("da") => parse_time(TimeField::Accessed, &folded, now),
@@ -569,6 +556,117 @@ pub(crate) fn split_outside_quotes(s: &str, mark: char) -> Vec<&str> {
     out
 }
 
+/// The list field (`ext:` or `kind:`) a token opens, if any.
+pub(crate) fn list_field(s: &str) -> Option<&'static crate::fields::Field> {
+    if s.starts_with('"') {
+        return None;
+    }
+    let (name, _) = token_field(s)?;
+    crate::fields::lookup(&name).filter(|f| f.takes.is_list())
+}
+
+/// Whether `token` is a pure list-field run that has not yet crossed `|` or `;!`.
+fn is_openable_list(token: &str) -> bool {
+    list_field(token).is_some()
+        && split_outside_quotes(token, '|').len() == 1
+        && split_list_token(token).1.is_none()
+}
+
+/// Whether one `;`-separated piece (before any `|`) can stay inside an `ext:`
+/// or `kind:` value list rather than starting a new term.
+pub(crate) fn is_list_piece(piece: &str) -> bool {
+    if piece.is_empty() {
+        return true;
+    }
+    if piece.starts_with('"') {
+        return false;
+    }
+    let head = split_outside_quotes(piece, '|')
+        .into_iter()
+        .next()
+        .unwrap_or("");
+    !head.is_empty()
+        && !head.starts_with(['!', '"', '(', '<'])
+        && !head.contains([':', '/', '*', '?', '!'])
+}
+
+/// Whether `token` can continue an open `ext:` or `kind:` list across a space.
+pub(crate) fn can_join_list(token: &str) -> bool {
+    let trimmed = token.trim_start_matches(';');
+    if trimmed.is_empty() {
+        return true;
+    }
+    split_outside_quotes(trimmed, ';')
+        .into_iter()
+        .next()
+        .is_some_and(is_list_piece)
+}
+
+/// Split a list run at the first unquoted `;` (before any `|`) after its first
+/// piece whose following piece starts a new term.
+pub(crate) fn split_list_token(token: &str) -> (&str, Option<&str>) {
+    let mut quoted = false;
+    let mut from = 0;
+    let mut skip_first = true;
+    for (i, c) in token.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '|' if !quoted => break,
+            ';' if !quoted => {
+                if !skip_first && !is_list_piece(&token[from..i]) {
+                    return (&token[..from - 1], Some(&token[from..]));
+                }
+                skip_first = false;
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if !skip_first && !is_list_piece(&token[from..]) {
+        return (&token[..from - 1], Some(&token[from..]));
+    }
+    (token, None)
+}
+
+/// Cut `s` at every `;` that separates two terms while keeping `;` inside
+/// quotes and inside `ext:` / `kind:` value lists. Joins back with `;` to `s`.
+pub(crate) fn cut_semicolons(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut cur = s;
+    loop {
+        if list_field(cur).is_some() {
+            let (head, rest) = split_list_token(cur);
+            out.push(head);
+            match rest {
+                Some(r) => cur = r,
+                None => break,
+            }
+            continue;
+        }
+        let mut quoted = false;
+        let mut cut = None;
+        for (i, c) in cur.char_indices() {
+            if c == '"' {
+                quoted = !quoted;
+            } else if c == ';' && !quoted {
+                cut = Some(i);
+                break;
+            }
+        }
+        match cut {
+            Some(i) => {
+                out.push(&cur[..i]);
+                cur = &cur[i + 1..];
+            }
+            None => {
+                out.push(cur);
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// The field a whole token names, with any leading `!` set aside: `split_field`
 /// alone reads `!ext` as not-a-field, and `!ext:rs;toml` then comes apart at the
 /// semicolon into an exclusion OR a bare word — nearly everything.
@@ -696,6 +794,7 @@ mod paren_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scour_core::Kind;
 
     /// Every alternative in the query, flattened.
     fn m(q: &str) -> Vec<(bool, Match)> {
@@ -758,9 +857,8 @@ mod tests {
         );
         // The same for every other list field.
         assert_eq!(
-            m("!kind:image;code").len(),
-            1,
-            "!kind:image;code came apart"
+            m("!kind:image;code"),
+            vec![(true, Match::Kind(vec![Kind::Image, Kind::Code]))]
         );
         // What it must not break: the un-negated form, and `;` between words.
         assert_eq!(
@@ -1115,6 +1213,70 @@ mod list_separator_tests {
         assert_eq!(
             one("\"a ; b\""),
             vec![(false, Match::NameContains("a ; b".into()))]
+        );
+    }
+
+    #[test]
+    fn trailing_and_inter_field_semicolons_do_not_corrupt_terms() {
+        use scour_core::Kind;
+
+        for q in [";", ";;", " ; ; ", " ; | ! "] {
+            assert!(parse_at(q, 0).is_empty(), "{q:?}");
+        }
+        let doc_docx = vec![
+            (false, Match::NameGlob("*.docx".into())),
+            (false, Match::Kind(vec![Kind::Doc])),
+        ];
+        for q in [
+            "*.docx kind:doc;",
+            "*.docx kind:doc ;",
+            "*.docx kind:doc ; ;",
+            "*.docx;kind:doc;",
+            "; *.docx ; kind:doc ;",
+        ] {
+            assert_eq!(one(q), doc_docx, "{q:?}");
+        }
+        assert_eq!(
+            one("kind:doc ; *.docx"),
+            vec![
+                (false, Match::Kind(vec![Kind::Doc])),
+                (false, Match::NameGlob("*.docx".into())),
+            ]
+        );
+        assert_eq!(
+            one("kind:doc;image ;"),
+            vec![(false, Match::Kind(vec![Kind::Doc, Kind::Image]))]
+        );
+        assert_eq!(
+            one("size:>1mb;dm:7d;"),
+            vec![
+                (false, Match::Size(Cmp::Gt, 1_048_576)),
+                (
+                    false,
+                    Match::Time(TimeField::Modified, Cmp::Ge, -7 * 86_400)
+                ),
+            ]
+        );
+        assert_eq!(
+            one("folder: ; *.rs ;"),
+            vec![
+                (false, Match::IsDir(true)),
+                (false, Match::NameGlob("*.rs".into())),
+            ]
+        );
+        assert_eq!(
+            one("\"annual report\";ext:pdf;"),
+            vec![
+                (false, Match::NameContains("annual report".into())),
+                (false, Match::Ext(vec!["pdf".into()])),
+            ]
+        );
+        assert_eq!(
+            one("ext:rs;!tmp;"),
+            vec![
+                (false, Match::Ext(vec!["rs".into()])),
+                (true, Match::NameContains("tmp".into())),
+            ]
         );
     }
 }

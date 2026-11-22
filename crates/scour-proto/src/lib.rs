@@ -240,6 +240,10 @@ pub enum Request {
         /// At most [`scour_thumbs::Maker::BATCH`]; the rest are ignored. A frontend is
         /// not a fence, so the cap is applied here too.
         files: Vec<String>,
+        /// Target pixel edge (`large` 256 when omitted, `x-large` 512 / `xx-large` 1024
+        /// for HiDPI preview panels).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u32>,
     },
     /// The configured sources and what each can do.
     Sources {},
@@ -749,7 +753,10 @@ mod tests {
             },
             Request::Shutdown {},
             // A write to the desktop's thumbnail cache, and processes started for it.
-            Request::Thumbnails { files: Vec::new() },
+            Request::Thumbnails {
+                files: Vec::new(),
+                size: None,
+            },
         ];
         for r in &mutating {
             assert!(r.is_mutating(), "{} has to be refused", r.name());
@@ -890,6 +897,7 @@ mod tests {
             Request::Shutdown {},
             Request::Thumbnails {
                 files: vec!["/a/b.png".into()],
+                size: Some(512),
             },
         ];
         let mut names = Vec::new();

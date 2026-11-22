@@ -6,9 +6,13 @@
 
 pub mod cache;
 pub mod known;
+mod macos;
 pub mod make;
-mod png;
+pub mod native;
+pub mod png;
 pub mod shell;
+pub mod sysicon;
+mod sysicon_os;
 
 pub use make::{Made, Maker, Wanted, can_make};
 
@@ -30,6 +34,18 @@ pub fn has(path: &str, token: &str) -> bool {
 /// disk. It says nothing about whether the attempt would succeed.
 pub fn may(path: &str, token: &str) -> bool {
     !never_for(token) && can_make(path)
+}
+
+/// On Windows and macOS the OS shell / Quick Look decides per file without XDG
+/// declarations; rule out kinds that never carry thumbnails, our own cache, and
+/// extensionless or bogus names before asking.
+pub fn may_native(path: &str, token: &str) -> bool {
+    if !native::available() || never_for(token) || is_one(path) {
+        return false;
+    }
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.rsplit_once('.')
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty() && ext.len() <= 16)
 }
 
 /// Is this file itself a thumbnail? A thumbnail of a thumbnail is a loop: the

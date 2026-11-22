@@ -68,10 +68,17 @@ impl Maker {
     /// Make what can be made, and say what is ready. Blocks until the batch is
     /// done; anything already cached or already failed starts nothing.
     pub fn make(&self, wanted: &[Wanted]) -> Made {
+        self.make_sized(wanted, crate::cache::ASKED)
+    }
+
+    /// Make thumbnails at the freedesktop bucket matching `px` (`large` 256,
+    /// `x-large` 512, or `xx-large` 1024), bounded by [`Maker::AT_ONCE`].
+    pub fn make_sized(&self, wanted: &[Wanted], px: u32) -> Made {
+        let (_, asked) = crate::cache::size_dir(px);
         let mut ready = Vec::new();
         let mut todo = Vec::new();
         for it in wanted.iter().take(Maker::BATCH) {
-            if crate::cache::existing(&it.path).is_some() {
+            if crate::cache::existing_for(&it.path, asked).is_some() {
                 ready.push(it.path.clone());
             } else if !crate::cache::has_failed(&it.path, it.mtime) && can_make(&it.path) {
                 todo.push(it);
@@ -85,7 +92,8 @@ impl Maker {
             for it in &todo {
                 scope.spawn(|| {
                     let _permit = self.permit();
-                    if attempt(it) {
+                    let dest = crate::cache::destination_for(&it.path, asked);
+                    if attempt_sized(it, asked, &dest) {
                         done.lock()
                             .unwrap_or_else(|p| p.into_inner())
                             .push(it.path.clone());
@@ -133,16 +141,12 @@ pub fn can_make(path: &str) -> bool {
     crate::known::known().can(name)
 }
 
-/// Run the thumbnailer, stamp what came back, and put it where it goes. True when
-/// there is a picture at the end; every other outcome records a failure, which is
-/// the one thing the caller needs: do not ask again for this version of this file.
-fn attempt(it: &Wanted) -> bool {
+fn attempt_sized(it: &Wanted, size: u32, destination: &Path) -> bool {
     let name = it.path.rsplit(['/', '\\']).next().unwrap_or(&it.path);
     let Some(command) = known_command(name) else {
         record_failure(it);
         return false;
     };
-    let destination = crate::cache::destination(&it.path);
     let Some(folder) = destination.parent() else {
         return false;
     };
@@ -150,7 +154,8 @@ fn attempt(it: &Wanted) -> bool {
         return false;
     }
     let temp = folder.join(temp_name());
-    let made = run(&command, &it.path, &temp, Maker::PATIENCE) && install(&temp, &destination, it);
+    let made = run_sized(&command, &it.path, &temp, size, Maker::PATIENCE)
+        && install(&temp, destination, it);
     // Removed either way, or the cache fills with half-written pictures.
     let _ = std::fs::remove_file(&temp);
     if !made {
@@ -167,9 +172,22 @@ fn known_command(name: &str) -> Option<Vec<String>> {
 
 /// The standard's substitutions, and the machine's own `nice`. `patience` is a
 /// parameter and not [`Maker::PATIENCE`] so a test can kill a hang in 200 ms.
+#[cfg_attr(not(test), allow(dead_code))]
 fn run(command: &[String], input: &str, output: &Path, patience: Duration) -> bool {
+    run_sized(command, input, output, crate::cache::ASKED, patience)
+}
+
+fn run_sized(
+    command: &[String],
+    input: &str,
+    output: &Path,
+    asked: u32,
+    patience: Duration,
+) -> bool {
     let uri = crate::cache::uri_of(input);
-    let size = crate::cache::ASKED.to_string();
+    let size = asked.to_string();
+    let out_str = output.to_string_lossy();
+    let out_stem = out_str.strip_suffix(".png").unwrap_or(&out_str);
     let fill = |word: &str| -> String {
         let mut out = String::with_capacity(word.len());
         let mut chars = word.chars();
@@ -181,7 +199,8 @@ fn run(command: &[String], input: &str, output: &Path, patience: Duration) -> bo
             match chars.next() {
                 Some('i') => out.push_str(input),
                 Some('u') => out.push_str(&uri),
-                Some('o') => out.push_str(&output.to_string_lossy()),
+                Some('o') => out.push_str(&out_str),
+                Some('O') => out.push_str(out_stem),
                 Some('s') => out.push_str(&size),
                 Some('%') => out.push('%'),
                 Some(other) => {
@@ -210,6 +229,11 @@ fn run(command: &[String], input: &str, output: &Path, patience: Duration) -> bo
             c
         }
     };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        process.creation_flags(0x0800_0000);
+    }
     // The service's log is not the place for a decoder's opinion of a bad file.
     process
         .stdin(std::process::Stdio::null())

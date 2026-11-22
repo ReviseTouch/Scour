@@ -12,9 +12,24 @@ pub struct Picture {
     pub kind: &'static str,
 }
 
-/// The thumbnail somebody has already made for this file.
+/// The thumbnail somebody has already made in the freedesktop cache.
+/// `path` is only hashed, never opened directly.
 pub fn thumbnail(path: &str) -> Option<Picture> {
     read(&scour_thumbs::cache::existing(path)?)
+}
+
+/// On Windows and macOS, ask the OS shell / Quick Look for a thumbnail of a
+/// path the caller has already fenced through `stat`.
+pub fn native_thumbnail(fenced_path: &str) -> Option<Picture> {
+    if !scour_thumbs::native::available() {
+        return None;
+    }
+    let native = scour_core::path::to_path(fenced_path);
+    let bytes = scour_thumbs::native::png(&native, 256)?;
+    Some(Picture {
+        bytes,
+        kind: "image/png",
+    })
 }
 
 /// Is there one, without reading it? Asked once per row, so the page requests
@@ -26,7 +41,7 @@ pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
 /// Nothing has made one — but could something be asked to? Zero I/O, so it is
 /// asked before [`has_thumbnail`]'s four `stat` calls.
 pub fn may_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
-    scour_thumbs::may(path, kind.token())
+    scour_thumbs::may(path, kind.token()) || scour_thumbs::may_native(path, kind.token())
 }
 
 fn read(p: &Path) -> Option<Picture> {

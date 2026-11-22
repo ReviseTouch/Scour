@@ -5079,6 +5079,7 @@ dependencies = [
  "clap",
  "copypasta",
  "i-slint-backend-winit",
+ "image",
  "rfd",
  "scour-chart",
  "scour-clip",
@@ -5225,7 +5226,9 @@ dependencies = [
 name = "scour-preview"
 version = "0.2.0-alpha.12"
 dependencies = [
+ "miniz_oxide",
  "serde",
+ "windows",
 ]
 
 [[package]]

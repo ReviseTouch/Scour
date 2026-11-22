@@ -69,6 +69,9 @@ export struct Row {
     // Whether `thumb` holds one, said as a flag: asking the `image` its width
     // once per glyph condition per row took an idle window from 22% to 49%.
     shot: bool,
+    // The desktop's native file or folder icon, when `system-icons` is on.
+    sys-icon: image,
+    has-sys-icon: bool,
     // Opening it would start a program (`scour_core::runs_when_opened`): a
     // double-click shows it in its folder instead.
     runs: bool,
@@ -86,6 +89,13 @@ export struct Slot {
 export struct Fact {
     label: string,
     value: string,
+}
+
+/// One page of a scrollable document preview (PDF or Office).
+export struct PeekPage {
+    number: int,
+    ready: bool,
+    shot: image,
 }
 
 // One bar of the time ribbon: how many files fall in it, and which of the six
@@ -1326,6 +1336,9 @@ export component MainWindow inherits Window {
     callback copy-span(string, int, int);
     /// Said instead of either, when there is neither.
     in property <string> peek-note;
+    in property <[PeekPage]> peek-pages;
+    in property <float> peek-aspect: 1.414;
+    callback peek-page-scrolled(int);
     in property <[Fact]> peek-facts;
     in property <string> peek-close-title;
     callback peek-toggled();
@@ -1455,6 +1468,9 @@ export component MainWindow inherits Window {
     /// How far down the detail list is, for keeping the row being read in
     /// place when rows arrive above it.
     out property <length> list-down: 0px - list.viewport-y;
+    out property <length> view-down: root.sb-at;
+    out property <length> list-shown: root.sb-shown;
+    callback navigated(int);
     // A resize changes how many slots there are, before any timer comes round.
     changed pool => { root.moved(); }
     /// How wide a row is, from the columns: as a `ListView` read it off the rows.
@@ -1512,6 +1528,8 @@ export component MainWindow inherits Window {
     in-out property <string> tip-text;
     in-out property <length> tip-x;
     in-out property <length> tip-y;
+    in-out property <bool> tip-mono;
+    in-out property <int> tip-owner: -1;
     in-out property <length> menu-x;
     in-out property <length> menu-y;
     /// A row was right-clicked, at this point on the window.
@@ -1732,16 +1750,20 @@ export component MainWindow inherits Window {
     in property <string> set-zoom;
     in property <string> set-zoom-note;
     callback zoom-picked(string);
-    /// Lines between the list's rows and columns, which the settings switch.
+    /// Lines between the list's rows and columns, and native system icons.
     in property <bool> grid-lines;
     in property <bool> grid-columns;
+    in property <bool> system-icons;
     in property <string> set-grid;
     in property <string> set-grid-note;
     in property <string> set-grid-columns;
     in property <string> set-grid-columns-note;
+    in property <string> set-system-icons;
+    in property <string> set-system-icons-note;
     in property <[string]> grid-labels;
     callback grid-picked(bool);
     callback grid-columns-picked(bool);
+    callback system-icons-picked(bool);
     in property <string> set-later;
     in property <string> set-removable;
     in property <string> set-removable-note;
@@ -1897,7 +1919,7 @@ export component MainWindow inherits Window {
     in property <bool> pick-asking;
     /// False past `scour_ui::OPEN_FOLDERS_MOST` folders.
     in property <bool> pick-folders-ok: true;
-    property <bool> sel-in-bar: root.picked > 0 && root.tab != "report";
+    property <bool> sel-shown: root.picked > 0 && root.tab != "report" && root.panel == "";
     /// A row was picked: which, whether to add to the selection, and whether
     /// to take the run from the last one picked.
     callback pick(int, bool, bool);
@@ -1908,6 +1930,7 @@ export component MainWindow inherits Window {
     callback pick-copied();
     callback pick-opened();
     callback pick-dropped();
+    callback pick-focused();
     callback bar-clicked(int);
     callback column-dragged(string, length);
     /// Double-clicked an edge: that column stretches with the window again.
@@ -2315,6 +2338,7 @@ export component MainWindow inherits Window {
                         }
                         if (e.text == Key.DownArrow) {
                             root.selected = min(root.selected + 1, root.rows.length - 1);
+                            root.navigated(root.selected);
                             if ((root.selected + 1) * Theme.row-height + list.viewport-y
                                 > list.visible-height) {
                                 list.viewport-y = list.visible-height
@@ -2324,6 +2348,7 @@ export component MainWindow inherits Window {
                         }
                         if (e.text == Key.UpArrow) {
                             root.selected = max(root.selected - 1, 0);
+                            root.navigated(root.selected);
                             if (root.selected * Theme.row-height + list.viewport-y < 0px) {
                                 list.viewport-y = 0px - root.selected * Theme.row-height;
                             }
@@ -2335,12 +2360,14 @@ export component MainWindow inherits Window {
                                 root.selected + (e.text == Key.PageDown ? root.visible-rows : -root.visible-rows),
                                 0,
                                 root.rows.length - 1);
+                            root.navigated(root.selected);
                             list.viewport-y = min(0px,
                                 -(root.selected * Theme.row-height) + list.visible-height / 2);
                             return accept;
                         }
                         if (e.text == Key.Home || e.text == Key.End) {
                             root.selected = e.text == Key.Home ? 0 : root.rows.length - 1;
+                            root.navigated(root.selected);
                             list.viewport-y = e.text == Key.Home
                                 ? 0px
                                 : min(0px, list.visible-height - root.rows.length * Theme.row-height);
@@ -3656,9 +3683,10 @@ export component MainWindow inherits Window {
                         y: root.slot-from * Theme.row-height;
                         width: parent.width;
                         height: root.slots.length * Theme.row-height;
-                        for slot in root.slots: Rectangle {
+                        for slot in root.slots: slot-box := Rectangle {
                             property <int> i: slot.i;
                             property <Row> here: slot.row;
+                            property <bool> path-hovered: false;
                             visible: slot.i >= 0;
                             x: 0px;
                             y: (i - root.slot-from) * Theme.row-height;
@@ -3712,6 +3740,7 @@ export component MainWindow inherits Window {
                             }
 
                             rowtouch := TouchArea {
+                                mouse-cursor: slot-box.path-hovered ? pointer : default;
                                 clicked => {
                                     root.selected = i;
                                     root.focus-query();
@@ -3768,31 +3797,33 @@ export component MainWindow inherits Window {
                                 // width, which would still take the row's spacing.
                                 if root.iconed: VerticalLayout {
                                     alignment: center;
-                                    width: 15px;
-                                // No thumbnail in a detail row: `thumb` is drawn in
-                                // the grid, where a picture is the question. One image
-                                // whose source follows the kind, not one conditional
-                                // each: a slot is never rebuilt, see `pool`.
-                                Image {
-                                    width: 15px;
-                                    height: 15px;
-                                    source: here.ktoken == "folder" ? @image-url("icons/folder.svg")
-                                        : here.ktoken == "doc" ? @image-url("icons/doc.svg")
-                                        : here.ktoken == "code" ? @image-url("icons/code.svg")
-                                        : here.ktoken == "image" ? @image-url("icons/image.svg")
-                                        : here.ktoken == "video" ? @image-url("icons/video.svg")
-                                        : here.ktoken == "media" ? @image-url("icons/media.svg")
-                                        : here.ktoken == "audio" ? @image-url("icons/audio.svg")
-                                        : here.ktoken == "archive" ? @image-url("icons/archive.svg")
-                                        : here.ktoken == "exec" ? @image-url("icons/exec.svg")
-                                        : here.ktoken == "data" ? @image-url("icons/data.svg")
-                                        : here.ktoken == "config" ? @image-url("icons/config.svg")
-                                        : here.ktoken == "font" ? @image-url("icons/font.svg")
-                                        : here.ktoken == "build" ? @image-url("icons/build.svg")
-                                        : here.ktoken == "file" ? @image-url("icons/file.svg")
-                                        : @image-url("");
-                                    colorize: here.tint;
-                                }
+                                    width: 16px;
+                                    if root.system-icons && here.has-sys-icon: Image {
+                                        width: 16px;
+                                        height: 16px;
+                                        source: here.sys-icon;
+                                        image-fit: contain;
+                                    }
+                                    if !(root.system-icons && here.has-sys-icon): Image {
+                                        width: 15px;
+                                        height: 15px;
+                                        source: here.ktoken == "folder" ? @image-url("icons/folder.svg")
+                                            : here.ktoken == "doc" ? @image-url("icons/doc.svg")
+                                            : here.ktoken == "code" ? @image-url("icons/code.svg")
+                                            : here.ktoken == "image" ? @image-url("icons/image.svg")
+                                            : here.ktoken == "video" ? @image-url("icons/video.svg")
+                                            : here.ktoken == "media" ? @image-url("icons/media.svg")
+                                            : here.ktoken == "audio" ? @image-url("icons/audio.svg")
+                                            : here.ktoken == "archive" ? @image-url("icons/archive.svg")
+                                            : here.ktoken == "exec" ? @image-url("icons/exec.svg")
+                                            : here.ktoken == "data" ? @image-url("icons/data.svg")
+                                            : here.ktoken == "config" ? @image-url("icons/config.svg")
+                                            : here.ktoken == "font" ? @image-url("icons/font.svg")
+                                            : here.ktoken == "build" ? @image-url("icons/build.svg")
+                                            : here.ktoken == "file" ? @image-url("icons/file.svg")
+                                            : @image-url("");
+                                        colorize: here.tint;
+                                    }
                                 }
 
                                 // One loop over the cells: which columns are shown
@@ -3805,7 +3836,7 @@ export component MainWindow inherits Window {
                                     property <Cell> c: here.cells[ci];
                                     // As wide as its heading, icon included: taking
                                     // the icon off twice shifts every later column.
-                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 23px : 0px));
+                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 24px : 0px));
 
                                     if h.id == "name": Marked {
                                         pre: c.pre;
@@ -3813,54 +3844,79 @@ export component MainWindow inherits Window {
                                         post: c.post;
                                         colour: Theme.ink;
                                         width: parent.width;
-                                        // The row's pointer, in this cell, judged
-                                        // by the column table rather than by this
-                                        // element's geometry: a `changed` binding
-                                        // that reads geometry recurses while the
-                                        // repeater lays out. The row owns the touch
-                                        // area, so no click is taken from it.
                                         property <bool> under: rowtouch.has-hover
                                             && rowtouch.mouse-x >= root.cx[ci]
                                             && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
                                         changed under => {
                                             if (self.under && self.preferred-width > self.width) {
+                                                root.tip-owner = i * 32 + ci;
+                                                root.tip-mono = false;
                                                 root.tip-pending = c.pre + c.hit + c.post;
                                                 root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
                                                 root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
-                                            } else if (root.tip-pending == c.pre + c.hit + c.post) {
+                                                if (root.tip-text != "") {
+                                                    root.tip-text = root.tip-pending;
+                                                }
+                                            } else if (self.under || root.tip-owner == i * 32 + ci) {
+                                                root.tip-owner = -1;
                                                 root.tip-pending = "";
                                                 root.tip-text = "";
                                             }
                                         }
                                     }
 
-                                    if h.id != "name": Text {
+                                    if h.id != "name": Rectangle {
                                         width: root.cw[ci];
-                                        text: c.text;
-                                        // The age is the stamp's own colour; `-1` is
-                                        // a column that is not a time at all.
-                                        // Quiet, dates too: the stripe at the row's
-                                        // edge already says how old it is.
-                                        color: c.dim ? Theme.ink-3
-                                             : c.right ? Theme.ink-2 : Theme.ink-3;
-                                        // An empty family is the window's own.
-                                        font-family: c.mono ? Fonts.mono : "";
-                                        font-size: c.mono ? 11.5px : Fonts.small;
-                                        horizontal-alignment: c.right ? right : left;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                                        property <bool> is-path: h.id == "path";
                                         property <bool> under: rowtouch.has-hover
                                             && rowtouch.mouse-x >= root.cx[ci]
                                             && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
                                         changed under => {
-                                            if (self.under && self.preferred-width > self.width) {
-                                                root.tip-pending = c.text;
+                                            if (self.is-path) {
+                                                slot-box.path-hovered = self.under;
+                                            }
+                                            if (self.under && (c.hint != "" || cell-txt.preferred-width > cell-txt.width)) {
+                                                root.tip-owner = i * 32 + ci;
+                                                root.tip-mono = c.mono && c.hint == "";
+                                                root.tip-pending = c.hint != "" ? c.hint : c.text;
                                                 root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
                                                 root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
-                                            } else if (root.tip-pending == c.text) {
+                                                if (root.tip-text != "") {
+                                                    root.tip-text = root.tip-pending;
+                                                }
+                                            } else if (self.under || root.tip-owner == i * 32 + ci) {
+                                                root.tip-owner = -1;
                                                 root.tip-pending = "";
                                                 root.tip-text = "";
                                             }
+                                        }
+                                        if self.is-path && self.under: Rectangle {
+                                            x: -4px;
+                                            y: 0px;
+                                            width: parent.width + 8px;
+                                            height: parent.height;
+                                            background: Theme.q-key.with-alpha(
+                                                (here.picked || i == root.selected) ? 0.16 : 0.11);
+                                        }
+                                        cell-txt := Text {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            text: c.text;
+                                            color: parent.is-path && parent.under ? Theme.q-key
+                                                 : c.dim ? Theme.ink-3
+                                                 : c.right ? Theme.ink-2 : Theme.ink-3;
+                                            font-family: c.mono ? Fonts.mono : "";
+                                            font-size: c.mono ? 11.5px : Fonts.small;
+                                            horizontal-alignment: c.right ? right : left;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        if self.is-path && self.under && c.text != "": Rectangle {
+                                            x: 0px;
+                                            y: parent.height / 2 + 7px;
+                                            width: min(cell-txt.preferred-width, parent.width);
+                                            height: 1px;
+                                            background: Theme.q-key.with-alpha(0.75);
                                         }
                                     }
                                 }
@@ -3970,7 +4026,15 @@ export component MainWindow inherits Window {
                                             // part of what identifies it.
                                             image-fit: contain;
                                         }
-                                        if cell.shot == false: Rectangle {
+                                        if cell.shot == false && root.system-icons && cell.has-sys-icon: Image {
+                                            width: root.pic * 0.72;
+                                            height: root.pic * 0.72;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            source: cell.sys-icon;
+                                            image-fit: contain;
+                                        }
+                                        if cell.shot == false && !(root.system-icons && cell.has-sys-icon): Rectangle {
                                             width: root.pic * 0.55;
                                             height: root.pic * 0.55;
                                             x: (parent.width - self.width) / 2;
@@ -4171,12 +4235,81 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // What can be shown of the file. One box, three answers.
+                    // What can be shown of the file: pages, picture, text, or note.
                     Rectangle {
                         vertical-stretch: 1;
                         min-height: 80px;
 
-                        if root.peek-has-shot: Image {
+                        if root.peek-pages.length > 0: doc-box := Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            property <length> card-w: max(80px, self.width - 28px);
+                            property <length> slot-h: max(80px, self.card-w * root.peek-aspect) + 12px;
+                            property <int> current-page: clamp(
+                                Math.floor((-doc-view.viewport-y + doc-view.visible-height * 0.35) / self.slot-h),
+                                0,
+                                max(0, root.peek-pages.length - 1));
+
+                            changed current-page => {
+                                root.peek-page-scrolled(self.current-page);
+                            }
+
+                            doc-view := ListView {
+                                width: parent.width;
+                                height: parent.height;
+                                for page[idx] in root.peek-pages: Rectangle {
+                                    width: doc-view.visible-width;
+                                    height: doc-box.slot-h;
+
+                                    Rectangle {
+                                        x: 10px;
+                                        y: 6px;
+                                        width: max(60px, parent.width - 20px);
+                                        height: parent.height - 12px;
+                                        background: #ffffff;
+                                        border-width: Theme.hair;
+                                        border-color: Theme.line;
+                                        border-radius: 3px;
+
+                                        if page.ready: Image {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            source: page.shot;
+                                            image-fit: contain;
+                                        }
+
+                                        if !page.ready: Text {
+                                            text: page.number;
+                                            color: #888888;
+                                            font-size: 11.5px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                x: parent.width - self.width - 18px;
+                                y: 10px;
+                                width: page-badge.preferred-width + 14px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: Theme.dark ? #16181dd9 : #ffffffd9;
+                                border-width: Theme.hair;
+                                border-color: Theme.line;
+                                page-badge := Text {
+                                    text: (doc-box.current-page + 1) + " / " + root.peek-pages.length;
+                                    color: Theme.ink;
+                                    font-family: Fonts.mono;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        if root.peek-pages.length == 0 && root.peek-has-shot: Image {
                             width: parent.width - 24px;
                             height: parent.height - 24px;
                             x: 12px;
@@ -4187,7 +4320,7 @@ export component MainWindow inherits Window {
                             image-fit: contain;
                         }
 
-                        if !root.peek-has-shot && root.peek-text != "": Flickable {
+                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != "": Flickable {
                             width: parent.width;
                             height: parent.height;
                             // The wheel scrolls; a drag selects. An interactive
@@ -4229,7 +4362,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if !root.peek-has-shot && root.peek-text == "": Text {
+                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text == "": Text {
                             text: root.peek-note;
                             color: Theme.ink-3;
                             font-size: 11.5px;
@@ -4467,74 +4600,17 @@ export component MainWindow inherits Window {
                 padding-right: 20px;
                 spacing: 10px;
 
-                // What is selected, and what can be done with it, in place of
-                // the count while there is a selection: × first and apart.
-                if root.sel-in-bar: HorizontalLayout {
-                    spacing: 4px;
-                    VerticalLayout {
-                        alignment: center;
-                        Push {
-                            label: "×";
-                            plain: true;
-                            clicked => { root.pick-dropped(); }
-                        }
-                    }
-                    HorizontalLayout {
-                        alignment: start;
-                        Text {
-                            text: root.picked-pre;
-                            color: root.picked-n == "" ? Theme.ink-2 : Theme.ink-3;
-                            font-size: 11.5px;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            max-width: 420px;
-                        }
-                        Text {
-                            text: root.picked-n;
-                            color: Theme.ink;
-                            font-size: 12px;
-                            font-weight: 650;
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: root.picked-post;
-                            color: Theme.ink-3;
-                            font-size: 11.5px;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle { width: 6px; }
-                    VerticalLayout {
-                        alignment: center;
-                        Push {
-                            label: root.pick-copy;
-                            plain: true;
-                            clicked => { root.pick-copied(); }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Push {
-                            label: root.pick-folders;
-                            plain: true;
-                            asking: root.pick-asking;
-                            enabled: root.pick-folders-ok;
-                            clicked => { root.pick-opened(); }
-                        }
-                    }
-                }
-
                 // Three claims of different weight: the count is the answer,
                 // the cost wears the "today" hue, the walk stays quiet. `meter`
                 // holds the sentences that are not numbers; never both at once.
-                if !root.sel-in-bar && root.notice != "": Text {
+                if root.notice != "": Text {
                     text: root.notice;
                     color: Theme.ink-2;
                     font-size: 11.5px;
                     vertical-alignment: center;
                 }
 
-                if !root.sel-in-bar && root.notice == "" && root.meter-count != "": HorizontalLayout {
+                if root.notice == "" && root.meter-count != "": HorizontalLayout {
                     spacing: 6px;
 
                     Text {
@@ -4617,7 +4693,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if !root.sel-in-bar && root.notice == "" && root.meter-count == "": Text {
+                if root.notice == "" && root.meter-count == "": Text {
                     text: root.meter;
                     color: Theme.ink-3;
                     font-size: 11.5px;
@@ -4668,6 +4744,92 @@ export component MainWindow inherits Window {
         }
 
     }
+
+        // What is selected, flush on top of the status bar at the left edge
+        // like a browser's link preview: never hides the status line.
+        if root.sel-shown: Rectangle {
+            x: -Theme.hair;
+            y: parent.height - 28px - self.height + Theme.hair;
+            width: min(sel-line.preferred-width, max(180px, parent.width - root.peek-w - 12px));
+            height: 28px;
+            background: Theme.dark ? Theme.panel-2 : Theme.panel;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            border-top-right-radius: 6px;
+            drop-shadow-blur: 10px;
+            drop-shadow-offset-y: -2px;
+            drop-shadow-color: #0000001a;
+
+            TouchArea {}
+
+            sel-line := HorizontalLayout {
+                padding-left: 10px + Theme.hair;
+                padding-right: 10px;
+                spacing: 4px;
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: "×";
+                        plain: true;
+                        clicked => { root.pick-dropped(); }
+                    }
+                }
+                Rectangle {
+                    border-radius: 4px;
+                    background: pick-jump.has-hover ? Theme.hover : transparent;
+                    pick-jump := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.pick-focused(); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: start;
+                        Text {
+                            text: root.picked-pre;
+                            color: pick-jump.has-hover ? Theme.ink
+                                : root.picked-n == "" ? Theme.ink-2 : Theme.ink-3;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            max-width: min(420px, max(80px, root.width - root.peek-w - 420px));
+                        }
+                        Text {
+                            text: root.picked-n;
+                            color: Theme.ink;
+                            font-size: 12px;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.picked-post;
+                            color: pick-jump.has-hover ? Theme.ink-2 : Theme.ink-3;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                Rectangle { width: 6px; }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.pick-copy;
+                        plain: true;
+                        clicked => { root.pick-copied(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.pick-folders;
+                        plain: true;
+                        asking: root.pick-asking;
+                        enabled: root.pick-folders-ok;
+                        clicked => { root.pick-opened(); }
+                    }
+                }
+            }
+        }
 
         // What was searched before, hanging over what is under the query row —
         // which is why it is drawn here and not inside that row. Placed at the
@@ -5236,6 +5398,17 @@ export component MainWindow inherits Window {
                                             values: ["1", "2", "5", "15", "60"];
                                             value: root.refresh-choice;
                                             picked(v) => { root.refresh-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-system-icons;
+                                        note: root.set-system-icons-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.system-icons ? "on" : "off";
+                                            picked(v) => { root.system-icons-picked(v == "on"); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }
@@ -6249,10 +6422,19 @@ export component MainWindow inherits Window {
         triggered => { root.tip-text = root.tip-pending; }
     }
 
-    // The cut text, whole. Below the row and near the pointer, kept on screen;
-    // a fixed width so the height can come from the text without a cycle.
+    // Cell tooltip sized dynamically to its content up to the window's width;
+    // `tip-probe` has no wrap so `preferred-width` avoids any layout cycle.
+    tip-probe := Text {
+        visible: false;
+        text: root.tip-text;
+        font-family: root.tip-mono ? Fonts.mono : "";
+        font-size: root.tip-mono ? 11.5px : Fonts.small;
+        overflow: elide;
+    }
+
     if root.tip-text != "": Rectangle {
-        width: min(520px, root.width - 16px);
+        property <length> cap-w: max(120px, min(880px, root.width - 16px));
+        width: clamp(tip-probe.preferred-width + 22px, 44px, self.cap-w);
         height: tip-label.preferred-height + 12px;
         x: max(8px, min(root.tip-x, root.width - self.width - 8px));
         y: root.tip-y + self.height > root.height - 8px
@@ -6260,7 +6442,7 @@ export component MainWindow inherits Window {
         background: Theme.panel;
         border-width: Theme.hair;
         border-color: Theme.line;
-        border-radius: 3px;
+        border-radius: 4px;
         drop-shadow-blur: 12px;
         drop-shadow-color: #00000060;
         drop-shadow-offset-y: 4px;
@@ -6270,8 +6452,8 @@ export component MainWindow inherits Window {
             width: parent.width - 20px;
             text: root.tip-text;
             color: Theme.ink;
-            font-family: Fonts.mono;
-            font-size: 11.5px;
+            font-family: root.tip-mono ? Fonts.mono : "";
+            font-size: root.tip-mono ? 11.5px : Fonts.small;
             wrap: word-wrap;
         }
     }

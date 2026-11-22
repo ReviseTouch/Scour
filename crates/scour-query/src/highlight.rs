@@ -42,8 +42,9 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
             // A value continued across the space carries the term's exclusion;
             // two alternatives either side of one do not.
             let list_join = list.is_some()
-                && next_word(&toks, i).is_some_and(|t| !t.starts_with('"'))
-                && (expect_value || next_word(&toks, i).is_some_and(|t| t.starts_with(';')));
+                && next_word(&toks, i).is_some_and(|t| {
+                    crate::parse::can_join_list(t) && (expect_value || t.starts_with(';'))
+                });
             let joins = beside_alt || list_join;
             let role = if joins { Role::Sep } else { Role::Space };
             let span = Span::new(start, token.len(), role);
@@ -57,9 +58,9 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
             }
             continue;
         }
-        // A quoted run is never a continuation; it closes the list behind it.
+        // A continuation stays in the list only while its items look like list values.
         if let Some(f) = list
-            && !token.starts_with('"')
+            && crate::parse::can_join_list(token)
             && (expect_value || token.starts_with(';'))
         {
             let mark = out.len();
@@ -72,9 +73,14 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 // A separator alone means its value is not written yet.
                 expect_value = true;
             }
+            let (list_part, after_semi) = if rest.is_empty() {
+                ("", None)
+            } else {
+                crate::parse::split_list_token(rest)
+            };
             // A `|` ends the value and starts an alternative: `ext:rs ; i|j`
             // is a two-extension filter or the word `j`.
-            let mut pieces = crate::parse::split_outside_quotes(rest, '|').into_iter();
+            let mut pieces = crate::parse::split_outside_quotes(list_part, '|').into_iter();
             let first = pieces.next().unwrap_or("");
             if !first.is_empty() {
                 expect_value = first.ends_with(';');
@@ -96,12 +102,21 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 expect_value = false;
                 list_not = false;
             }
+            if let Some(tail_terms) = after_semi {
+                out.push(Span::new(at, 1, Role::Space));
+                at += 1;
+                list_not = term(&mut out, at, tail_terms, now);
+                let tail = last_term_piece(tail_terms);
+                list = open_list_field(tail);
+                expect_value = list.is_some() && tail.ends_with(';');
+            }
             continue;
         }
         let mark = out.len();
-        list_not = term(&mut out, start, token, now) | lone_bang;
+        let pieces = term_pieces(token);
+        list_not = term(&mut out, start, token, now) | (lone_bang && pieces.len() == 1);
         // Only the last term in a token continues across the space.
-        let tail = *bang_pieces(token).last().unwrap_or(&token);
+        let tail = last_term_piece(token);
         // The first alternative of the first term and no further: `! d;e` is
         // `!d e`, two terms with only the first excluded.
         let had_bang = std::mem::take(&mut lone_bang);
@@ -125,7 +140,7 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
         // A token of nothing but separators does not use up a pending `!`:
         // `! ; a` excludes `a`.
         lone_bang = token == "!" || (had_bang && token.chars().all(|c| c == ';'));
-        list = field_of(tail);
+        list = open_list_field(tail);
         expect_value = list.is_some() && tail.ends_with(';');
     }
     absorb_separators(&mut out, input);
@@ -198,6 +213,17 @@ fn drops(token: &str, names: &[&str], now: i64) -> bool {
         return false;
     };
     names.contains(&f.name) && fields::accepts(f, &DefaultFolder::of(&value.replace('"', "")), now)
+}
+
+/// The list field `tail` leaves open for a following `;`, if any.
+fn open_list_field(tail: &str) -> Option<&'static fields::Field> {
+    crate::parse::list_field(tail)
+        .filter(|_| crate::parse::split_outside_quotes(tail, '|').len() == 1)
+}
+
+/// The final term piece inside `token` after `;` and `!` cuts.
+fn last_term_piece(token: &str) -> &str {
+    term_pieces(token).last().map(|(p, _)| *p).unwrap_or(token)
 }
 
 /// The field a token filters on, if it is a field term at all.
@@ -302,7 +328,7 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
             out.push(Span::new(at, 1, Role::Space));
             at += 1;
         }
-        negated |= one_term(out, at, piece, now);
+        negated = one_term(out, at, piece, now);
         at += piece.len();
     }
     negated
@@ -328,14 +354,8 @@ fn one_term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
 /// `;`. Mirrors `parse::split_semicolons` and `parse::split_bangs`: the `;` is
 /// consumed, a `!` stays at the head of the piece it negates.
 fn term_pieces(text: &str) -> Vec<(&str, bool)> {
-    if text.starts_with('"') || field_of(text).is_some() {
-        return vec![(text, false)];
-    }
     let mut out = Vec::new();
-    for (n, part) in crate::parse::split_outside_quotes(text, ';')
-        .into_iter()
-        .enumerate()
-    {
+    for (n, part) in crate::parse::cut_semicolons(text).into_iter().enumerate() {
         let mut first = true;
         for piece in bang_pieces(part) {
             out.push((piece, first && n > 0));
@@ -455,7 +475,7 @@ fn value_spans(out: &mut Vec<Span>, start: usize, value: &str, f: &fields::Field
         }
     }
     // A list field's separators are syntax too.
-    if f.takes == Takes::Ext {
+    if f.takes.is_list() {
         for (i, part) in rest.split(';').enumerate() {
             if i > 0 {
                 out.push(Span::new(at, 1, Role::Sep));
@@ -550,7 +570,14 @@ pub fn complete(input: &str, cursor: usize) -> Vec<Completion> {
 
 /// The values worth offering for one field.
 fn values_for(f: &fields::Field, written_name: &str, typed: &str) -> Vec<Completion> {
-    let prefix = DefaultFolder::of(typed);
+    let (head, tail) = if f.takes == Takes::Kind
+        && let Some(idx) = typed.rfind(';')
+    {
+        (&typed[..=idx], &typed[idx + 1..])
+    } else {
+        ("", typed)
+    };
+    let prefix = DefaultFolder::of(tail);
     let list: &[&str] = match f.takes {
         Takes::Kind => KIND_VALUES,
         Takes::Time => TIME_VALUES,
@@ -559,7 +586,7 @@ fn values_for(f: &fields::Field, written_name: &str, typed: &str) -> Vec<Complet
     list.iter()
         .filter(|v| v.starts_with(&prefix))
         .map(|v| Completion {
-            insert: format!("{written_name}:{v}"),
+            insert: format!("{written_name}:{head}{v}"),
             label: format!("{}:{v}", f.name),
             about: f.about.to_owned(),
             kind: CompletionKind::Value,
@@ -927,6 +954,18 @@ mod tests {
             "değiştirme !öğe",
             "path:/home/a!b",
             "under:/home rapor !tmp",
+            "*.docx kind:doc;",
+            "*.docx kind:doc ;",
+            "kind:doc;image ;",
+            "size:>1mb;",
+            "size:>1mb ; dm:7d ;",
+            "folder: ; *.rs ;",
+            "\"annual report\";ext:pdf;",
+            "ext:rs;!tmp",
+            "ext:rs ; !tmp",
+            "kind:doc;*.docx",
+            "kind:doc ; *.docx",
+            ";;;",
         ] {
             agree(q, NOW);
             covers(q);

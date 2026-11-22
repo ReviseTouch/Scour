@@ -48,9 +48,45 @@ pub fn existing(path: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// The freedesktop size bucket and pixel edge for a requested preview size.
+pub fn size_dir(px: u32) -> (&'static str, u32) {
+    if px <= 256 {
+        ("large", 256)
+    } else if px <= 512 {
+        ("x-large", 512)
+    } else {
+        ("xx-large", 1024)
+    }
+}
+
+/// A cached thumbnail at least `min_px` wide, when one already exists.
+pub fn existing_for(path: &str, min_px: u32) -> Option<PathBuf> {
+    if path.is_empty() {
+        return None;
+    }
+    if min_px <= 256 {
+        return existing(path);
+    }
+    let name = name_of(path);
+    let buckets: &[&str] = if min_px <= 512 {
+        &["x-large", "xx-large"]
+    } else {
+        &["xx-large"]
+    };
+    buckets
+        .iter()
+        .map(|size| dir().join(size).join(&name))
+        .find(|p| p.is_file())
+}
+
 /// Where a thumbnail of this file goes, at the size Scour asks for.
 pub fn destination(path: &str) -> PathBuf {
     dir().join("large").join(name_of(path))
+}
+
+/// Where a thumbnail of this file goes for a specific requested pixel size.
+pub fn destination_for(path: &str, px: u32) -> PathBuf {
+    dir().join(size_dir(px).0).join(name_of(path))
 }
 
 /// Where the note saying "this one cannot be done" goes.

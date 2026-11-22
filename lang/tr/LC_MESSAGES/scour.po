@@ -2419,3 +2419,9 @@ msgstr "devam et"
 
 msgid "read again"
 msgstr "sıfırla"
+
+msgid "System icons"
+msgstr "Sistem simgeleri"
+
+msgid "The desktop's own file and folder icons instead of built-in glyphs."
+msgstr "Yerleşik çizimler yerine masaüstünün kendi dosya ve klasör simgeleri."

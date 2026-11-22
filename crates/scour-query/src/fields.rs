@@ -25,10 +25,17 @@ pub enum Takes {
     Size,
     /// A relative window, a calendar day, or either with a comparison.
     Time,
-    /// One of the names in [`Kind::from_name`].
+    /// One of the names in [`Kind::from_name`], or several separated by `;`.
     Kind,
     /// Nothing at all: `file:` and `folder:` are complete as written.
     Nothing,
+}
+
+impl Takes {
+    /// Whether `;` separates values inside this field rather than ending the term.
+    pub const fn is_list(self) -> bool {
+        matches!(self, Self::Ext | Self::Kind)
+    }
 }
 
 /// One field: its canonical spelling, what else it answers to, and what it
@@ -338,8 +345,21 @@ pub fn accepts(field: &Field, folded_value: &str, now: i64) -> bool {
             .any(|e| !e.is_empty()),
         Takes::Size => parse_size_value(folded_value).is_some(),
         Takes::Time => parse_time_value(folded_value, now).is_some(),
-        Takes::Kind => Kind::from_name(folded_value).is_some(),
+        Takes::Kind => parse_kinds(folded_value).is_some(),
     }
+}
+
+/// Parse one or more `;`-separated kind names, ignoring trailing or doubled `;`.
+pub(crate) fn parse_kinds(folded_value: &str) -> Option<Vec<Kind>> {
+    let mut out = Vec::new();
+    for part in folded_value.split(';').filter(|p| !p.is_empty()) {
+        for &k in Kind::from_name(part)? {
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// The numeric half of `size:`, without building a [`Match`](scour_core::Match).

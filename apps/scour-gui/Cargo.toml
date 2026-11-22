@@ -77,6 +77,9 @@ scour-name     = { workspace = true }
 # Which programs claim a kind of file, for `Open with…`.
 scour-openers  = { workspace = true }
 scour-sendto   = { workspace = true }
+# Already in the tree through `i-slint-core` with the exact same features:
+# decodes cached PNGs and local JPEGs into RGBA pixel buffers off the UI thread.
+image          = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 anyhow       = { workspace = true }
 # The same two flags the terminal face has, spelled the same way — and an
 # answer to `--version` that is not a window.

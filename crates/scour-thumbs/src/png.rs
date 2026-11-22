@@ -68,27 +68,52 @@ pub fn stamp_of(path: &std::path::Path) -> Option<i64> {
 /// The smallest valid PNG, which is what a failure note is made of: the standard
 /// wants a real image, and one transparent pixel costs 69 bytes.
 pub fn one_transparent_pixel() -> Vec<u8> {
-    // 1×1, 8 bits, colour type 6 (RGBA), no compression/filter/interlace.
-    let mut header = Vec::new();
-    header.extend_from_slice(&1u32.to_be_bytes());
-    header.extend_from_slice(&1u32.to_be_bytes());
+    encode_rgba(1, 1, &[0, 0, 0, 0]).expect("1x1 RGBA is valid")
+}
+
+/// Encode straight 8-bit RGBA pixels as an uncompressed PNG. Used for local
+/// loopback transfer where CPU time matters more than wire size.
+pub fn encode_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let row = (width as usize).checked_mul(4)?;
+    let expected = row.checked_mul(height as usize)?;
+    if width == 0 || height == 0 || rgba.len() != expected {
+        return None;
+    }
+
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
     header.extend_from_slice(&[8, 6, 0, 0, 0]);
 
-    // A zlib stream of one stored deflate block: the scanline's filter byte and
-    // four zero channels. Hand-written rather than a deflate dependency.
-    let raw = [0u8; 5];
-    let mut data = vec![0x78, 0x01]; // zlib header: deflate, 32 KiB window
-    data.push(0x01); // final block, stored
-    data.extend_from_slice(&(raw.len() as u16).to_le_bytes());
-    data.extend_from_slice(&(!(raw.len() as u16)).to_le_bytes());
-    data.extend_from_slice(&raw);
-    data.extend_from_slice(&adler32(&raw).to_be_bytes());
+    // Filter byte 0 per scanline, wrapped in stored deflate blocks (65,535 B max).
+    let raw_len = (row + 1).checked_mul(height as usize)?;
+    let mut raw = Vec::with_capacity(raw_len);
+    for scanline in rgba.chunks_exact(row) {
+        raw.push(0);
+        raw.extend_from_slice(scanline);
+    }
 
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let blocks = raw.len().div_ceil(65_535).max(1);
+    let mut zlib = Vec::with_capacity(2 + raw.len() + blocks * 5 + 4);
+    zlib.extend_from_slice(&[0x78, 0x01]);
+    let mut rest = raw.as_slice();
+    while !rest.is_empty() {
+        let take = rest.len().min(65_535);
+        let final_block = u8::from(take == rest.len());
+        zlib.push(final_block);
+        zlib.extend_from_slice(&(take as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(take as u16)).to_le_bytes());
+        zlib.extend_from_slice(&rest[..take]);
+        rest = &rest[take..];
+    }
+    zlib.extend_from_slice(&adler32(&raw).to_be_bytes());
+
+    let mut out = Vec::with_capacity(8 + 25 + zlib.len() + 12 + 12);
+    out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
     out.extend_from_slice(&chunk(b"IHDR", &header));
-    out.extend_from_slice(&chunk(b"IDAT", &data));
+    out.extend_from_slice(&chunk(b"IDAT", &zlib));
     out.extend_from_slice(&chunk(b"IEND", &[]));
-    out
+    Some(out)
 }
 
 /// Every chunk in order, or `None` if the run does not add up. Strict: a
@@ -261,5 +286,28 @@ mod tests {
         std::fs::write(&at, one_transparent_pixel()).unwrap();
         assert_eq!(stamp_of(&at), None);
         assert_eq!(stamp_of(&dir.path().join("absent.png")), None);
+    }
+
+    #[test]
+    fn encode_rgba_rejects_bad_dimensions_and_splits_large_images() {
+        assert!(encode_rgba(0, 1, &[]).is_none());
+        assert!(encode_rgba(1, 0, &[]).is_none());
+        assert!(encode_rgba(2, 2, &[0; 12]).is_none());
+
+        // 160×160 RGBA = 102,560 raw bytes: spans two stored deflate blocks.
+        let rgba = vec![0x80u8; 160 * 160 * 4];
+        let png = encode_rgba(160, 160, &rgba).expect("valid large RGBA");
+        let parsed = chunks(&png[8..]).expect("valid PNG chunks");
+        assert_eq!(&parsed[0].0, b"IHDR");
+        assert_eq!(
+            u32::from_be_bytes(parsed[0].1[0..4].try_into().unwrap()),
+            160
+        );
+        assert_eq!(
+            u32::from_be_bytes(parsed[0].1[4..8].try_into().unwrap()),
+            160
+        );
+        assert_eq!(&parsed[1].0, b"IDAT");
+        assert_eq!(&parsed[2].0, b"IEND");
     }
 }

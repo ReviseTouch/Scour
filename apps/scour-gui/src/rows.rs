@@ -25,6 +25,8 @@ fn same_row(a: &Row, b: &Row) -> bool {
         && a.picked == b.picked
         && a.thumb == b.thumb
         && a.shot == b.shot
+        && a.has_sys_icon == b.has_sys_icon
+        && a.sys_icon == b.sys_icon
         && a.runs == b.runs
         && a.cells.row_count() == b.cells.row_count()
         && a.cells.iter().zip(b.cells.iter()).all(|(x, y)| x == y)
@@ -124,6 +126,7 @@ pub struct Shape<'a> {
     /// `this volume does not record reads…`, already translated.
     pub frozen_note: &'a str,
     pub now: i64,
+    pub system_icons: bool,
 }
 
 /// Does this path sit on a volume that has stopped recording reads?
@@ -230,6 +233,11 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         .iter()
         .map(|c| cell_of(h, c.id, shape, terms))
         .collect();
+    let (sys_icon, has_sys_icon) = if shape.system_icons {
+        cached_system_icon(h)
+    } else {
+        (blank(), false)
+    };
     Row {
         cells: slint::ModelRc::new(slint::VecModel::from(cells)),
         name: shown_name(h).into(),
@@ -243,8 +251,65 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         // Empty; filled in after the row is on screen by `look_for_pictures`.
         thumb: blank(),
         shot: false,
+        sys_icon,
+        has_sys_icon,
         runs: !h.is_dir && scour_core::runs_when_opened(h.name(), h.meta.mode),
     }
+}
+
+fn cached_system_icon(h: &Hit) -> (slint::Image, bool) {
+    use scour_thumbs::sysicon::{SystemIcon, key_for_entry, lookup};
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Option<slint::Image>>> =
+            RefCell::new(HashMap::new());
+    }
+    let key = key_for_entry(&h.path, h.name(), h.is_dir, h.kind.token());
+    CACHE.with(|cell| {
+        if let Some(found) = cell.borrow().get(&key) {
+            return match found {
+                Some(img) => (img.clone(), true),
+                None => (blank(), false),
+            };
+        }
+        // Request 64px so vector SVGs stay vector and raster OS icons stay sharp on HiDPI and grid views.
+        let built = lookup(&key, 64).and_then(|ic| match ic {
+            SystemIcon::Svg(bytes) => slint::Image::load_from_svg_data(&bytes).ok(),
+            SystemIcon::Png(bytes) => {
+                let rgba = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+                    .ok()?
+                    .into_rgba8();
+                let (w, h) = rgba.dimensions();
+                (w > 0 && h > 0).then(|| {
+                    slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                        rgba.as_raw(),
+                        w,
+                        h,
+                    ))
+                })
+            }
+            SystemIcon::Rgba {
+                width,
+                height,
+                rgba,
+            } => (width > 0 && height > 0 && rgba.len() == (width as usize * height as usize * 4))
+                .then(|| {
+                    slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                        &rgba, width, height,
+                    ))
+                }),
+        });
+        let mut map = cell.borrow_mut();
+        if map.len() >= 1024 {
+            map.clear();
+        }
+        map.insert(key, built.clone());
+        match built {
+            Some(img) => (img, true),
+            None => (blank(), false),
+        }
+    })
 }
 
 /// The decimal mark this window is punctuating with. `main` owns the language;
@@ -650,6 +715,27 @@ impl Rows {
         })
     }
 
+    /// Find which row index holds `path` among the pages currently in hand.
+    pub fn find_path(&self, path: &str) -> Option<usize> {
+        if path.is_empty() {
+            return None;
+        }
+        let pages = self.pages.borrow();
+        let mut held: Vec<usize> = pages.pages().collect();
+        held.sort_unstable();
+        for page in held {
+            for i in 0..SPAN {
+                let Some(kept) = pages.at(page * SPAN + i) else {
+                    break;
+                };
+                if kept.row.path.as_str() == path {
+                    return Some(page * SPAN + i);
+                }
+            }
+        }
+        None
+    }
+
     /// Paint the rows a selection holds, and unpaint the rest. Walks what is in
     /// hand, not what is on screen: a row scrolled away comes back selected.
     pub fn mark_picked(&self, picked: &std::collections::HashSet<String>) {
@@ -675,72 +761,97 @@ impl Rows {
         }
     }
 
-    /// Look up the pictures for the rows in sight and draw the ones on disk.
-    /// Returns `(drawn, worth asking for)`. On the drawing thread, so bounded to
-    /// the range, to unlooked rows and to `batch`: four `stat` calls each.
-    pub fn look_for_pictures(&self, from: usize, to: usize, batch: usize) -> (usize, Vec<String>) {
+    /// Inspect the rows in sight and split them into `(ready for off-thread
+    /// pixel decode, worth asking the service to generate)`. Bounded to the
+    /// range, to unlooked rows and to `batch`.
+    pub fn look_for_pictures(
+        &self,
+        from: usize,
+        to: usize,
+        batch: usize,
+    ) -> (Vec<(String, crate::tiles::TileSource)>, Vec<String>) {
         if self.unlooked.get() == 0 {
-            return (0, Vec::new());
+            return (Vec::new(), Vec::new());
         }
-        let mut drawn = Vec::new();
+        let mut decode = Vec::new();
         let mut ask = Vec::new();
         let mut looked = 0usize;
+        let mut pages = self.pages.borrow_mut();
+        let mut row = from;
+        while row < to && looked < batch {
+            let page = Self::page_of(row);
+            let Some(rows) = pages.rows_mut(page) else {
+                // A page nobody has fetched: skip it whole, not row by row.
+                row = (page + 1) * SPAN;
+                continue;
+            };
+            let Some(kept) = rows.get_mut(row % SPAN) else {
+                row += 1;
+                continue;
+            };
+            if kept.pic != Pic::Unknown || kept.row.path.is_empty() {
+                row += 1;
+                continue;
+            }
+            looked += 1;
+            self.unlooked.set(self.unlooked.get().saturating_sub(1));
+            let path = kept.row.path.to_string();
+            let token = kept.row.ktoken.to_string();
+            if scour_thumbs::never_for(&token) {
+                kept.pic = Pic::Nothing;
+            } else if let Some(picture) = scour_thumbs::cache::existing(&path) {
+                kept.pic = Pic::Missing;
+                decode.push((path, crate::tiles::TileSource::CachedPng(picture)));
+            } else if scour_thumbs::may_native(&path, &token) {
+                kept.pic = Pic::Missing;
+                decode.push((path, crate::tiles::TileSource::Native));
+            } else if scour_thumbs::may(&path, &token) {
+                kept.pic = Pic::Missing;
+                ask.push(path);
+            } else if crate::has_direct_image_ext(&path) {
+                kept.pic = Pic::Missing;
+                decode.push((path, crate::tiles::TileSource::DirectImage));
+            } else {
+                kept.pic = Pic::Nothing;
+            }
+            row += 1;
+        }
+        (decode, ask)
+    }
+
+    /// Attach a decoded RGBA pixel buffer (or record its absence) to any held
+    /// row waiting on `path`, returning the row indices whose drawing changed.
+    pub fn give_picture(&self, path: &str, outcome: &crate::tiles::TileOutcome) -> Vec<usize> {
+        let mut drawn = Vec::new();
         {
             let mut pages = self.pages.borrow_mut();
-            let mut row = from;
-            while row < to && looked < batch {
-                let page = Self::page_of(row);
+            let held: Vec<usize> = pages.pages().collect();
+            for page in held {
                 let Some(rows) = pages.rows_mut(page) else {
-                    // A page nobody has fetched: skip it whole, not row by row.
-                    row = (page + 1) * SPAN;
                     continue;
                 };
-                let Some(kept) = rows.get_mut(row % SPAN) else {
-                    row += 1;
-                    continue;
-                };
-                if kept.pic != Pic::Unknown || kept.row.path.is_empty() {
-                    row += 1;
-                    continue;
-                }
-                looked += 1;
-                self.unlooked.set(self.unlooked.get().saturating_sub(1));
-                let path = kept.row.path.to_string();
-                let token = kept.row.ktoken.to_string();
-                // Kind first: `never_for` matches a word, `existing` is four
-                // `stat` calls, and for nearly every row the answer is no.
-                let found = if scour_thumbs::never_for(&token) {
-                    None
-                } else {
-                    scour_thumbs::cache::existing(&path)
-                };
-                match found {
-                    Some(picture) => match slint::Image::load_from_path(&picture) {
-                        Ok(image) => {
-                            kept.row.thumb = image;
+                for (i, kept) in rows.iter_mut().enumerate() {
+                    if kept.pic != Pic::Missing || kept.row.path.as_str() != path {
+                        continue;
+                    }
+                    match outcome {
+                        crate::tiles::TileOutcome::Pixels(buf) => {
+                            kept.row.thumb = slint::Image::from_rgba8(buf.clone());
                             kept.row.shot = true;
                             kept.pic = Pic::Shown;
-                            drawn.push(row);
+                            drawn.push(page * SPAN + i);
                         }
-                        // A cached file that will not decode is not worth remaking.
-                        Err(e) => {
-                            crate::trace(&format!("{} would not decode: {e}", picture.display()));
+                        crate::tiles::TileOutcome::Nothing => {
                             kept.pic = Pic::Nothing;
                         }
-                    },
-                    None if scour_thumbs::may(&path, &token) => {
-                        kept.pic = Pic::Missing;
-                        ask.push(path);
                     }
-                    None => kept.pic = Pic::Nothing,
                 }
-                row += 1;
             }
         }
-        for row in &drawn {
-            self.changed(*row);
+        for &row in &drawn {
+            self.changed(row);
         }
-        (drawn.len(), ask)
+        drawn
     }
 
     /// The service has made these; look at them again on the next tick. Only the
@@ -973,6 +1084,7 @@ impl slint::Model for Slots {
                     i: -1,
                     row: Row {
                         thumb: blank(),
+                        sys_icon: blank(),
                         ..Row::default()
                     },
                 },
@@ -1481,5 +1593,24 @@ mod model_tests {
         rows.empty();
         assert_eq!(rows.path_at(0), None);
         assert_eq!(rows.next_page(0, 24, true, true), Some(0));
+    }
+
+    #[test]
+    fn find_path_tracks_a_row_as_arrivals_push_it_down_and_across_pages() {
+        let rows = Rows::default();
+        rows.put(0, named(&["/a/doc.docx", "/a/old.txt"]), Vec::new(), 10_000);
+        assert_eq!(rows.find_path("/a/doc.docx"), Some(0));
+
+        rows.put(
+            0,
+            named(&["/a/new1.docx", "/a/new2.docx", "/a/doc.docx", "/a/old.txt"]),
+            Vec::new(),
+            10_000,
+        );
+        assert_eq!(rows.find_path("/a/doc.docx"), Some(2));
+
+        rows.put(1, named(&["/a/later.docx"]), Vec::new(), 10_000);
+        assert_eq!(rows.find_path("/a/later.docx"), Some(SPAN));
+        assert_eq!(rows.find_path("/a/missing.docx"), None);
     }
 }

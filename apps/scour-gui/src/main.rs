@@ -15,10 +15,13 @@ mod hotkey;
 mod install;
 mod link;
 mod paste;
+mod peek;
+mod pixels;
 mod report;
 mod rows;
 mod service_mode;
 mod tabs;
+mod tiles;
 mod tray;
 
 use std::cell::RefCell;
@@ -313,15 +316,84 @@ fn said(w: &MainWindow, sentence: slint::SharedString) {
     w.set_meter(sentence);
 }
 
+#[derive(Default)]
+struct Selection {
+    rows: std::collections::BTreeMap<String, rows::Pick>,
+    at: std::collections::HashMap<String, usize>,
+    focused: Option<String>,
+    anchor_path: Option<String>,
+    anchor_row: i32,
+    pinned: bool,
+    chasing: u8,
+}
+
+impl Selection {
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.at.clear();
+        self.focused = None;
+        self.anchor_path = None;
+        self.anchor_row = 0;
+        self.pinned = false;
+        self.chasing = 0;
+    }
+
+    fn anchor_in(&self, rows: &rows::Rows) -> i32 {
+        self.anchor_path
+            .as_deref()
+            .and_then(|p| rows.find_path(p))
+            .map(|r| r as i32)
+            .unwrap_or(self.anchor_row)
+    }
+
+    fn refresh(&mut self, rows: &rows::Rows) {
+        for (path, pick) in &mut self.rows {
+            if let Some(at) = rows.find_path(path) {
+                self.at.insert(path.clone(), at);
+                if let Some(fresh) = rows.pick_at(at) {
+                    *pick = fresh;
+                }
+            }
+        }
+    }
+}
+
+fn row_geometry(w: &MainWindow, row: usize, bar: bool) -> (f32, f32, f32, f32) {
+    let (line, line_h) = if w.get_grid() {
+        let per = w.get_per_line().max(1) as usize;
+        (row / per, w.get_tile_h())
+    } else {
+        (row, w.global::<Theme>().get_row_height())
+    };
+    let down = w.get_view_down().max(0.0);
+    let clearance = if bar { 32.0 } else { 0.0 };
+    let vis = (w.get_list_shown() - clearance).max(line_h);
+    (line as f32 * line_h, line_h, down, vis)
+}
+
+fn row_in_view(w: &MainWindow, row: usize, bar: bool) -> bool {
+    let (top, h, down, vis) = row_geometry(w, row, bar);
+    top + h > down && top < down + vis
+}
+
+fn scroll_to_keep_row(w: &MainWindow, row: usize, bar: bool) -> Option<f32> {
+    let (top, h, down, vis) = row_geometry(w, row, bar);
+    if top + h > down + vis {
+        Some(top + h - vis)
+    } else if top < down {
+        Some(top)
+    } else {
+        None
+    }
+}
+
 /// What the selection bar says. Folders are counted, never weighed: a total that
 /// mixed the size column's `~` with exact bytes is one number from two claims.
-fn picked_line(
-    cat: &Catalogue,
-    picks: &std::collections::BTreeMap<usize, rows::Pick>,
-) -> (String, String, String) {
-    let dirs = picks.values().filter(|p| p.is_dir).count();
-    let files = picks.len() - dirs;
+fn picked_line(cat: &Catalogue, picks: &Selection) -> (String, String, String) {
+    let dirs = picks.rows.values().filter(|p| p.is_dir).count();
+    let files = picks.rows.len() - dirs;
     let bytes: u64 = picks
+        .rows
         .values()
         .filter(|p| !p.is_dir)
         .map(|p| p.bytes.max(0) as u64)
@@ -334,7 +406,7 @@ fn picked_line(
         after.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
     }
     // One row: its path, which says more than "1 selected".
-    if let [one] = picks.values().collect::<Vec<_>>().as_slice() {
+    if let [one] = picks.rows.values().collect::<Vec<_>>().as_slice() {
         let tail = after.join("  ·  ");
         let tail = if tail.is_empty() {
             String::new()
@@ -353,12 +425,16 @@ fn picked_line(
         post.push_str("  ·  ");
         post.push_str(&part);
     }
-    (pre.to_string(), grouped(picks.len() as u64), post)
+    (pre.to_string(), grouped(picks.rows.len() as u64), post)
 }
 
 /// The folders a selection sits in, each once: eleven files, one window.
-fn folders_of(picks: &std::collections::BTreeMap<usize, rows::Pick>) -> Vec<String> {
-    let mut seen: Vec<String> = picks.values().map(|p| p.folder().to_string()).collect();
+fn folders_of(picks: &Selection) -> Vec<String> {
+    let mut seen: Vec<String> = picks
+        .rows
+        .values()
+        .map(|p| p.folder().to_string())
+        .collect();
     seen.sort();
     seen.dedup();
     seen
@@ -369,10 +445,10 @@ fn show_picks(
     w: &MainWindow,
     cat: &Catalogue,
     rows: &Rc<rows::Rows>,
-    picks: &std::collections::BTreeMap<usize, rows::Pick>,
+    picks: &Selection,
     asking: bool,
 ) {
-    w.set_picked(picks.len() as i32);
+    w.set_picked(picks.rows.len() as i32);
     let (pre, n, post) = picked_line(cat, picks);
     w.set_picked_pre(pre.into());
     w.set_picked_n(n.into());
@@ -394,8 +470,7 @@ fn show_picks(
         }
         .into(),
     );
-    let marked: std::collections::HashSet<String> =
-        picks.values().map(|p| p.path.clone()).collect();
+    let marked: std::collections::HashSet<String> = picks.rows.keys().cloned().collect();
     rows.mark_picked(&marked);
 }
 
@@ -628,6 +703,7 @@ fn main() -> Result<()> {
     window.set_has_past(!kept.history.is_empty());
     window.set_grid_lines(kept.grid_lines);
     window.set_grid_columns(kept.grid_columns);
+    window.set_system_icons(kept.system_icons);
     window.set_tabs_on(!kept.tabs_off);
     window.set_accents_ignored(!kept.accents_exact);
     window.set_typos_choice(typos_choice(&kept.typos).into());
@@ -710,10 +786,7 @@ fn main() -> Result<()> {
 
     let rows: Rc<rows::Rows> = Rc::new(rows::Rows::default());
     // **Selected by path**: the index and the sort both move under a row number.
-    let picks: Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>> =
-        Rc::new(RefCell::new(std::collections::BTreeMap::new()));
-    // Where the last press was, so `Shift` has a run to take.
-    let anchor: Rc<std::cell::Cell<i32>> = Rc::new(std::cell::Cell::new(0));
+    let picks: Rc<RefCell<Selection>> = Rc::new(RefCell::new(Selection::default()));
     let lines: Rc<rows::Lines> = Rc::new(rows::Lines::new(Rc::clone(&rows)));
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
     // **Made once and never replaced**: a row destroyed between a press and the
@@ -942,6 +1015,28 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     grid_lines: Some(on),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    {
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        let model = Rc::clone(&rows);
+        let weak = window.as_weak();
+        window.on_system_icons_picked(move |on| {
+            if let Some(w) = weak.upgrade() {
+                w.set_system_icons(on);
+                if on {
+                    state.borrow_mut().advance_order();
+                    dispatch(&state, &link, &model, w.get_visible_rows().max(0) as u32);
+                }
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    system_icons: Some(on),
                     ..Default::default()
                 },
             });
@@ -1658,6 +1753,9 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             let on = !w.get_peeking();
             w.set_peeking(on);
+            if !on {
+                peek::clear(&w);
+            }
             // So the next tick asks about whatever is selected.
             state.borrow_mut().peek_path.clear();
             link.send(Ask::Remember {
@@ -1666,6 +1764,15 @@ fn main() -> Result<()> {
                     ..Default::default()
                 },
             });
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        window.on_peek_page_scrolled(move |idx| {
+            if let Some(w) = weak.upgrade() {
+                peek::scrolled(&w, idx.max(0) as usize);
+            }
         });
     }
 
@@ -2234,7 +2341,16 @@ fn main() -> Result<()> {
     // Plain replaces it, `Ctrl` adds one, `Shift` takes the run.
     {
         let picks = Rc::clone(&picks);
-        let anchor = Rc::clone(&anchor);
+        let rows = Rc::clone(&rows);
+        window.on_navigated(move |row| {
+            let mut held = picks.borrow_mut();
+            held.focused = path_of(&rows, row);
+            held.pinned = true;
+            held.chasing = 0;
+        });
+    }
+    {
+        let picks = Rc::clone(&picks);
         let rows = Rc::clone(&rows);
         let cat = Rc::clone(&cat);
         let weak = window.as_weak();
@@ -2245,33 +2361,94 @@ fn main() -> Result<()> {
                 return;
             };
             let mut held = picks.borrow_mut();
+            held.focused = Some(here.path.clone());
+            held.pinned = true;
+            held.chasing = 0;
             if run {
                 // The run is what is in hand: a range over millions can cross
                 // pages nobody has fetched.
-                held.clear();
-                let (from, to) = if anchor.get() <= row {
-                    (anchor.get(), row)
-                } else {
-                    (row, anchor.get())
-                };
+                held.rows.clear();
+                held.at.clear();
+                let anc = held.anchor_in(&rows);
+                let (from, to) = if anc <= row { (anc, row) } else { (row, anc) };
                 for at in from.max(0)..=to.max(0) {
                     if let Some(pick) = rows.pick_at(at as usize) {
-                        held.insert(at as usize, pick);
+                        held.at.insert(pick.path.clone(), at as usize);
+                        held.rows.insert(pick.path.clone(), pick);
                     }
                 }
             } else if adding {
-                anchor.set(row);
-                if held.values().any(|p| p.path == here.path) {
-                    held.retain(|_, p| p.path != here.path);
+                held.anchor_row = row;
+                held.anchor_path = Some(here.path.clone());
+                if held.rows.remove(&here.path).is_some() {
+                    held.at.remove(&here.path);
                 } else {
-                    held.insert(row.max(0) as usize, here);
+                    held.at.insert(here.path.clone(), row.max(0) as usize);
+                    held.rows.insert(here.path.clone(), here);
                 }
             } else {
-                anchor.set(row);
-                held.clear();
-                held.insert(row.max(0) as usize, here);
+                held.anchor_row = row;
+                held.anchor_path = Some(here.path.clone());
+                held.rows.clear();
+                held.at.clear();
+                held.at.insert(here.path.clone(), row.max(0) as usize);
+                held.rows.insert(here.path.clone(), here);
             }
             show_picks(&w, &cat, &rows, &held, false);
+        });
+    }
+    {
+        let picks = Rc::clone(&picks);
+        let rows = Rc::clone(&rows);
+        let slots = Rc::clone(&slots);
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let cat = Rc::clone(&cat);
+        let weak = window.as_weak();
+        window.on_pick_focused(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let target = {
+                let mut held = picks.borrow_mut();
+                let keys: Vec<String> = held.rows.keys().cloned().collect();
+                if keys.is_empty() {
+                    return;
+                }
+                let chosen = if keys.len() > 1
+                    && let Some(ref cur) = held.focused
+                    && let Some(pos) = keys.iter().position(|k| k == cur)
+                {
+                    let visible = rows
+                        .find_path(cur)
+                        .is_some_and(|r| scroll_to_keep_row(&w, r, true).is_none());
+                    if visible {
+                        keys[(pos + 1) % keys.len()].clone()
+                    } else {
+                        cur.clone()
+                    }
+                } else {
+                    keys[0].clone()
+                };
+                held.focused = Some(chosen.clone());
+                held.pinned = true;
+                let row = rows
+                    .find_path(&chosen)
+                    .or_else(|| held.at.get(&chosen).copied());
+                (chosen, row)
+            };
+            if let Some(row) = target.1 {
+                w.set_selected(row as i32);
+                if scroll_to_keep_row(&w, row, true).is_some() {
+                    let (top, h, _, vis) = row_geometry(&w, row, true);
+                    w.invoke_scroll_to((top - (vis - h) * 0.5).max(0.0));
+                }
+                place(&w, &slots);
+                follow(&w, &state, &link, &rows);
+                if w.get_peeking() {
+                    let cat_now = cat.borrow().clone();
+                    peek(&w, &state, &link, &rows, &cat_now);
+                }
+            }
+            w.invoke_focus_query();
         });
     }
     {
@@ -2283,6 +2460,7 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
             picks.borrow_mut().clear();
+            w.set_selected(-1);
             show_picks(&w, &cat, &rows, &picks.borrow(), false);
         });
     }
@@ -2292,7 +2470,7 @@ fn main() -> Result<()> {
         let cat = Rc::clone(&cat);
         window.on_pick_copied(move || {
             let cat = cat.borrow().clone();
-            for pick in picks.borrow().values() {
+            for pick in picks.borrow().rows.values() {
                 println!("{}", pick.path);
             }
             if let Some(w) = weak.upgrade() {
@@ -2488,8 +2666,26 @@ fn main() -> Result<()> {
             let cat = cat.borrow().clone();
             // A row of the list, so the selection is what the menu is about.
             menu_path.borrow_mut().take();
-            let picked = picks.borrow().len();
-            let here = rows.what_at(usize::try_from(i).unwrap_or(0));
+            let row_idx = usize::try_from(i).unwrap_or(0);
+            let here = rows.what_at(row_idx);
+            if let Some((ref path, _, _)) = here {
+                let mut held = picks.borrow_mut();
+                held.focused = Some(path.clone());
+                held.pinned = true;
+                held.chasing = 0;
+                if !held.rows.contains_key(path)
+                    && let Some(pick) = rows.pick_at(row_idx)
+                {
+                    held.anchor_row = i;
+                    held.anchor_path = Some(path.clone());
+                    held.rows.clear();
+                    held.at.clear();
+                    held.at.insert(path.clone(), row_idx);
+                    held.rows.insert(path.clone(), pick);
+                    show_picks(&w, &cat, &rows, &held, false);
+                }
+            }
+            let picked = picks.borrow().rows.len();
             let is_dir = here.as_ref().is_some_and(|(_, d, _)| *d);
             let (strip, list) = menu_parts(&cat, picked, is_dir);
             if picked > 1 {
@@ -2539,10 +2735,15 @@ fn main() -> Result<()> {
             let row = usize::try_from(row).unwrap_or(0);
             let paths: Vec<String> = {
                 let picks = picks.borrow();
-                if picks.len() > 1 && picks.contains_key(&row) {
-                    picks.values().map(|p| p.path.clone()).collect()
+                let row_path = rows.path_at(row);
+                if picks.rows.len() > 1
+                    && row_path
+                        .as_deref()
+                        .is_some_and(|p| picks.rows.contains_key(p))
+                {
+                    picks.rows.keys().cloned().collect()
                 } else {
-                    rows.what_at(row).map(|(p, _, _)| p).into_iter().collect()
+                    row_path.into_iter().collect()
                 }
             };
             trace(&format!("drag-out row {row}: {} path(s)", paths.len()));
@@ -2592,11 +2793,12 @@ fn main() -> Result<()> {
                     None => return,
                 },
             };
-            let chosen: Vec<String> = if menu_path.borrow().is_none() && picks.borrow().len() > 1 {
-                picks.borrow().values().map(|p| p.path.clone()).collect()
-            } else {
-                vec![path.clone()]
-            };
+            let chosen: Vec<String> =
+                if menu_path.borrow().is_none() && picks.borrow().rows.len() > 1 {
+                    picks.borrow().rows.keys().cloned().collect()
+                } else {
+                    vec![path.clone()]
+                };
             // The status line: `hint` is the empty field's placeholder, unseen while
             // the field holds the query these rows came from.
             let say = |w: &MainWindow, msg: slint::SharedString| told(w, msg);
@@ -2623,6 +2825,7 @@ fn main() -> Result<()> {
                 }
                 "clear" => {
                     picks.borrow_mut().clear();
+                    w.set_selected(-1);
                     show_picks(&w, &cat_now, &model, &picks.borrow(), false);
                 }
 
@@ -2795,7 +2998,7 @@ fn main() -> Result<()> {
                     // A folder's name reads like a file's; it takes its tree with it.
                     let dir = |p: &String| {
                         (*p == path && is_dir)
-                            || picks.borrow().values().any(|k| k.path == *p && k.is_dir)
+                            || picks.borrow().rows.get(p).is_some_and(|k| k.is_dir)
                     };
                     // Eight names and a count: a longer list is one nobody reads.
                     let mut body: Vec<String> = chosen
@@ -3224,7 +3427,9 @@ fn main() -> Result<()> {
             let mut held = picks.borrow_mut();
             for row in 0..n {
                 if let Some(pick) = rows.pick_at(row) {
-                    held.insert(row, pick);
+                    held.focused = Some(pick.path.clone());
+                    held.pinned = true;
+                    held.rows.insert(pick.path.clone(), pick);
                 }
             }
             show_picks(&w, &cat, &rows, &held, false);
@@ -3799,11 +4004,19 @@ fn peek(
         }
         return;
     }
-    let path = path_of(rows, w.get_selected()).unwrap_or_default();
+    let selected = w.get_selected();
+    let (path, is_dir) = if selected < 0 {
+        (String::new(), false)
+    } else {
+        rows.what_at(selected as usize)
+            .map(|(p, d, _)| (p, d))
+            .unwrap_or_default()
+    };
     if path == state.borrow().peek_path {
         return;
     }
     state.borrow_mut().peek_path = path.clone();
+    peek::clear(w);
     w.set_peek_shot(rows::blank());
     w.set_peek_has_shot(false);
     w.set_peek_text(slint::SharedString::new());
@@ -3816,8 +4029,12 @@ fn peek(
     }
     w.set_peek_name(scour_ui::path::leaf(&path).into());
     w.set_peek_path(path.as_str().into());
-    w.set_peek_note(t(cat, "reading…"));
-    link.send(Ask::Peek { path: path.clone() });
+    if is_dir {
+        w.set_peek_note(slint::SharedString::new());
+    } else {
+        w.set_peek_note(t(cat, "reading…"));
+        link.send(Ask::Peek { path: path.clone() });
+    }
     link.send(Ask::PeekFacts { path });
 }
 
@@ -3843,11 +4060,12 @@ fn pictures(
     const REMEMBERED: usize = 4096;
     let visible = w.get_visible_rows().max(0) as usize;
     let first = w.get_first_row().max(0) as usize;
-    let (drawn, ask) = rows.look_for_pictures(first, first + visible + AHEAD, LOOKED_AT);
-    if drawn > 0 {
-        trace(&format!("{drawn} picture(s) drawn"));
-        lines.touched(first, first + visible + AHEAD);
+    let (decode, ask) = rows.look_for_pictures(first, first + visible + AHEAD, LOOKED_AT);
+    if !decode.is_empty() {
+        let evicted = tiles::submit(decode);
+        rows.made_pictures(&evicted);
     }
+    let _ = lines;
     if ask.is_empty() {
         return;
     }
@@ -3873,7 +4091,10 @@ fn pictures(
     }
     s.asking_pictures = true;
     drop(s);
-    link.send(Ask::Thumbnails { files: ask });
+    link.send(Ask::Thumbnails {
+        files: ask,
+        size: None,
+    });
 }
 
 fn fetch_from(first: usize, visible: usize, wanted: Option<usize>) -> usize {
@@ -4301,7 +4522,7 @@ fn apply(
     table: &Rc<RefCell<Table>>,
     rows: &Rc<rows::Rows>,
     lines: &Rc<rows::Lines>,
-    picks: &Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>>,
+    picks: &Rc<RefCell<Selection>>,
     facets: &Rc<VecModel<Facet>>,
     rules: &[Rc<VecModel<Rule>>; 3],
     cat: &Rc<Catalogue>,
@@ -4437,6 +4658,7 @@ fn apply(
                             kind: &t(cat, h.kind.msgid()),
                             frozen_note: &frozen_note,
                             now,
+                            system_icons: w.get_system_icons(),
                         },
                         false,
                     )
@@ -4458,14 +4680,30 @@ fn apply(
             // or left above it; the list is moved by the same number of rows,
             // found by the first visible row's path. Not at the top, where what
             // arrives is what somebody is waiting to see, nor in the tiles.
+            let is_rewind = state.borrow().rewind && offset == 0;
             let first = w.get_first_row().max(0) as usize;
-            let anchor = (!state.borrow().rewind
+            let sel_before = w.get_selected();
+            let (sel_path, sel_pinned, sel_was_visible) = if is_rewind {
+                (None, false, false)
+            } else {
+                let mut held = picks.borrow_mut();
+                if held.focused.is_none() && sel_before >= 0 {
+                    held.focused = path_of(rows, sel_before);
+                }
+                let bar = !held.rows.is_empty();
+                let pinned = held.pinned || bar;
+                let vis = held.chasing > 0
+                    || (sel_before >= 0 && row_in_view(w, sel_before as usize, bar));
+                (held.focused.clone(), pinned, vis)
+            };
+            let anchor = (!is_rewind
+                && !sel_pinned
                 && !w.get_grid()
                 && first > 0
                 && (offset as usize..offset as usize + n).contains(&first))
             .then(|| rows.path_at(first))
             .flatten();
-            let any_fresh = {
+            let (any_fresh, total_len) = {
                 let mut s = state.borrow_mut();
                 // A reading's answer is its own count, and the newest there is:
                 // neither the rail nor an earlier count knows how far it has got.
@@ -4488,8 +4726,9 @@ fn apply(
                 // The tiles hold the same rows, and the result may be longer.
                 lines.touched(offset as usize, offset as usize + n);
                 lines.sync();
-                arrived
+                (arrived, total)
             };
+            picks.borrow_mut().refresh(rows);
 
             if let Some(path) = anchor
                 && rows.path_at(first).as_deref() != Some(path.as_str())
@@ -4509,6 +4748,39 @@ fn apply(
                         w.set_new_above(w.get_new_above() + by as i32);
                     }
                     trace(&format!("kept {path:?} in place: {by:+} rows"));
+                }
+            }
+            let mut chase_page = None;
+            if let Some(ref path) = sel_path {
+                if let Some(to) = rows.find_path(path) {
+                    picks.borrow_mut().chasing = 0;
+                    if w.get_selected() != to as i32 {
+                        w.set_selected(to as i32);
+                    }
+                    if sel_pinned && sel_was_visible {
+                        let bar = !picks.borrow().rows.is_empty();
+                        if let Some(want_down) = scroll_to_keep_row(w, to, bar) {
+                            w.invoke_scroll_to(want_down);
+                        }
+                    }
+                } else {
+                    if w.get_selected() >= 0
+                        && path_of(rows, w.get_selected()).as_deref() != Some(path.as_str())
+                    {
+                        w.set_selected(-1);
+                    }
+                    let next_page = offset as usize / rows::SPAN + 1;
+                    if sel_pinned
+                        && sel_was_visible
+                        && n == limit as usize
+                        && next_page * rows::SPAN < total_len
+                        && picks.borrow().chasing < 2
+                    {
+                        picks.borrow_mut().chasing += 1;
+                        chase_page = Some(next_page);
+                    } else {
+                        picks.borrow_mut().chasing = 0;
+                    }
                 }
             }
             // Slint's `animate` interpolates when a property *changes*, and the
@@ -4594,17 +4866,28 @@ fn apply(
                 w.set_selected(0);
                 w.invoke_scroll_to(0.0);
                 // A different question, so the old selection answers nothing.
-                picks.borrow_mut().clear();
+                let mut held = picks.borrow_mut();
+                held.clear();
+                held.focused = rows.path_at(0);
             }
             // The marks live on the rows, and this page brought new ones.
-            if !picks.borrow().is_empty() || w.get_picked() > 0 {
-                let asking = w.get_pick_asking() && !picks.borrow().is_empty();
+            if !picks.borrow().rows.is_empty() || w.get_picked() > 0 {
+                let asking = w.get_pick_asking() && !picks.borrow().rows.is_empty();
                 show_picks(w, cat, rows, &picks.borrow(), asking);
+            }
+            if w.get_peeking() && picks.borrow().chasing == 0 {
+                peek(w, state, link, rows, cat);
             }
             w.set_busy(false);
             // **And straight on to the next**: nothing is asked for while an
             // answer is in flight, so a drag continues here.
-            follow(w, state, link, rows);
+            if let Some(page) = chase_page {
+                let rev = state.borrow().revision;
+                rows.asking(page, rev);
+                send_page(state, link, (page * rows::SPAN) as u32, PAGE_MAX);
+            } else {
+                follow(w, state, link, rows);
+            }
             // Now, and only now, the sidebar: it costs about what the search did.
             if ask_background {
                 schedule_background(state, link, query_revision, query);
@@ -4763,6 +5046,12 @@ fn apply(
                 return;
             }
             report::draw_biggest(w, &path, &r.hits);
+        }
+        Got::Tile { path, outcome } => {
+            let drawn = rows.give_picture(&path, &outcome);
+            if let (Some(&lo), Some(&hi)) = (drawn.iter().min(), drawn.iter().max()) {
+                lines.touched(lo, hi + 1);
+            }
         }
         // The pictures the service managed to make. `ran` is how many processes a
         // screenful of unseen files actually starts.
@@ -5524,6 +5813,11 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_zoom_labels(ModelRc::new(VecModel::from(labels)));
     w.set_set_tabs(t(cat, "Search tabs"));
     w.set_set_tabs_note(t(cat, "Several searches side by side. Ctrl+T opens one."));
+    w.set_set_system_icons(t(cat, "System icons"));
+    w.set_set_system_icons_note(t(
+        cat,
+        "The desktop's own file and folder icons instead of built-in glyphs.",
+    ));
     w.set_set_grid(t(cat, "Row lines"));
     w.set_set_grid_note(t(cat, "A line under every row of the list."));
     w.set_set_grid_columns(t(cat, "Column lines"));
@@ -5854,14 +6148,11 @@ fn menu_heading(w: &MainWindow, path: &str, is_dir: bool, bytes: i64) {
 
 /// The menu's heading for a selection: how many, of which kind, and what the
 /// files among them come to.
-fn menu_heading_many(
-    w: &MainWindow,
-    cat: &Catalogue,
-    picks: &std::collections::BTreeMap<usize, rows::Pick>,
-) {
-    let dirs = picks.values().filter(|p| p.is_dir).count();
-    let files = picks.len() - dirs;
+fn menu_heading_many(w: &MainWindow, cat: &Catalogue, picks: &Selection) {
+    let dirs = picks.rows.values().filter(|p| p.is_dir).count();
+    let files = picks.rows.len() - dirs;
     let bytes: i64 = picks
+        .rows
         .values()
         .filter(|p| !p.is_dir)
         .map(|p| p.bytes.max(0))
@@ -5878,7 +6169,7 @@ fn menu_heading_many(
     }
     w.set_menu_title(
         t(cat, "{n} selected")
-            .replace("{n}", &grouped(picks.len() as u64))
+            .replace("{n}", &grouped(picks.rows.len() as u64))
             .into(),
     );
     w.set_menu_detail(said.join(" · ").into());
@@ -6533,8 +6824,8 @@ fn peek_head(text: &str, scale: f32) -> String {
     cut
 }
 
-/// Draw what the service says can be shown of a file — the desktop's thumbnail
-/// rather than the file, because a photograph is a decode on the drawing thread.
+/// Draw what the service says can be shown of a file. Text is set at once;
+/// every visual preview is decoded or fetched off the UI thread via [`peek`].
 fn show_peek(
     w: &MainWindow,
     cat: &Catalogue,
@@ -6542,81 +6833,67 @@ fn show_peek(
     path: &str,
     look: &scour_preview::Look,
 ) -> bool {
+    peek::clear(w);
     w.set_peek_text(peek_head(&look.head, w.window().scale_factor()).into());
-    /// The largest picture worth decoding on the drawing thread.
-    const SMALL: u64 = 512 * 1024;
-    // Whatever the desktop can draw, not only what a browser can: `shape` is the
-    // browser's question, and there are thumbnailers for PDFs too.
-    let made = scour_thumbs::cache::existing(path).or_else(|| {
-        // Only a picture is opened directly: a small PDF is not a small picture.
-        (look.shape == "image" && look.len <= SMALL).then(|| std::path::PathBuf::from(path))
-    });
-    match made.and_then(|p| slint::Image::load_from_path(&p).ok()) {
-        Some(image) => {
-            w.set_peek_shot(image);
-            w.set_peek_has_shot(true);
-        }
-        None => {
-            w.set_peek_shot(rows::blank());
-            w.set_peek_has_shot(false);
-        }
-    }
-    // Windows has its own pictures of files, Explorer's; asked off this thread,
-    // since a file the shell has not seen is a decode.
-    if cfg!(windows) && !w.get_peek_has_shot() && look.head.is_empty() {
-        shell_peek(w, cat, path);
-        w.set_peek_note(t(cat, "reading…"));
+    w.set_peek_shot(rows::blank());
+    w.set_peek_has_shot(false);
+
+    if look.shape == "text" && !look.head.is_empty() {
+        w.set_peek_note(slint::SharedString::new());
         return false;
     }
-    // A picture nobody has made is not one that cannot be made. `can_make` is the
-    // machine's own table: one extension and one MIME lookup, no syscall.
-    let coming = !w.get_peek_has_shot() && scour_thumbs::can_make(path);
+
+    let px = ((480.0 * w.window().scale_factor()) as u32).clamp(256, 1024);
+    let direct_image = look.shape == "image" && has_direct_image_ext(path);
+    let paged = scour_preview::doc::is_paged(&scour_core::path::to_path(path));
+    let cached = scour_thumbs::cache::existing(path).is_some();
+    let coming = !scour_thumbs::native::available()
+        && !direct_image
+        && !paged
+        && !cached
+        && scour_thumbs::can_make(path);
     if coming {
         link.send(Ask::Thumbnails {
             files: vec![path.to_owned()],
+            size: Some(px),
         });
     }
-    // Said only when there is nothing else in the box and nothing on its way.
-    w.set_peek_note(if w.get_peek_has_shot() || !look.head.is_empty() {
-        slint::SharedString::new()
-    } else if coming {
+
+    let can_draw = direct_image || paged || scour_thumbs::native::available() || cached || coming;
+    if !can_draw {
+        w.set_peek_note(if look.head.is_empty() {
+            t(cat, "It could not be previewed.")
+        } else {
+            slint::SharedString::new()
+        });
+        return false;
+    }
+
+    w.set_peek_note(if look.head.is_empty() {
         t(cat, "reading…")
     } else {
-        t(cat, "It could not be previewed.")
+        slint::SharedString::new()
     });
+    peek::request(
+        w,
+        peek::Request {
+            path,
+            is_image: look.shape == "image",
+            px,
+            waiting_on_service: coming,
+            reading_note: t(cat, "reading…").to_string(),
+            nothing_note: t(cat, "It could not be previewed.").to_string(),
+        },
+    );
     coming
 }
 
-/// Ask Windows for its picture of `path` on a thread of its own, and show it
-/// if the panel is still on that file when it comes. Nothing, it says so.
-fn shell_peek(w: &MainWindow, cat: &Catalogue, path: &str) {
-    let weak = w.as_weak();
-    let nothing = t(cat, "It could not be previewed.").to_string();
-    let path = path.to_owned();
-    // The panel's column at its widest, in pixels the screen has.
-    let px = (480.0 * w.window().scale_factor()) as u32;
-    let native = scour_core::path::to_path(&path);
-    std::thread::spawn(move || {
-        let got = scour_thumbs::shell::picture(&native, px).map(|p| {
-            let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(p.width, p.height);
-            buf.make_mut_bytes().copy_from_slice(&p.rgba);
-            buf
-        });
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(w) = weak.upgrade() else { return };
-            if w.get_peek_path().as_str() != path {
-                return;
-            }
-            match got {
-                Some(buf) => {
-                    w.set_peek_shot(slint::Image::from_rgba8(buf));
-                    w.set_peek_has_shot(true);
-                    w.set_peek_note(slint::SharedString::new());
-                }
-                None => w.set_peek_note(nothing.into()),
-            }
-        });
-    });
+fn has_direct_image_ext(path: &str) -> bool {
+    let ext = path
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "jfif")
 }
 
 /// The fact list, in the order [`scour_ui::preview::FACTS`] gives.

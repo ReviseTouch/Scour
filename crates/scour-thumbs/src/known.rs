@@ -13,6 +13,8 @@ pub struct Known {
     by_mime: HashMap<String, Vec<String>>,
     by_ext: HashMap<String, String>,
     by_name: HashMap<String, String>,
+    icon_by_mime: HashMap<String, String>,
+    generic_by_mime: HashMap<String, String>,
 }
 
 /// Ask the machine, once for the life of the process. A package installed while
@@ -51,6 +53,43 @@ impl Known {
     pub fn types(&self) -> usize {
         self.by_mime.len()
     }
+
+    /// Freedesktop icon names for `ext` (in priority order): explicit MIME icon,
+    /// `media-subtype`, `gnome-mime-media-subtype`, `generic-icons`, `media-x-generic`.
+    pub fn mime_icons_for_ext(&self, ext: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let lower = ext.trim_start_matches('.').to_ascii_lowercase();
+        let mime = self
+            .by_ext
+            .get(&lower)
+            .or_else(|| {
+                lower
+                    .rsplit_once('.')
+                    .and_then(|(_, tail)| self.by_ext.get(tail))
+            })
+            .map(String::as_str);
+        let Some(mime) = mime else {
+            return out;
+        };
+        let mut push = |s: String| {
+            if !s.is_empty() && !out.contains(&s) {
+                out.push(s);
+            }
+        };
+        if let Some(ic) = self.icon_by_mime.get(mime) {
+            push(ic.clone());
+        }
+        let dashed = mime.replace('/', "-");
+        push(dashed.clone());
+        push(format!("gnome-mime-{dashed}"));
+        if let Some(generic) = self.generic_by_mime.get(mime) {
+            push(generic.clone());
+        }
+        if let Some((media, _)) = mime.split_once('/') {
+            push(format!("{media}-x-generic"));
+        }
+        out
+    }
 }
 
 fn read() -> Known {
@@ -62,14 +101,245 @@ fn read() -> Known {
             &mut it,
             &std::fs::read_to_string(base.join("mime/globs2")).unwrap_or_default(),
         );
+        take_icon_map(
+            &mut it.icon_by_mime,
+            &std::fs::read_to_string(base.join("mime/icons")).unwrap_or_default(),
+        );
+        take_icon_map(
+            &mut it.generic_by_mime,
+            &std::fs::read_to_string(base.join("mime/generic-icons")).unwrap_or_default(),
+        );
         take_thumbnailers(&mut it, &base.join("thumbnailers"));
     }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fill_unix_fallbacks(&mut it);
     it
+}
+
+fn take_icon_map(into: &mut HashMap<String, String>, text: &str) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((mime, icon)) = line.split_once(':') {
+            let (mime, icon) = (mime.trim(), icon.trim());
+            if !mime.is_empty() && !icon.is_empty() {
+                into.insert(mime.to_ascii_lowercase(), icon.to_owned());
+            }
+        }
+    }
+}
+
+/// KDE Plasma, XFCE, LXQt and minimal Wayland desktops often ship Poppler,
+/// FFmpeg or ImageMagick without GNOME `.thumbnailer` files. Fill only gaps.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn fill_unix_fallbacks(it: &mut Known) {
+    const CORE_EXTS: &[(&str, &str)] = &[
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("jpeg", "image/jpeg"),
+        ("jfif", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("gif", "image/gif"),
+        ("bmp", "image/bmp"),
+        ("tif", "image/tiff"),
+        ("tiff", "image/tiff"),
+        ("avif", "image/avif"),
+        ("heic", "image/heic"),
+        ("heif", "image/heif"),
+        ("jxl", "image/jxl"),
+        ("svg", "image/svg+xml"),
+        ("pdf", "application/pdf"),
+        ("mp4", "video/mp4"),
+        ("m4v", "video/mp4"),
+        ("mkv", "video/x-matroska"),
+        ("webm", "video/webm"),
+        ("mov", "video/quicktime"),
+        ("avi", "video/x-msvideo"),
+        ("mpeg", "video/mpeg"),
+        ("mpg", "video/mpeg"),
+    ];
+    for &(ext, mime) in CORE_EXTS {
+        it.by_ext
+            .entry(ext.to_owned())
+            .or_insert_with(|| mime.to_owned());
+    }
+
+    const FALLBACKS: &[(&[&str], &[&str])] = &[
+        (
+            &["application/pdf"],
+            &[
+                "pdftoppm",
+                "-png",
+                "-singlefile",
+                "-scale-to",
+                "%s",
+                "%i",
+                "%O",
+            ],
+        ),
+        (
+            &["application/pdf"],
+            &[
+                "mutool", "draw", "-F", "png", "-w", "%s", "-o", "%o", "%i", "1",
+            ],
+        ),
+        (
+            &["application/pdf"],
+            &[
+                "gs",
+                "-q",
+                "-dSAFER",
+                "-dBATCH",
+                "-dNOPAUSE",
+                "-sDEVICE=png16m",
+                "-dFirstPage=1",
+                "-dLastPage=1",
+                "-r108",
+                "-sOutputFile=%o",
+                "%i",
+            ],
+        ),
+        (
+            &[
+                "video/mp4",
+                "video/x-matroska",
+                "video/webm",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/mpeg",
+            ],
+            &[
+                "ffmpegthumbnailer",
+                "-i",
+                "%i",
+                "-o",
+                "%o",
+                "-s",
+                "%s",
+                "-f",
+            ],
+        ),
+        (
+            &[
+                "video/mp4",
+                "video/x-matroska",
+                "video/webm",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/mpeg",
+            ],
+            &[
+                "ffmpeg",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                "00:00:01",
+                "-i",
+                "%i",
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=%s:-1",
+                "-f",
+                "image2",
+                "-vcodec",
+                "png",
+                "%o",
+            ],
+        ),
+        (
+            &["image/svg+xml"],
+            &["rsvg-convert", "-w", "%s", "-f", "png", "-o", "%o", "%i"],
+        ),
+        (&["image/svg+xml"], &["resvg", "-w", "%s", "%i", "%o"]),
+        (
+            &[
+                "image/png",
+                "image/jpeg",
+                "image/webp",
+                "image/gif",
+                "image/bmp",
+                "image/tiff",
+                "image/avif",
+                "image/heic",
+                "image/heif",
+                "image/jxl",
+            ],
+            &["gdk-pixbuf-thumbnailer", "-s", "%s", "%i", "%o"],
+        ),
+        (
+            &[
+                "image/png",
+                "image/jpeg",
+                "image/webp",
+                "image/gif",
+                "image/bmp",
+                "image/tiff",
+                "image/avif",
+                "image/heic",
+                "image/heif",
+                "image/jxl",
+            ],
+            &[
+                "magick",
+                "%i[0]",
+                "-auto-orient",
+                "-thumbnail",
+                "%sx%s",
+                "png:%o",
+            ],
+        ),
+        (
+            &[
+                "image/png",
+                "image/jpeg",
+                "image/webp",
+                "image/gif",
+                "image/bmp",
+                "image/tiff",
+                "image/avif",
+                "image/jxl",
+            ],
+            &[
+                "ffmpeg",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                "%i",
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=%s:-1",
+                "-f",
+                "image2",
+                "-vcodec",
+                "png",
+                "%o",
+            ],
+        ),
+    ];
+    for &(mimes, cmd) in FALLBACKS {
+        if !runnable(cmd[0]) {
+            continue;
+        }
+        let words: Vec<String> = cmd.iter().map(|s| (*s).to_owned()).collect();
+        for &mime in mimes {
+            it.by_mime
+                .entry(mime.to_owned())
+                .or_insert_with(|| words.clone());
+        }
+    }
 }
 
 /// `$XDG_DATA_HOME` then `$XDG_DATA_DIRS`, in the standard's own order of
 /// precedence — highest first.
-fn data_dirs() -> Vec<PathBuf> {
+pub(crate) fn data_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();

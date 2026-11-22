@@ -123,6 +123,9 @@ pub struct Settings {
     /// A rule between each pair of the list's columns. Off by default.
     #[serde(default)]
     pub grid_columns: bool,
+    /// Native desktop file and folder icons instead of built-in kind glyphs.
+    #[serde(default)]
+    pub system_icons: bool,
     /// Search tabs switched off: no strip, no keys, one query line. The tabs
     /// stay in [`Settings::tabs`] and come back with the switch.
     #[serde(default)]
@@ -205,6 +208,7 @@ pub struct Change {
     pub tab: Option<usize>,
     pub grid_lines: Option<bool>,
     pub grid_columns: Option<bool>,
+    pub system_icons: Option<bool>,
     pub tabs_off: Option<bool>,
     pub rail_hidden: Option<bool>,
     pub ribbon_hidden: Option<bool>,
@@ -302,6 +306,9 @@ impl Change {
         }
         if let Some(v) = self.grid_columns {
             to.grid_columns = v;
+        }
+        if let Some(v) = self.system_icons {
+            to.system_icons = v;
         }
         if let Some(v) = self.tabs_off {
             to.tabs_off = v;

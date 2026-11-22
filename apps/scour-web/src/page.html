@@ -64,9 +64,9 @@
     /* Its own layer, above the list's sticky header: the suggestion box that
        drops out of it must not be drawn under the column names. */
     position: relative;
-    z-index: 20;
+    z-index: 50;
     gap: calc(var(--u) * 2.5);
-    padding: 10px 12px 10px 16px;
+    padding: 12px 12px 10px 16px;
     border-bottom: 1px solid var(--line);
   }
   .query .brand { width: calc(180px - 26px); display: flex; align-items: center; }
@@ -210,30 +210,42 @@
     border-radius: 4px;
     background: var(--line-soft);
   }
-  /* The line box is 26px, so -19px is clear air above the glyphs. */
   .qacts button {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: var(--line);
+    background: var(--line-soft);
     color: var(--ink-2);
-    font: 600 10px/1 var(--sans);
+    font: 700 10px/1 var(--sans);
     cursor: pointer;
     pointer-events: auto;
     display: grid;
     place-items: center;
   }
-  /* One box over both buttons and the gap: a bare pixel loses the pointer. */
+  /* Compact pill over the term's top-right edge, within the header's headroom
+     and bridged downward so moving to it never crosses a dead gap. */
   .qacts .pair {
     position: absolute;
-    top: -19px;
+    top: -15px;
     display: flex;
-    gap: 3px;
-    padding-bottom: 8px;
+    gap: 2px;
+    padding: 1px 2px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
     pointer-events: auto;
     z-index: 4;
+  }
+  .qacts .pair::after {
+    content: "";
+    position: absolute;
+    left: -6px;
+    right: -6px;
+    top: 100%;
+    height: 10px;
   }
   .qacts button:hover { background: var(--ink-3); color: var(--panel); }
   .qacts button.drop:hover { background: var(--q-bad); color: #fff; }
@@ -332,7 +344,7 @@
   .meter[data-stale="short"] #stale .short { display: inline; }
 
   /* ---------------- body ---------------- */
-  .body { display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  .body { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 0; overflow: hidden; }
   /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
   .body[hidden], .report[hidden] { display: none; }
   .query { grid-row: 1; }
@@ -423,9 +435,9 @@
   .facet .mi svg { width: 14px; height: 14px; }
   /* Kinds get no colour — colour means time — so a bar carries the count. */
   .facet.bar { position: relative; }
-  /* A hairline under the row, not a block behind it: the share is a hint. */
+  /* A hairline inset inside the row, so 100% never reads as a section border. */
   .facet.bar > .fill {
-    position: absolute; left: 0; bottom: 1px; height: 2px;
+    position: absolute; left: 12px; bottom: 1px; height: 2px;
     background: var(--line); border-radius: 1px; z-index: 0;
   }
   .facet.bar > .nm, .facet.bar > .ct { position: relative; z-index: 1; }
@@ -453,6 +465,8 @@
     flex: 1;
     overflow: auto;
     position: relative;
+    /* Confines `buildHeads`'s `40 - i` heading stack inside the scroller. */
+    z-index: 1;
     /* A reused row moves index, so an anchor would correct `scrollTop`,
        fire `scroll`, and move the spacer again. */
     overflow-anchor: none;
@@ -495,7 +509,7 @@
   thead th.moving { opacity: .4; }
   .dropline {
     position: absolute; top: 0; bottom: 0; width: 2px;
-    background: var(--t1); z-index: 6; pointer-events: none;
+    background: var(--t1); z-index: 45; pointer-events: none;
   }
   .dropline[hidden] { display: none; }
   body.moving-col { cursor: grabbing; user-select: none; }
@@ -517,22 +531,28 @@
   tbody tr.sel td { background: var(--pick); }
   tbody td { padding: 0 calc(var(--u) * 3); height: var(--row); vertical-align: middle; }
 
-  /* What is selected, said in a line. Gone when nothing is selected. */
+  /* What is selected, flush on top of the status bar at the left edge like a
+     browser's link preview. Gone when nothing is selected. */
   .selbar {
-    display: flex; align-items: center; gap: calc(var(--u) * 3);
-    padding: calc(var(--u) * 2) calc(var(--u) * 3);
-    border-top: 1px solid var(--line);
+    position: absolute; left: 0; bottom: 0; z-index: 15;
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    max-width: calc(100% - 12px); height: 28px;
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--line); border-left: 0; border-bottom: 0;
+    border-radius: 0 6px 0 0;
     background: var(--panel-2);
-    font: 500 12px/1 var(--mono); color: var(--ink-2);
-    flex-wrap: wrap;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, .12);
+    font: 500 11.5px/1 var(--mono); color: var(--ink-2);
+    white-space: nowrap;
   }
+  .body.peeking .selbar { max-width: calc(100% - var(--peek-w) - 12px); }
   .selbar[hidden] { display: none; }
   .selbar .n { color: var(--ink); font-weight: 650; }
   .selbar .sum { color: var(--ink-3); }
-  .selbar .grow { flex: 1; }
   .selbar button {
+    flex: none;
     background: none; border: 1px solid var(--line); border-radius: 3px;
-    padding: calc(var(--u) * 1.25) calc(var(--u) * 2.5);
+    padding: 3px 8px;
     font: inherit; color: var(--ink-2); cursor: pointer;
   }
   .selbar button:hover { color: var(--ink); border-color: var(--ink-3); }
@@ -543,8 +563,15 @@
   /* The way out: frameless and set apart by a rule, not one more action. */
   .selbar button.out { border-color: transparent; color: var(--ink-3); }
   .selbar button.out:hover { color: var(--ink); background: var(--hover); border-color: transparent; }
-  .selbar .rule { width: 1px; height: 16px; background: var(--line); }
-  .selbar .one { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  .selbar .rule { flex: none; width: 1px; height: 14px; background: var(--line); }
+  .selbar .one { max-width: 420px; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  .selbar button.jump {
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
+    border-color: transparent; padding: 3px 6px;
+    display: inline-flex; align-items: center; gap: calc(var(--u) * 1.5);
+  }
+  .selbar button.jump:hover { background: var(--hover); border-color: transparent; color: var(--ink); }
+  .selbar button.jump:hover .one { color: var(--ink); }
 
   /* The mark column: the freshness rule and the type glyph share it, and
    * `top: 0; bottom: 0` beats a stated height a fractional row rounds past. */
@@ -566,6 +593,15 @@
     text-overflow: ellipsis;
   }
   .path b { color: var(--ink-2); font-weight: 400; }
+  tbody td.loc { cursor: pointer; }
+  tbody td.loc:hover { background: color-mix(in srgb, var(--q-key) 11%, transparent); }
+  tbody tr.sel td.loc:hover { background: color-mix(in srgb, var(--q-key) 18%, var(--pick)); }
+  tbody td.loc:hover .path,
+  tbody td.loc:hover .path b {
+    color: var(--q-key);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
   /* Dates are right-aligned as numbers, left when they are words. */
   td.n.left { text-align: left; }
   td.n {
@@ -830,10 +866,15 @@
   /* The preview: a third column, shut by default, a third of the width open. */
   .body { --peek-w: 380px; }
   .body.peeking { grid-template-columns: 180px minmax(0, 1fr) var(--peek-w); }
-  /* Under 900px there is no room for three, so the panel becomes the window. */
+  /* Under 900px collapse the rail so the list and preview both fit; under 560px
+     the preview takes the single column. */
   @media (max-width: 900px) {
-    .body.peeking { grid-template-columns: 0 0 1fr; }
-    .body.peeking .rail, .body.peeking .results { display: none; }
+    .body.peeking { grid-template-columns: minmax(0, 1fr) minmax(220px, 42%); }
+    .body.peeking .rail { display: none; }
+  }
+  @media (max-width: 560px) {
+    .body.peeking { grid-template-columns: minmax(0, 1fr); }
+    .body.peeking .main { display: none; }
   }
   /* The edge that sets the preview's width; the panel clips, so it sits inside. */
   .peek-grip {
@@ -1841,6 +1882,7 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Refresh the list every"></div><div class="desc" data-t="While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."></div></div><div class="seg" id="seg-refresh"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="System icons"></div><div class="desc" data-t="The desktop's own file and folder icons instead of built-in glyphs."></div></div><div class="seg" id="seg-sysicons"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
             </div>
@@ -1935,7 +1977,6 @@
           <div class="similar" id="similar" hidden><span id="similar-said"></span><button type="button" id="similar-show" data-t="show"></button></div>
         </div>
 
-        <div class="selbar" id="selbar" hidden></div>
         <div class="restore" id="restore" hidden>
           <button type="button" id="rail-back" data-t="Show the sidebar" hidden></button>
           <button type="button" id="ribbon-back" data-t="Show the time ribbon" hidden></button>
@@ -1970,6 +2011,7 @@
         <div class="peek-cut" id="peek-cut" hidden></div>
         <dl class="peek-facts" id="peek-facts"></dl>
       </aside>
+      <div class="selbar" id="selbar" hidden></div>
     </div>
 
     <!-- ------------------------------ REPORT ----------------------------- -->
@@ -2495,9 +2537,56 @@
       case "ext":  return v.split(";").some((e) => e.replace(/^\./, "").length > 0);
       case "size": return SIZE_RE.test(v);
       case "time": return TIME_RE.test(v);
-      case "kind": return KIND_VALUES.includes(v) || KIND_ALIASES.includes(v);
+      case "kind": return v.split(";").some(Boolean) && v.split(";").every((k) => !k || KIND_VALUES.includes(k) || KIND_ALIASES.includes(k));
     }
     return false;
+  }
+
+  const isListField = (f) => !!(f && (f.takes === "ext" || f.takes === "kind"));
+
+  function isListPiece(piece) {
+    if (!piece) return true;
+    if (piece.startsWith('"')) return false;
+    const head = piece.split("|")[0] || "";
+    return head.length > 0 && !/^[!"(<]/.test(head) && !/[:/*?!]/.test(head);
+  }
+
+  function canJoinList(tok) {
+    const trimmed = tok.replace(/^;+/, "");
+    if (!trimmed) return true;
+    return isListPiece(trimmed.split(";")[0]);
+  }
+
+  function cutSemicolons(s) {
+    const out = [];
+    let cur = s;
+    for (;;) {
+      if (isListField(fieldOf(cur))) {
+        let quoted = false, from = 0, skipFirst = true, splitAt = -1;
+        for (let i = 0; i < cur.length; i++) {
+          const c = cur[i];
+          if (c === '"') quoted = !quoted;
+          else if (c === "|" && !quoted) break;
+          else if (c === ";" && !quoted) {
+            if (!skipFirst && !isListPiece(cur.slice(from, i))) { splitAt = from - 1; break; }
+            skipFirst = false;
+            from = i + 1;
+          }
+        }
+        if (splitAt < 0 && !skipFirst && !isListPiece(cur.slice(from))) splitAt = from - 1;
+        if (splitAt >= 0) { out.push(cur.slice(0, splitAt)); cur = cur.slice(splitAt + 1); continue; }
+        out.push(cur);
+        break;
+      }
+      let quoted = false, cut = -1;
+      for (let i = 0; i < cur.length; i++) {
+        if (cur[i] === '"') quoted = !quoted;
+        else if (cur[i] === ";" && !quoted) { cut = i; break; }
+      }
+      if (cut >= 0) { out.push(cur.slice(0, cut)); cur = cur.slice(cut + 1); }
+      else { out.push(cur); break; }
+    }
+    return out;
   }
 
   /* Two or more letters and nothing else, so `C:/Users` is a path. */
@@ -2534,15 +2623,19 @@
     const toks = tokenise(text).filter(Boolean);
     /* A list is a context: in `ext:rs ; toml` the spaces are separators. */
     let list = null, expectValue = false;
+    const openList = (t) => {
+      const f = fieldOf(t);
+      return isListField(f) && !t.includes("|") ? f : null;
+    };
     toks.forEach((tok, i) => {
       if (/^\s+$/.test(tok)) {
         const next = toks.slice(i + 1).find((t) => !/^\s+$/.test(t));
-        const joins = list && (expectValue || (next && next.startsWith(";")));
+        const joins = list && next && canJoinList(next) && (expectValue || next.startsWith(";"));
         out.push([joins ? "sep" : "space", tok]);
         if (!joins) { list = null; expectValue = false; }
         return;
       }
-      if (list && (expectValue || tok.startsWith(";"))) {
+      if (list && canJoinList(tok) && (expectValue || tok.startsWith(";"))) {
         let rest = tok;
         if (rest.startsWith(";")) { out.push(["sep", ";"]); rest = rest.slice(1); expectValue = true; }
         if (rest) expectValue = rest.endsWith(";");
@@ -2550,14 +2643,21 @@
         return;
       }
       if (tok === "|") { out.push(["or", tok]); list = null; expectValue = false; return; }
+      if (tok === ";") { out.push(["space", tok]); list = null; expectValue = false; return; }
       if (tok === "!") { out.push(["not", tok]); list = null; expectValue = false; return; }
-      const quoted = tok.startsWith('"');
-      tok.split("|").forEach((alt, j) => {
-        if (j > 0) out.push([quoted ? "phrase" : "or", "|"]);
-        alternative(out, alt);
+      const pieces = cutSemicolons(tok);
+      pieces.forEach((piece, pIdx) => {
+        if (pIdx > 0) out.push(["space", ";"]);
+        if (!piece) return;
+        const quoted = piece.startsWith('"');
+        piece.split("|").forEach((alt, j) => {
+          if (j > 0) out.push([quoted ? "phrase" : "or", "|"]);
+          alternative(out, alt);
+        });
       });
-      list = fieldOf(tok);
-      expectValue = !!list && tok.endsWith(";");
+      const tail = pieces[pieces.length - 1] || "";
+      list = openList(tail);
+      expectValue = !!list && tail.endsWith(";");
     });
     return out;
   }
@@ -2590,7 +2690,7 @@
       const m = /^(<=|>=|<|>|=)/.exec(v);
       if (m) { out.push(["cmp", m[1]]); v = v.slice(m[1].length); }
     }
-    if (f.takes === "ext") {
+    if (isListField(f)) {
       v.split(";").forEach((part, i) => {
         if (i > 0) out.push(["sep", ";"]);
         if (part) out.push(["value", part]);
@@ -2613,104 +2713,160 @@
   }
 
   /* Term boundaries from the colouring's own spans, never a second
-     tokenisation. */
+     tokenisation. `|` is a combiner between two terms, not part of either,
+     and trailing list separators (`kind:doc ;`) stay outside the pill. */
   function terms(text) {
     const out = [];
-    let at = 0, start = null;
+    let at = 0, start = null, end = null;
     for (const [role, t] of spans(text)) {
-      if (role === "space") {
-        if (start !== null) { out.push([start, at]); start = null; }
-      } else if (start === null) {
-        start = at;
+      if (role === "space" || role === "or") {
+        if (start !== null && end !== null) out.push([start, end]);
+        start = null;
+        end = null;
+      } else if (role !== "sep") {
+        if (start === null) start = at;
+        end = at + t.length;
       }
       at += t.length;
     }
-    if (start !== null) out.push([start, at]);
+    if (start !== null && end !== null) out.push([start, end]);
     return out;
   }
 
-  /* Measured over a hundred: one rounds badly at fractional widths. */
-  let charW = 0;
-  function charWidth() {
-    if (charW) return charW;
-    const probe = document.createElement("span");
-    probe.style.cssText =
-      "position:absolute;visibility:hidden;white-space:pre;font:600 20px/1.3 " +
-      getComputedStyle(q).fontFamily + ";letter-spacing:-.01em";
-    probe.textContent = "0".repeat(100);
-    document.body.appendChild(probe);
-    charW = probe.getBoundingClientRect().width / 100;
-    probe.remove();
-    return charW;
+  /* Sub-pixel span geometry matching the live input font and zoom level. */
+  const qMeasure = document.createElement("span");
+  qMeasure.style.cssText =
+    "position:fixed;left:-9999px;top:0;visibility:hidden;white-space:pre;pointer-events:none";
+  document.body.appendChild(qMeasure);
+
+  function spanBox(text, a, b) {
+    const cs = getComputedStyle(q);
+    qMeasure.style.font = cs.font;
+    qMeasure.style.letterSpacing = cs.letterSpacing;
+    qMeasure.textContent = text.slice(0, a);
+    const left = qMeasure.getBoundingClientRect().width - q.scrollLeft;
+    qMeasure.textContent = text.slice(0, b);
+    const right = qMeasure.getBoundingClientRect().width - q.scrollLeft;
+    return { left, width: Math.max(0, right - left) };
   }
 
   const acts = document.getElementById("qacts");
+  const hintBox = document.getElementById("hints");
+  const queryHeader = document.querySelector(".query");
   let hoverTerm = null;
+  let activeZone = null;
+  let pairX = null;
 
   function termAt(clientX) {
-    const box = q.getBoundingClientRect();
-    const i = Math.floor((clientX - box.left + q.scrollLeft) / charWidth());
+    const x = clientX - q.getBoundingClientRect().left;
     const text = q.value;
     for (const [a, b] of terms(text)) {
-      if (i >= a && i < b) return [a, b];
+      const box = spanBox(text, a, b);
+      if (x >= box.left - 2 && x <= box.left + box.width + 2) return [a, b];
     }
     return null;
   }
 
-  function drawActs(term) {
+  function drawActs(term, pinnedX = null) {
     hoverTerm = term;
-    if (!term) { acts.innerHTML = ""; return; }
+    if (!term) {
+      acts.innerHTML = "";
+      activeZone = null;
+      pairX = null;
+      return;
+    }
     const [a, b] = term;
-    const w = charWidth();
-    const left = a * w - q.scrollLeft;
-    const width = (b - a) * w;
-    const negated = q.value[a] === "!";
-    // 38px at the term's right edge, pulled back inside the field.
-    const pair = 38;
-    const room = q.clientWidth - pair - 2;
-    const x = Math.max(0, Math.min(left + width - pair + 18, room));
-    acts.innerHTML =
-      `<div class="band" style="left:${left - 3}px;width:${width + 6}px"></div>` +
-      `<div class="pair" style="left:${x}px">` +
-      `<button class="neg" ` +
-      `title="${escape_(negated ? T("Stop excluding this") : T("Exclude this term"))}">` +
-      `${negated ? "+" : "!"}</button>` +
-      `<button class="drop" title="${escape_(T("Remove this term"))}">✕</button>` +
-      `</div>`;
+    const text = q.value;
+    if (b > text.length || a >= b) {
+      acts.innerHTML = "";
+      activeZone = null;
+      pairX = null;
+      return;
+    }
+    const { left, width } = spanBox(text, a, b);
+    const negated = text[a] === "!";
+    const pairW = 40;
+    const room = Math.max(0, q.clientWidth - pairW - 2);
+    const x = pinnedX !== null ? Math.max(0, Math.min(pinnedX, room))
+      : Math.max(0, Math.min(left + width - pairW + 3, room));
+    pairX = x;
+    activeZone = [Math.min(left, x) - 6, Math.max(left + width, x + pairW) + 6];
+    if (!acts.firstElementChild) {
+      acts.innerHTML =
+        `<div class="band"></div>` +
+        `<div class="pair">` +
+        `<button type="button" class="neg"></button>` +
+        `<button type="button" class="drop">✕</button>` +
+        `</div>`;
+    }
+    const band = acts.firstElementChild;
+    const pair = acts.lastElementChild;
+    const negBtn = pair.firstElementChild;
+    const dropBtn = pair.lastElementChild;
+    band.style.left = `${left - 3}px`;
+    band.style.width = `${width + 6}px`;
+    pair.style.left = `${x}px`;
+    negBtn.textContent = negated ? "+" : "!";
+    negBtn.title = negated ? T("Stop excluding this") : T("Exclude this term");
+    dropBtn.title = T("Remove this term");
   }
 
   function editTerm(term, replacement) {
     const [a, b] = term;
+    const keepX = pairX;
     let before = q.value.slice(0, a), after = q.value.slice(b);
     if (!replacement) {
-      // Removing a term leaves neither a double space nor a leading one.
+      before = before.replace(/\s*\|\s*$/, (m) => (after.trim() ? " " : ""));
+      if (!before.trim()) after = after.replace(/^\s*\|\s*/, "");
       if (before.endsWith(" ") && after.startsWith(" ")) after = after.slice(1);
       else if (before.endsWith(" ") && !after) before = before.slice(0, -1);
-      // The first term has nothing before it, so neither branch above fires.
       else if (!before && after.startsWith(" ")) after = after.slice(1);
     }
     q.value = before + replacement + after;
     const caret = (before + replacement).length;
     q.setSelectionRange(caret, caret);
-    drawActs(null);
     render();
-    q.focus();
+    hideHints();
+    // Keep the pill pinned under the pointer on negation toggles so repeated clicks work in place.
+    if (replacement) drawActs([before.length, caret], keepX);
+    else drawActs(null);
   }
 
-  q.addEventListener("mousemove", (e) => {
-    const t = termAt(e.clientX);
-    /* Moving off a term does not put its buttons away: reaching them means
-     * leaving it. */
-    if (!t) return;
-    const same = hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
-    if (!same) drawActs(t);
+  queryHeader.addEventListener("mousemove", (e) => {
+    if (acts.contains(e.target)) return;
+    const qRect = q.getBoundingClientRect();
+    const relX = e.clientX - qRect.left;
+    // Keep the active pill steady while the pointer crosses above the input toward its buttons.
+    if (
+      hoverTerm &&
+      activeZone &&
+      e.clientY >= qRect.top - 22 &&
+      e.clientY < qRect.top + 4 &&
+      relX >= activeZone[0] &&
+      relX <= activeZone[1]
+    ) {
+      return;
+    }
+    if (
+      e.clientY >= qRect.top - 2 &&
+      e.clientY <= qRect.bottom + 2 &&
+      relX >= -2 &&
+      relX <= qRect.width + 2
+    ) {
+      const t = termAt(e.clientX);
+      if (!t) {
+        if (hoverTerm) drawActs(null);
+        return;
+      }
+      const same = hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
+      if (!same) drawActs(t);
+      return;
+    }
+    if (hoverTerm) drawActs(null);
   });
-  // Only leaving the whole field clears the buttons.
-  document.querySelector(".qfield").addEventListener("mouseleave", (e) => {
-    // The buttons are descendants drawn outside the box, so a gap can fire this.
-    if (e.relatedTarget && acts.contains(e.relatedTarget)) return;
-    drawActs(null);
-  });
+  q.addEventListener("input", () => drawActs(null));
+  q.addEventListener("keydown", () => drawActs(null));
+  queryHeader.addEventListener("mouseleave", () => drawActs(null));
   q.addEventListener("scroll", () => drawActs(hoverTerm));
 
   acts.addEventListener("mousedown", (e) => {
@@ -2865,6 +3021,31 @@
   const iconUrl = (f) =>
     `/api/icon?t=${TOKEN}&p=${encodeURIComponent(f.path + "/" + f.name)}`;
 
+  const SYSICON_MISS = new Set();
+
+  function sysIconKey(f) {
+    if (f.is_dir || f.ktoken === "folder") {
+      const full = (f.path + "/" + f.name).replace(/\/+$/, "");
+      if (HOME && full === HOME) return "place:home";
+      if (HOME && f.path === HOME && f.name) return "home:" + f.name;
+      return "folder";
+    }
+    const lower = (f.name || "").toLowerCase();
+    for (const c of ["tar.gz", "tar.xz", "tar.bz2", "tar.zst"]) {
+      if (lower.endsWith("." + c) && lower.length > c.length + 1) return "ext:" + c;
+    }
+    const dot = lower.lastIndexOf(".");
+    if (dot > 0) {
+      const ext = lower.slice(dot + 1);
+      if (ext.length <= 32 && /^[a-z0-9._+-]+$/.test(ext)) return "ext:" + ext;
+    }
+    return "kind:" + (GLYPHS.has(f.ktoken) ? f.ktoken : "file");
+  }
+
+  const sysIconUrl = (key) => key.startsWith("home:")
+    ? `/api/sysicon?t=${TOKEN}&home_dir=${encodeURIComponent(key.slice(5))}`
+    : `/api/sysicon?t=${TOKEN}&k=${encodeURIComponent(key)}`;
+
   /* The type tokens something is drawn for; anything else falls back to the
      plain page rather than to no picture. */
   const GLYPHS = new Set([
@@ -2890,26 +3071,36 @@
       if (el) el.remove();
       return rule;
     }
-    const want = f.thumb ? "IMG" : "SPAN";
+    const showThumb = !!(f.thumb && grid());
+    const sysKey = !showThumb && KEPT && KEPT.system_icons ? sysIconKey(f) : null;
+    const useSys = !!(sysKey && !SYSICON_MISS.has(sysKey));
+    const want = showThumb || useSys ? "IMG" : "SPAN";
     if (el && el.tagName !== want) {
       el.remove();
       el = null;
     }
     if (!el) {
-      el = f.thumb ? new Image() : document.createElement("span");
+      el = want === "IMG" ? new Image() : document.createElement("span");
       el.className = "ico";
-      if (f.thumb) {
-        el.alt = "";
-        // A thumbnail gone since the row was read is ordinary: the box stays
-        // empty and the row does not jump.
-        el.onerror = () => { el.style.visibility = "hidden"; };
-      }
-      // After the rule rather than at the end of the cell: a tile's name is
-      // already there and the picture goes above it.
+      if (want === "IMG") el.alt = "";
       rule.after(el);
     }
-    if (f.thumb) {
+    if (showThumb) {
+      el.onerror = () => {
+        f.thumb = false;
+        writeMark(td, f);
+      };
       const url = iconUrl(f);
+      if (el.getAttribute("src") !== url) {
+        el.style.visibility = "";
+        el.setAttribute("src", url);
+      }
+    } else if (useSys) {
+      el.onerror = () => {
+        SYSICON_MISS.add(sysKey);
+        writeMark(td, f);
+      };
+      const url = sysIconUrl(sysKey);
       if (el.getAttribute("src") !== url) {
         el.style.visibility = "";
         el.setAttribute("src", url);
@@ -2974,15 +3165,18 @@
     let a = cursor, b = cursor;
     while (a > 0 && !/\s/.test(text[a - 1])) a--;
     while (b < text.length && !/\s/.test(text[b])) b++;
+    const neg = text[a] === "!" ? "!" : "";
     const typed = text.slice(a, cursor).replace(/^!/, "");
     const sp = fieldSplit(typed);
     if (sp) {
       const f = field(sp[0]);
       if (!f) return [];
       const list = f.takes === "kind" ? KIND_VALUES : f.takes === "time" ? TIME_VALUES : [];
-      const pre = fold(sp[1]);
+      const semi = f.takes === "kind" ? sp[1].lastIndexOf(";") : -1;
+      const head = semi >= 0 ? sp[1].slice(0, semi + 1) : "";
+      const pre = fold(semi >= 0 ? sp[1].slice(semi + 1) : sp[1]);
       return list.filter((v) => v.startsWith(pre)).map((v) => ({
-        insert: sp[0] + ":" + v, label: f.name + ":" + v, about: T(f.about), at: [a, b],
+        insert: neg + sp[0] + ":" + head + v, label: f.name + ":" + v, about: T(f.about), at: [a, b],
       }));
     }
     const pre = fold(typed);
@@ -2991,9 +3185,9 @@
       .map((f) => ({ insert: f.name + ":", label: f.eg || f.name + ":", about: T(f.about), at: [a, b] }));
   }
 
-  const hintBox = document.getElementById("hints");
   const qread   = document.getElementById("qread");
   let hints = [], hintSel = 0;
+  let focusPath = null, wantFocusPath = null;
 
   function showHints() {
     // Nothing while the box is unfocused (`render()` also runs on load), and
@@ -3103,7 +3297,8 @@
     /* Down goes to the list, but only when no completion is showing: there
        the arrows belong to the completions until Escape closes them. */
     if (hintBox.hidden && e.key === "ArrowDown") {
-      const first = [...body.querySelectorAll("tr[data-path]")][0];
+      const rows = [...body.querySelectorAll("tr[data-path]")];
+      const first = (focusPath && rows.find((tr) => tr.dataset.path === focusPath)) || rows[0];
       if (first) {
         e.preventDefault();
         first.focus();
@@ -3492,7 +3687,8 @@
     /* The rows are reused, so what is restored is which one holds the focus
        rather than the element itself. */
     const had = document.activeElement;
-    const keep = had && body.contains(had) ? had.dataset.path : null;
+    const hadInBody = !!(had && body.contains(had));
+    const keep = (hadInBody ? had.dataset.path : null) || wantFocusPath;
 
     // The marked letters move with the query, so a row whose file has not
     // changed is still rewritten when the terms have. Joined once, not per row.
@@ -3511,7 +3707,13 @@
     scheduleClock();
     if (keep) {
       const back = pool.find((tr) => tr.dataset.path === keep);
-      if (back) back.focus({ preventScroll: true });
+      if (back) {
+        wantFocusPath = null;
+        if (document.activeElement !== back) back.focus({ preventScroll: true });
+      } else if (hadInBody) {
+        wantFocusPath = keep;
+        had.blur();
+      }
     }
   }
 
@@ -3523,7 +3725,7 @@
     const under = f && f.under;
     const stamp = f ? [
       f.path, f.name, f.mtime, f.size, f.fresh || 0,
-      f.is_dir ? 1 : 0, f.thumb ? 1 : 0, f.ktoken || "", f.kind || "",
+      f.is_dir ? 1 : 0, f.thumb ? 1 : 0, KEPT && KEPT.system_icons ? 1 : 0, f.ktoken || "", f.kind || "",
       f.ext || "", f.ctime || 0, f.atime || 0, f.perm || "",
       f.user || "", f.group || "", f.disk || 0, f.items || 0,
       under ? under.disk : "", under ? under.files : "",
@@ -4027,7 +4229,11 @@
         const keepExact = !queryChanged && LIST.exact && res.capped;
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
         /* And so did the selection: a different query is different files. */
-        if (queryChanged) clearSel();
+        if (queryChanged) {
+          focusPath = null;
+          wantFocusPath = null;
+          clearSel();
+        }
         clearRows();
         for (const request of LIST.pending.values()) request.stop.abort();
         LIST.pending.clear();
@@ -4281,7 +4487,7 @@
   /* `glyph` is a kind's token, or `size` for the weight the menu draws. */
   function facetRow(label, term, count, share, on, glyph) {
     const fill = share > 0
-      ? `<span class="fill" style="width:${(share * 100).toFixed(1)}%"></span>` : "";
+      ? `<span class="fill" style="width:calc((100% - 24px) * ${share.toFixed(4)})"></span>` : "";
     const ico = glyph === "size" && MENU_ICONS.weight
       ? `<span class="mi" aria-hidden="true">${MENU_ICONS.weight}</span>`
       : `<span class="ico k-${GLYPHS.has(glyph) ? glyph : "file"}" aria-hidden="true"></span>`;
@@ -4340,7 +4546,7 @@
       } },
     { id: "path",  msgid: "Location",  key: "path",  w: 320, min: 120, near: 48, far: 70, max: 0,
       write: (td, f) => {
-        if (td.className !== "") td.className = "";
+        if (td.className !== "loc") td.className = "loc";
         let div = td.firstElementChild;
         if (!div || div.className !== "path") {
           td.textContent = "";
@@ -5117,13 +5323,34 @@
   const selbar = document.getElementById("selbar");
   /* path -> the row: the bar adds up sizes, the menu asks what a row is. */
   const SEL = new Map();
-  /* Where a shift-range measures from: an index in the current ordering. */
-  let selAnchor = null;
+  const SEL_AT = new Map();
+  /* Where a shift-range measures from: tracked by path so live arrivals do not drift it. */
+  let selAnchor = null, selAnchorPath = null;
+
+  function indexOfPath(p) {
+    if (!p) return -1;
+    for (const [i, f] of LIST.rows) {
+      if (f && fullPath(f) === p) return i;
+    }
+    return -1;
+  }
+
+  function anchorIndex() {
+    if (selAnchorPath) {
+      const at = indexOfPath(selAnchorPath);
+      if (at >= 0) return at;
+    }
+    return selAnchor;
+  }
 
   function clearSel() {
+    focusPath = null;
+    wantFocusPath = null;
     if (!SEL.size) return;
     SEL.clear();
+    SEL_AT.clear();
     selAnchor = null;
+    selAnchorPath = null;
     paintSelection();
     drawSelBar();
   }
@@ -5131,9 +5358,15 @@
   function pickRow(tr, keep) {
     const p = pathOf(tr);
     if (!p) return;
-    if (!keep) SEL.clear();
-    if (keep && SEL.has(p)) SEL.delete(p);
-    else SEL.set(p, tr.__row);
+    if (!keep) { SEL.clear(); SEL_AT.clear(); }
+    if (keep && SEL.has(p)) {
+      SEL.delete(p);
+      SEL_AT.delete(p);
+    } else {
+      SEL.set(p, tr.__row);
+      const i = Number(tr.dataset.i);
+      if (Number.isFinite(i)) SEL_AT.set(p, i);
+    }
   }
 
   /* Every row between two positions; unfetched rows cannot be selected, so
@@ -5142,7 +5375,11 @@
     const [lo, hi] = a <= b ? [a, b] : [b, a];
     for (let i = lo; i <= hi; i++) {
       const f = LIST.rows.get(i);
-      if (f) SEL.set(f.path + "/" + f.name, f);
+      if (f) {
+        const p = f.path + "/" + f.name;
+        SEL.set(p, f);
+        SEL_AT.set(p, i);
+      }
     }
   }
 
@@ -5170,19 +5407,21 @@
     /* One row: its path, which says more than "1 selected". */
     const only = n === 1 ? [...SEL.keys()][0] : null;
     const parts = only
-      ? [`<span class="one" title="${escape_(only)}">${escape_(only)}</span>`]
+      ? [`<span class="one">${escape_(only)}</span>`]
       : [T('<span class="n">{n}</span> selected', { n: fmt(n) })];
     if (n - dirs > 0) parts.push(`<span class="sum">${bytes(total)}</span>`);
     if (dirs) parts.push(T('<span class="sum">{n} folders</span>', { n: fmt(dirs) }));
     const nFolders = foldersOf().length;
     const tooMany = nFolders > OPEN_MOST;
+    const tip = only || [...SEL.keys()][0] || "";
     /* The way out first and apart, frameless; the folders' button off past
        twenty, asked about past three. Numbers from `scour_ui`. */
     selbar.innerHTML =
       `<button type="button" data-sel="clear" class="out">× ${escape_(T("Clear the selection"))}</button>` +
       `<span class="rule"></span>` +
+      `<button type="button" data-sel="focus" class="jump" title="${escape_(tip)}">` +
       parts.join(' <span class="sum">·</span> ') +
-      `<span class="grow"></span>` +
+      `</button>` +
       `<button type="button" data-sel="copy">${escape_(T("Copy the paths"))}</button>` +
       `<button type="button" data-sel="folder"${tooMany ? " disabled" : asking ? ' class="asking"' : ""}>` +
       escape_(tooMany
@@ -5230,10 +5469,43 @@
       () => flash(T("could not copy")));
   }
 
+  function focusSelected() {
+    const keys = [...SEL.keys()];
+    if (!keys.length) return;
+    let target = keys[0];
+    if (keys.length > 1 && focusPath && SEL.has(focusPath)) {
+      const cur = indexOfPath(focusPath);
+      target = cur >= 0 && rowFullyVisibleAt(cur)
+        ? keys[(keys.indexOf(focusPath) + 1) % keys.length]
+        : focusPath;
+    }
+    focusPath = target;
+    wantFocusPath = target;
+    let at = indexOfPath(target);
+    if (at < 0 && SEL_AT.has(target)) {
+      at = Math.min(Math.max(0, SEL_AT.get(target)), Math.max(0, reach() - 1));
+    }
+    if (at >= 0 && !rowFullyVisibleAt(at)) {
+      measurePerRow();
+      const p = pitch(), h = lineH();
+      const line = Math.floor(at / PER_ROW);
+      const head = grid() ? (headPx || 0) : (headPx || 33);
+      const vis = Math.max(h, scrollEl.clientHeight - 30);
+      scrollEl.scrollTop = Math.max(0, Math.round(line * p - (vis - head - h) / 2));
+    }
+    const nowTr = pool.find((tr) => tr.dataset.path === target);
+    if (nowTr && (at < 0 || rowFullyVisibleAt(at))) {
+      wantFocusPath = null;
+      nowTr.focus({ preventScroll: true });
+    }
+    repaint(true);
+  }
+
   selbar.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-sel]");
     if (!btn) return;
     if (btn.dataset.sel === "clear") clearSel();
+    else if (btn.dataset.sel === "focus") focusSelected();
     else if (btn.dataset.sel === "copy") copySelected();
     else openFolders();
   });
@@ -5252,16 +5524,21 @@
     const tr = e.target.closest("tr[data-path]");
     if (!tr) { return; }
     const i = Number(tr.dataset.i);
-    if (e.shiftKey && selAnchor !== null && Number.isFinite(i)) {
+    const p = pathOf(tr);
+    const anc = anchorIndex();
+    if (e.shiftKey && anc !== null && Number.isFinite(i)) {
       SEL.clear();
-      selectRange(selAnchor, i);
+      selectRange(anc, i);
     } else if (e.ctrlKey || e.metaKey) {
       pickRow(tr, true);
       selAnchor = i;
+      selAnchorPath = p;
     } else {
       pickRow(tr, false);
       selAnchor = i;
+      selAnchorPath = p;
     }
+    if (p) focusPath = p;
     paintSelection();
     drawSelBar();
   });
@@ -5270,7 +5547,12 @@
     if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
       e.preventDefault();
       SEL.clear();
-      for (const [, f] of LIST.rows) SEL.set(f.path + "/" + f.name, f);
+      SEL_AT.clear();
+      for (const [idx, f] of LIST.rows) {
+        const p = f.path + "/" + f.name;
+        SEL.set(p, f);
+        SEL_AT.set(p, idx);
+      }
       paintSelection();
       drawSelBar();
       return;
@@ -5308,14 +5590,19 @@
         /* The anchor is where the walk began, so reversing gives rows back. */
         if (e.shiftKey) {
           const i = Number(next.dataset.i);
-          if (selAnchor === null) selAnchor = Number(row.dataset.i);
-          if (Number.isFinite(i) && selAnchor !== null) {
+          if (anchorIndex() === null) {
+            selAnchor = Number(row.dataset.i);
+            selAnchorPath = pathOf(row);
+          }
+          const anc = anchorIndex();
+          if (Number.isFinite(i) && anc !== null) {
             SEL.clear();
-            selectRange(selAnchor, i);
+            selectRange(anc, i);
             paintSelection();
             drawSelBar();
           }
         }
+        focusPath = pathOf(next) || focusPath;
         next.focus();
         // `nearest` leaves the list still when the row is already on screen.
         next.scrollIntoView({ block: "nearest" });
@@ -5369,9 +5656,11 @@
     if (!SEL.has(p)) {
       pickRow(tr, false);
       selAnchor = Number(tr.dataset.i);
+      selAnchorPath = p;
       paintSelection();
       drawSelBar();
     }
+    focusPath = p;
     openRowMenu(e, p, tr.__row || null, null);
   });
 
@@ -5917,7 +6206,9 @@
   /* Whatever takes the focus is what is previewed: one rule for all three. */
   body.addEventListener("focusin", (e) => {
     const row = e.target.closest && e.target.closest("tr[data-path]");
-    if (row && PEEK.on) drawPeek(row.__row);
+    if (!row) return;
+    if (row.dataset.path) focusPath = row.dataset.path;
+    if (PEEK.on) drawPeek(row.__row);
   });
   document.getElementById("peek-close").addEventListener("click", () => {
     setPeek(false);
@@ -6071,14 +6362,82 @@
     }, FRESH_MS);
   }
 
+  function rowVisibleAt(idx) {
+    if (idx < 0) return false;
+    measurePerRow();
+    const p = pitch();
+    const h = lineH();
+    const line = Math.floor(idx / PER_ROW);
+    const head = grid() ? (headPx || 0) : (headPx || 33);
+    const vis = Math.max(h, scrollEl.clientHeight - (SEL.size ? 30 : 0));
+    return line * p + h > scrollEl.scrollTop && head + line * p < scrollEl.scrollTop + vis;
+  }
+
+  function rowFullyVisibleAt(idx) {
+    if (idx < 0) return false;
+    measurePerRow();
+    const p = pitch();
+    const h = lineH();
+    const line = Math.floor(idx / PER_ROW);
+    const head = grid() ? (headPx || 0) : (headPx || 33);
+    const vis = Math.max(h, scrollEl.clientHeight - (SEL.size ? 30 : 0));
+    return line * p >= scrollEl.scrollTop && head + line * p + h <= scrollEl.scrollTop + vis;
+  }
+
   /* `fillWindow`'s job and nobody else's: a second fetcher asks for the same
    * windows a frame later and aborts the first. */
-  function refreshRows() {
+  async function refreshRows() {
     if (document.hidden) { missedWhileAway = true; return; }
     if (LIST.query === null) return;           /* the first search has not landed */
+    const pin = focusPath || (SEL.size ? [...SEL.keys()].at(-1) : null);
+    const hadAt = pin ? indexOfPath(pin) : -1;
+    const follow = !!(pin && (
+      (hadAt >= 0 && rowVisibleAt(hadAt)) ||
+      (document.activeElement && body.contains(document.activeElement))
+    ));
     SHOWING = REV;
-    // Returned so the throttle above can charge for what this cost.
-    return fillWindow();
+    await fillWindow();
+    if (SEL.size) {
+      for (const p of SEL.keys()) {
+        const idx = indexOfPath(p);
+        if (idx >= 0) {
+          SEL.set(p, LIST.rows.get(idx));
+          SEL_AT.set(p, idx);
+        }
+      }
+      drawSelBar();
+    }
+    if (!follow || LIST.query === null) return;
+    let at = indexOfPath(pin);
+    if (at < 0 && hadAt >= 0) {
+      const base = Math.floor(hadAt / WINDOW);
+      for (let step = 1; step <= 2 && at < 0; step++) {
+        const next = (base + step) * WINDOW;
+        if (next >= reach() || LIST.at.get(next) === SHOWING) continue;
+        try {
+          const res = await SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, next);
+          if (LIST.query === null) return;
+          putRows(next, res.rows.map(fromService), true);
+          keepWindow(next, SHOWING);
+          at = indexOfPath(pin);
+        } catch {
+          break;
+        }
+      }
+    }
+    if (at < 0) return;
+    measurePerRow();
+    const p = pitch();
+    const h = lineH();
+    const line = Math.floor(at / PER_ROW);
+    const head = grid() ? (headPx || 0) : (headPx || 33);
+    const vis = Math.max(h, scrollEl.clientHeight - (SEL.size ? 30 : 0));
+    if (head + line * p + h > scrollEl.scrollTop + vis) {
+      scrollEl.scrollTop = Math.ceil(head + line * p + h - vis);
+    } else if (line * p < scrollEl.scrollTop) {
+      scrollEl.scrollTop = Math.floor(line * p);
+    }
+    repaint(true);
   }
 
   /* How dear a sidebar refresh may be and still repeat unasked. `COST` alone
@@ -6412,6 +6771,7 @@
     drawCost();
     if (LAST_STATUS) applyStatus(LAST_STATUS);
     drawAsk();
+    if (!settingsBox.hidden) showSection(SECTION);
     if (!disksPanel.hidden) drawDisks();
     /* `drawPeek` returns early for the row it shows, so the labels stay. */
     if (PEEK.on && !peek.hidden) {
@@ -7067,6 +7427,12 @@
       KEPT.tabs_off = v === "off";
       drawTabs();
       keep({ tabs_off: KEPT.tabs_off });
+      drawSettings();
+    });
+    seg("seg-sysicons", [["on", T("On")], ["off", T("Off")]], k.system_icons ? "on" : "off", (v) => {
+      KEPT.system_icons = v === "on";
+      keep({ system_icons: KEPT.system_icons });
+      repaint(true);
       drawSettings();
     });
     seg("seg-grid", [["on", T("On")], ["off", T("Off")]], k.grid_lines ? "on" : "off", (v) => {

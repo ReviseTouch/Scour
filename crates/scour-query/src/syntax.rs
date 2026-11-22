@@ -15,7 +15,7 @@ A query is a list of terms separated by spaces. Every term must match.
 |---|---|
 | `a b` | both must match (AND) |
 | `a|b` | either may match (OR) |
-| `a;b` | the same thing — `;` and `|` are one operator |
+| `a;b` | both must match (AND), like a space; inside `ext:` and `kind:` it lists alternatives |
 | `!a` | must not match (NOT) |
 | `"two words"` | exact phrase; wildcards inside are literal characters |
 | `*` | any run of characters |
@@ -105,10 +105,11 @@ supplies them — NTFS, the FAT family — has them withheld at index time rathe
 than stored, so `perm:` and `suid:` find nothing on such a volume instead of
 finding everything. `node:` is unaffected.
 
-`;` means "any of these" wherever it appears — inside a field's value and
-between words alike. `ext:rs;toml` is "extension is rs or toml" and
-`opus;sonnet` is "named opus or sonnet"; one mark, one meaning. Inside quotes
-it is an ordinary character: `"a ; b"` looks for that text.
+Inside `ext:` and `kind:`, `;` lists alternatives — `ext:rs;toml` is "extension
+is rs or toml" and `kind:doc;image` is "type is document or image". Between
+terms it separates them as a space does (`opus;sonnet` requires both), and a
+trailing `;` is ignored. Inside quotes it is an ordinary character: `"a ; b"`
+looks for that text.
 
 ## Coming from Everything
 

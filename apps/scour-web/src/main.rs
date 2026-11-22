@@ -425,7 +425,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/usage" => api_usage(&mut stream, client, &req),
         "/api/dupes" => api_dupes(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
-        "/api/icon" => api_icon(&mut stream, &req),
+        "/api/icon" => api_icon(&mut stream, client, &req, doing.pictures),
+        "/api/sysicon" => api_sysicon(&mut stream, &req),
         "/api/thumb" if doing.pictures => api_thumb(&mut stream, addr, &req),
         "/api/thumb" => http::fail(
             &mut stream,
@@ -595,15 +596,52 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// The thumbnail somebody has already made for a file. Cacheable, unlike every
 /// other route: a file in a cache, not an answer about a watched filesystem.
-fn api_icon(stream: &mut TcpStream, req: &http::Req) {
-    // A path is only ever hashed, never opened. See `icons`.
-    let picture = match req.param("p") {
-        Some(path) if !path.is_empty() => icons::thumbnail(path),
-        _ => None,
+fn api_icon(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, pictures: bool) {
+    let Some(path) = req.param("p").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "404 Not Found", "no thumbnail");
+        return;
     };
-    match picture {
-        Some(p) => http::cached(stream, p.kind, &p.bytes),
-        None => http::fail(stream, "404 Not Found", "no thumbnail"),
+    // Freedesktop cache: `path` is only hashed, never opened.
+    if let Some(p) = icons::thumbnail(path) {
+        http::cached(stream, p.kind, &p.bytes);
+        return;
+    }
+    // Windows Explorer / macOS Quick Look: fence through `stat` before touching disk.
+    if pictures
+        && scour_thumbs::native::available()
+        && let Ok(Response::Stat(entry)) = call(
+            client,
+            Request::Stat {
+                path: path.to_owned(),
+            },
+        )
+        && !entry.is_dir
+        && let Some(p) = icons::native_thumbnail(&entry.path)
+    {
+        http::cached(stream, p.kind, &p.bytes);
+        return;
+    }
+    http::fail(stream, "404 Not Found", "no thumbnail");
+}
+
+/// Native desktop file or folder icon keyed by type (`ext:docx`, `folder`,
+/// `place:documents`), never touching indexed file paths.
+fn api_sysicon(stream: &mut TcpStream, req: &http::Req) {
+    let key = if let Some(leaf) = req.param("home_dir").filter(|l| !l.is_empty()) {
+        scour_thumbs::sysicon::home_child_key(leaf)
+    } else if let Some(k) = req.param("k").filter(|k| !k.is_empty()) {
+        k.to_owned()
+    } else {
+        http::fail(stream, "404 Not Found", "no icon");
+        return;
+    };
+    let px = req
+        .param("s")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(64);
+    match scour_thumbs::sysicon::web_icon(&key, px) {
+        Some(ic) => http::cached(stream, ic.content_type, &ic.bytes),
+        None => http::fail(stream, "404 Not Found", "no icon"),
     }
 }
 
@@ -625,7 +663,39 @@ fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
             return;
         }
     };
-    match client.call(Request::Thumbnails { files }) {
+    if scour_thumbs::native::available() {
+        let fenced: Vec<String> = files
+            .into_iter()
+            .take(scour_thumbs::Maker::BATCH)
+            .filter_map(|path| match client.call(Request::Stat { path }) {
+                Ok(Response::Stat(entry)) if !entry.is_dir => Some(entry.path),
+                _ => None,
+            })
+            .collect();
+        let ready = Mutex::new(Vec::new());
+        for chunk in fenced.chunks(scour_thumbs::Maker::AT_ONCE) {
+            std::thread::scope(|scope| {
+                for p in chunk {
+                    scope.spawn(|| {
+                        let native = scour_core::path::to_path(p);
+                        if scour_thumbs::native::picture(&native, 256).is_some() {
+                            ready
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(p.clone());
+                        }
+                    });
+                }
+            });
+        }
+        let ready = ready.into_inner().unwrap_or_else(|e| e.into_inner());
+        http::json(
+            stream,
+            &serde_json::json!({ "ready": ready, "ran": fenced.len() }),
+        );
+        return;
+    }
+    match client.call(Request::Thumbnails { files, size: None }) {
         Ok(Response::Thumbnails(made)) => http::json(
             stream,
             // `ran` is how many processes a screenful of unseen files started.
@@ -1605,7 +1675,9 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 "type": look.kind,
                 "size": entry.meta.size,
                 // The fallback for formats a browser cannot open at all.
-                "thumb": icons::has_thumbnail(&entry.path, entry.kind()),
+                "thumb": icons::has_thumbnail(&entry.path, entry.kind())
+                    || (scour_thumbs::native::available()
+                        && !scour_thumbs::never_for(entry.kind().token())),
                 // Whether there is a previewer, so the button leads somewhere.
                 "native": QUICKLOOK.get().and_then(|q| q.as_ref()).is_some(),
             }),
@@ -1618,7 +1690,21 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let result = match shape {
         scour_preview::Shape::Text => send_text(stream, p),
         scour_preview::Shape::Whole(kind) => send_whole(stream, p, kind),
-        scour_preview::Shape::Streamed(kind) => send_stream(stream, p, kind, req.header("range")),
+        scour_preview::Shape::Streamed(kind) => {
+            if scour_preview::office::is_office(p) {
+                let Some(pdf) = scour_preview::office::to_pdf(p) else {
+                    http::fail(
+                        stream,
+                        "415 Unsupported Media Type",
+                        "could not convert document",
+                    );
+                    return;
+                };
+                send_stream(stream, &pdf, kind, req.header("range"))
+            } else {
+                send_stream(stream, p, kind, req.header("range"))
+            }
+        }
         // 415 rather than 404: the file is there, and cannot be shown.
         scour_preview::Shape::Nothing => {
             http::fail(stream, "415 Unsupported Media Type", "nothing to show");
@@ -2499,7 +2585,7 @@ mod tests {
         // `accepts` reads both lists, or half of this proves nothing.
         assert!(
             PAGE.contains(
-                "case \"kind\": return KIND_VALUES.includes(v) || KIND_ALIASES.includes(v);"
+                "case \"kind\": return v.split(\";\").some(Boolean) && v.split(\";\").every((k) => !k || KIND_VALUES.includes(k) || KIND_ALIASES.includes(k));"
             ),
             "accepts() no longer answers for kind: from the two lists this test checks"
         );

@@ -113,6 +113,7 @@ pub enum Ask {
     /// machine, not four per face — and decides which paths may be touched.
     Thumbnails {
         files: Vec<String>,
+        size: Option<u32>,
     },
     /// This desktop's own folders, asked once at start-up. Of the service, not
     /// of `scour-places`: a frontend asks, and all four get the same answer.
@@ -170,6 +171,11 @@ pub enum Got {
         reply: Box<Response>,
     },
     Thumbnails(Box<Response>),
+    /// One tile's direct RGBA pixel buffer decoded off the UI thread.
+    Tile {
+        path: String,
+        outcome: crate::tiles::TileOutcome,
+    },
     Rules(Box<Response>),
     /// The disks, or that an answer about one was taken.
     Volumes(Box<Response>),
@@ -648,7 +654,9 @@ fn spawn_lane(
                     },
                     Lane::Dupes,
                 ),
-                Ask::Thumbnails { files } => (0, Request::Thumbnails { files }, Lane::Thumbnails),
+                Ask::Thumbnails { files, size } => {
+                    (0, Request::Thumbnails { files, size }, Lane::Thumbnails)
+                }
                 Ask::Peek { path } => (0, Request::Preview { path }, Lane::Peek),
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
@@ -692,6 +700,7 @@ fn spawn_lane(
             // The page this request asked for, read back off the request so the
             // answer can say where it goes. See `Got::Search`.
 
+            let is_preview = matches!(request, Request::Preview { .. });
             let (offset, limit) = match &request {
                 Request::Search { page, .. } => (page.offset, page.limit),
                 _ => (0, 0),
@@ -754,6 +763,11 @@ fn spawn_lane(
                         client = None;
                         was_down = true;
                         sink(Got::Down(e.to_string()));
+                    } else if matches!(facets, Lane::Peek) && is_preview {
+                        sink(Got::Peek {
+                            path: weighed,
+                            reply: Box::new(Response::Preview(scour_preview::Look::default())),
+                        });
                     } else {
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),

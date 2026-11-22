@@ -430,7 +430,7 @@ fn run(
         // The same fence as `preview`, and it matters more: this runs a program
         // on the file. Its mtime is what the thumbnail standard requires. An
         // unheld path is dropped, or one deleted file empties a screenful.
-        Request::Thumbnails { files } => {
+        Request::Thumbnails { files, size } => {
             let wanted: Vec<scour_thumbs::Wanted> = files
                 .iter()
                 .take(scour_thumbs::Maker::BATCH)
@@ -441,7 +441,8 @@ fn run(
                     mtime: entry.meta.mtime,
                 })
                 .collect();
-            Response::Thumbnails(kept.maker.make(&wanted))
+            let px = size.unwrap_or(scour_thumbs::cache::ASKED);
+            Response::Thumbnails(kept.maker.make_sized(&wanted, px))
         }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);

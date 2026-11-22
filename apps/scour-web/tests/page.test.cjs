@@ -599,3 +599,51 @@ test('the meter sheds pieces least useful first, and only as many as it must', (
   assert.deepEqual([...plan(steps, (taken) => taken.length >= 3)], ['note', 'rows', 'stale-short'], 'the advisory is said short before it goes');
   assert.deepEqual([...plan(steps, () => false)], [...steps], 'and at worst all of it, never the count or the time');
 });
+
+test('a refresh keeps a visible selected row on screen when arrivals push it down', async () => {
+  const c = listContext();
+  Object.assign(c, {
+    document: { hidden: false, activeElement: null },
+    body: { contains: () => false },
+    SEL: new Map([['/data/target.docx', { path: '/data', name: 'target.docx', size: 100 }]]),
+    SEL_AT: new Map([['/data/target.docx', 5]]),
+    focusPath: '/data/target.docx',
+    SHOWING: 1, REV: 2, PER_ROW: 1, headPx: 33,
+    scrollEl: { scrollTop: 0, clientHeight: 350 },
+    measurePerRow() {}, pitch: () => 31, lineH: () => 31, grid: () => false,
+    drawSelBar() {}, repaint() {},
+  });
+  c.LIST.query = '*.docx';
+  c.LIST.rows.set(5, { path: '/data', name: 'target.docx', size: 100 });
+  c.fillWindow = async () => {
+    c.LIST.rows.clear();
+    for (let i = 0; i < 40; i++) c.LIST.rows.set(i, { path: '/data', name: `new${i}.docx`, size: 10 });
+    c.LIST.rows.set(40, { path: '/data', name: 'target.docx', size: 250 });
+  };
+  vm.runInContext(section('  function indexOfPath(p) {', '\n  function clearSel() {'), c);
+  vm.runInContext(section('  function rowVisibleAt(idx) {', '\n  const SIDEBAR_LIVE_UNDER_MS'), c);
+  await c.refreshRows();
+  assert.ok(c.scrollEl.scrollTop > 0, 'scrolled down to keep the selected row visible');
+  assert.equal(c.SEL.get('/data/target.docx').size, 250, 'refreshed the selected row metadata');
+});
+
+test('clicking the selection bar text scrolls an off-screen selected row into view and focuses it', () => {
+  const c = listContext();
+  let focused = false;
+  Object.assign(c, {
+    SEL: new Map([['/data/target.docx', { path: '/data', name: 'target.docx', size: 100 }]]),
+    SEL_AT: new Map([['/data/target.docx', 4]]),
+    focusPath: null, wantFocusPath: null, PER_ROW: 1, headPx: 33,
+    scrollEl: { scrollTop: 3100, clientHeight: 350 },
+    pool: [{ dataset: { path: '/data/target.docx' }, focus() { focused = true; } }],
+    measurePerRow() {}, pitch: () => 31, lineH: () => 31, grid: () => false, repaint() {},
+  });
+  c.LIST.query = '*.docx';
+  vm.runInContext(section('  function indexOfPath(p) {', '\n  function clearSel() {'), c);
+  vm.runInContext(section('  function rowVisibleAt(idx) {', '\n  async function refreshRows() {'), c);
+  vm.runInContext(section('  function focusSelected() {', '\n  selbar.addEventListener("click"'), c);
+  c.focusSelected();
+  assert.equal(c.scrollEl.scrollTop, 0, 'brought the off-screen selected row back into view');
+  assert.equal(c.focusPath, '/data/target.docx');
+  assert.equal(focused, true, 'focused the selected row');
+});
