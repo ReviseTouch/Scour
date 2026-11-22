@@ -917,6 +917,10 @@ fn panel_content(app: &App, wrap: usize) -> Option<(std::borrow::Cow<'_, str>, V
                     .into(),
             ],
         ),
+        Panel::Lens => {
+            let (title, lines) = app.lens_panel_lines();
+            (title.into(), lines)
+        }
         Panel::None => return None,
     })
 }
@@ -1060,10 +1064,18 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 | scour_core::Role::Quote => theme.ink_3(),
                 _ => theme.ink(),
             };
-            Some(Span::styled(
-                text.to_string(),
-                Style::new().fg(colour).add_modifier(Modifier::BOLD),
-            ))
+            let capsule = matches!(
+                sp.role,
+                scour_core::Role::Field
+                    | scour_core::Role::Value
+                    | scour_core::Role::Not
+                    | scour_core::Role::Colon
+            );
+            let mut st = Style::new().fg(colour).add_modifier(Modifier::BOLD);
+            if capsule {
+                st = st.bg(theme.hover());
+            }
+            Some(Span::styled(text.to_string(), st))
         })
         .collect();
     let mut parts = vec![Span::styled(
@@ -1099,13 +1111,54 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         };
         parts.push(Span::styled(term.clone(), style));
     }
+    let mut grep_caret_x: Option<u16> = None;
+    if app.v2.grep_open {
+        let pre_cols: usize = parts.iter().map(|s| s.content.chars().count()).sum();
+        let mode_lbl = match app.v2.grep_mode {
+            scour_proto::GrepMode::Text => app.say("Text"),
+            scour_proto::GrepMode::Regex => app.say("Regex"),
+            scour_proto::GrepMode::Hex => app.say("Hex"),
+        };
+        let pat_shown = if app.v2.grep_pattern.is_empty() {
+            app.say("Search inside matching files…").into_owned()
+        } else {
+            app.v2.grep_pattern.clone()
+        };
+        parts.push(Span::styled("  [ ≣ ", Style::new().fg(theme.key()).bg(theme.hover()).add_modifier(Modifier::BOLD)));
+        parts.push(Span::styled(
+            pat_shown,
+            Style::new()
+                .fg(if app.v2.grep_pattern.is_empty() { theme.ink_3() } else { theme.ink() })
+                .bg(theme.hover())
+                .add_modifier(if app.v2.grep_pattern.is_empty() { Modifier::ITALIC } else { Modifier::BOLD }),
+        ));
+        let flags = format!(
+            " · {mode_lbl}{}{} · F8/Esc ]",
+            if app.v2.grep_exact { " Aa" } else { "" },
+            if app.v2.grep_binary { " 01" } else { "" },
+        );
+        parts.push(Span::styled(flags, Style::new().fg(theme.ink_3()).bg(theme.hover())));
+        grep_caret_x = Some((pre_cols + 6 + app.v2.grep_pattern.chars().count()) as u16);
+    }
     let line = Line::from(parts);
     f.render_widget(Paragraph::new(line), area);
+    if !app.v2.grep_open && area.width >= 96 {
+        let triggers = Line::from(vec![
+            Span::styled("⛁ ^P  ", Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM)),
+            Span::styled("≈ ^F  ", Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM)),
+            Span::styled("≣ ^G ", Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM)),
+        ]);
+        f.render_widget(Paragraph::new(triggers).right_aligned(), area);
+    }
     // The caret is the terminal's own, which means it blinks the way every
     // other caret on that screen blinks — and costs nothing to keep alive.
     if app.mode == Mode::Search {
-        let before = app.query[..app.caret].chars().count() as u16;
-        f.set_cursor_position((area.x + 7 + before, area.y));
+        if let Some(gx) = grep_caret_x {
+            f.set_cursor_position((area.x + gx.min(area.width.saturating_sub(1)), area.y));
+        } else {
+            let before = app.query[..app.caret].chars().count() as u16;
+            f.set_cursor_position((area.x + 7 + before, area.y));
+        }
     }
 }
 
@@ -1127,6 +1180,16 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
                 format!(" {}", app.note),
                 Style::new().fg(theme.key()),
             ))),
+            area,
+        );
+        return;
+    }
+    if app.v2.grep_open && !app.v2.grep_summary.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" ≣ ", Style::new().fg(theme.key()).add_modifier(Modifier::BOLD)),
+                Span::styled(app.v2.grep_summary.clone(), Style::new().fg(theme.ink_2())),
+            ])),
             area,
         );
         return;
@@ -1421,7 +1484,7 @@ fn when_of(secs: i64, width: u16) -> String {
 
 fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
     let total = app.pages.total();
-    // Nothing found and something nearly: one line where the rows would be.
+    // Nothing found and something nearly: a clean rescue card where the rows would be.
     if let (0, Some(similar)) = (total, &app.similar) {
         let count = format!(
             "{}{}",
@@ -1429,20 +1492,39 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
             if similar.capped { "+" } else { "" }
         );
         let said = app.say("Similar: {n} files —").replace("{n}", &count);
-        let line = Line::from(vec![
-            Span::styled(format!(" {said} "), Style::new().fg(theme.ink_2())),
-            Span::styled(similar.query.clone(), Style::new().fg(theme.key())),
-            Span::styled(
-                format!("  · Enter {}", app.say("show")),
-                Style::new().fg(theme.ink_3()),
-            ),
-        ]);
+        let card_w = 72u16.min(area.width.saturating_sub(2));
         let at = Rect {
-            y: area.y + 1.min(area.height.saturating_sub(1)),
-            height: 1.min(area.height),
-            ..area
+            x: area.x + 1.min(area.width.saturating_sub(card_w)),
+            y: area.y + 1.min(area.height.saturating_sub(4)),
+            width: card_w,
+            height: 4.min(area.height),
         };
-        f.render_widget(Paragraph::new(line), at);
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(" ≈ ", Style::new().fg(theme.key()).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{said} "), Style::new().fg(theme.ink())),
+                Span::styled(similar.query.clone(), Style::new().fg(theme.key()).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("   ", Style::new()),
+                Span::styled(
+                    format!(" {} ", app.say("Show similar (Enter)")),
+                    Style::new().fg(theme.back()).bg(theme.key()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ·  {}", app.say("Near matches in the index")),
+                    Style::new().fg(theme.ink_3()),
+                ),
+            ]),
+        ];
+        f.render_widget(
+            Paragraph::new(lines).block(
+                Block::bordered()
+                    .border_style(Style::new().fg(theme.line()))
+                    .style(Style::new().bg(theme.panel())),
+            ),
+            at,
+        );
         return;
     }
     // The scrollbar gets a column of its own: drawn over the list it sits in
@@ -1529,10 +1611,45 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                             crate::icons::of_kind(hit.kind.token()).to_string(),
                             Style::new().fg(theme.kind(hit.kind.token())),
                         ));
-                        spans.push(Span::styled(
-                            cut(name, left.saturating_sub(icon_wide)),
-                            line,
-                        ));
+                        let avail = left.saturating_sub(icon_wide);
+                        let shown = cut(name, avail);
+                        let letters = scour_ui::query::letters_terms(&app.query);
+                        if let Some(sub) = letters
+                            .iter()
+                            .find_map(|w| scour_ui::query::subseq_spans(&shown, w))
+                            .filter(|v| !v.is_empty())
+                        {
+                            let mut cur = 0usize;
+                            for (s, e) in sub {
+                                if s > cur {
+                                    spans.push(Span::styled(shown[cur..s].to_string(), line));
+                                }
+                                spans.push(Span::styled(
+                                    shown[s..e].to_string(),
+                                    Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
+                                ));
+                                cur = e;
+                            }
+                            if cur < shown.len() {
+                                spans.push(Span::styled(shown[cur..].to_string(), line));
+                            }
+                        } else {
+                            spans.push(Span::styled(shown.clone(), line));
+                        }
+                        if app.v2.grep_open
+                            && let Some(fl) = hit.found.first()
+                        {
+                            let used = shown.chars().count();
+                            let rem = avail.saturating_sub(used + 3);
+                            if rem > 8 {
+                                let lno = fl.line.map_or_else(String::new, |l| format!("L{l}: "));
+                                let clean = fl.text.replace(['\t', '\r', '\n'], " ");
+                                spans.push(Span::styled(
+                                    format!("  {}", cut(&format!("{lno}{}", clean.trim()), rem)),
+                                    Style::new().fg(theme.ink_3()),
+                                ));
+                            }
+                        }
                     }
                     // A path is cut from the front: the end names the folder.
                     "path" => spans.push(Span::styled(

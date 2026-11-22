@@ -7,6 +7,7 @@
 
 mod disks;
 mod dupes;
+mod grep;
 mod hotkey;
 mod http;
 mod icons;
@@ -381,6 +382,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/rescan"
         || req.path == "/api/reread"
         || req.path == "/api/index-do"
+        || req.path == "/api/pick-folder"
         || (req.path == "/api/settings" && req.param("set").is_some())
         // Reading the desktop's key is a `GET`; writing one carries a body.
         || (req.path == "/api/hotkey" && !req.body.is_empty());
@@ -423,6 +425,17 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
+        "/api/tree" => grep::api_tree(&mut stream, client, &req),
+        "/api/grep" if doing.preview => grep::api_grep(&mut stream, client, &req),
+        "/api/grep" => http::fail(
+            &mut stream,
+            "403 Forbidden",
+            "previewing is off (--no-preview)",
+        ),
+        "/api/pick-folder" if doing.launch => grep::api_pick_folder(&mut stream, &req),
+        "/api/pick-folder" => {
+            http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)")
+        }
         "/api/dupes" => api_dupes(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/icon" => api_icon(&mut stream, client, &req, doing.pictures),

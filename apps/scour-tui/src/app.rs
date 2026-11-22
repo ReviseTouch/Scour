@@ -114,6 +114,8 @@ pub enum Panel {
     Keys,
     /// What is running.
     About,
+    /// Contextual folder explorer, filter launch, sparkline & fuzzy choices.
+    Lens,
 }
 
 /// The settings screen's sections, in order: the panel that is each one's
@@ -219,6 +221,19 @@ pub enum Want {
     Export {
         query: String,
         to: String,
+    },
+    /// Subfolders of a directory for the Miller Place lens.
+    Tree(String),
+    /// On-demand bounded grep inside matching files.
+    Grep {
+        generation: u64,
+        append: bool,
+        query: String,
+        pattern: String,
+        mode: scour_proto::GrepMode,
+        exact_case: bool,
+        binary: bool,
+        offset: u32,
     },
     /// Close the terminal.
     Leave,
@@ -431,6 +446,8 @@ pub struct App {
     /// The words this interface speaks. Here rather than in a constant: every
     /// cell is redrawn from this struct, so swapping it is the whole switch.
     pub words: scour_i18n::Catalogue,
+    /// Contextual lenses and the on-demand inline Grep capsule.
+    pub v2: crate::v2::V2,
 }
 
 impl Default for App {
@@ -526,6 +543,7 @@ impl Default for App {
             dirty: true,
             leaving: false,
             words: scour_i18n::Catalogue::english(),
+            v2: crate::v2::V2::default(),
         }
     }
 }
@@ -728,6 +746,9 @@ impl App {
         // files nobody can see.
         self.picked.clear();
         self.dirty = true;
+        if self.v2.grep_open && !self.v2.grep_pattern.is_empty() {
+            return self.dispatch_grep(false);
+        }
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
     }
 
@@ -2355,6 +2376,7 @@ impl App {
             // The two rules, a line a folder, and the one that adds.
             Panel::Later => 3 + self.folders.len(),
             Panel::Searching => 2,
+            Panel::Lens => self.v2.lens_items.len(),
             Panel::Keys | Panel::About | Panel::None => 0,
         }
     }
@@ -2799,13 +2821,14 @@ mod words {
     /// Every string handed to [`App::say`] in the terminal, plus the tables
     /// looked up by value. It scans its own file: a msgid in a comment counts.
     fn asked_for() -> Vec<String> {
-        const SOURCE: [&str; 6] = [
+        const SOURCE: [&str; 7] = [
             include_str!("app.rs"),
             include_str!("draw.rs"),
             include_str!("keys.rs"),
             include_str!("link.rs"),
             include_str!("main.rs"),
             include_str!("icons.rs"),
+            include_str!("v2.rs"),
         ];
         let mut out: Vec<String> = Vec::new();
         for text in SOURCE {

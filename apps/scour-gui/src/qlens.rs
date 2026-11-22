@@ -35,15 +35,16 @@ pub struct Open {
     pub kind: Lens,
     pub a: usize,
     pub b: usize,
-    term: lens::Term,
+    pub term: lens::Term,
     raw: String,
     pub sel: usize,
     pub items: Vec<Item>,
     pub title: String,
     pub foot: String,
     facets: Option<Vec<(String, u64)>>,
-    usage: Option<scour_core::UsageResponse>,
-    disks: Option<Vec<Disk>>,
+    pub usage: Option<scour_core::UsageResponse>,
+    pub tree: Option<Vec<scour_core::TreeNode>>,
+    pub disks: Option<Vec<Disk>>,
 }
 
 /// What the window knows that a lens shows: words and places.
@@ -140,6 +141,7 @@ impl Lenses {
             foot: String::new(),
             facets: None,
             usage: None,
+            tree: None,
             disks: None,
         });
         self.generation += 1;
@@ -184,30 +186,47 @@ impl Lenses {
             }
             Lens::Place => {
                 let (base, _) = lens::place_parts(&o.term.value);
-                if base.is_empty() {
-                    match self.seen.get("volumes") {
-                        Some(Response::Volumes { disks, .. }) => o.disks = Some(disks.clone()),
-                        _ => want.push((0, Request::Volumes {})),
+                let active = if base.is_empty() {
+                    if env.home.is_empty() {
+                        "/".to_string()
+                    } else {
+                        env.home.to_string()
                     }
                 } else {
-                    let scoped = if reads(&rest) {
-                        String::new()
-                    } else {
-                        rest.clone()
-                    };
-                    let path = full_form(env.home, &base);
-                    let key = format!("usage {path} {scoped}");
-                    match self.seen.get(&key) {
-                        Some(Response::Usage(u)) => o.usage = Some(u.clone()),
-                        _ => want.push((
-                            0,
-                            Request::Usage {
-                                path,
-                                top: 60,
-                                query: scoped,
-                            },
-                        )),
-                    }
+                    full_form(env.home, &base)
+                };
+                match self.seen.get("volumes") {
+                    Some(Response::Volumes { disks, .. }) => o.disks = Some(disks.clone()),
+                    _ => want.push((0, Request::Volumes {})),
+                }
+                let scoped = if reads(&rest) {
+                    String::new()
+                } else {
+                    rest.clone()
+                };
+                let ukey = format!("usage {active} {scoped}");
+                match self.seen.get(&ukey) {
+                    Some(Response::Usage(u)) => o.usage = Some(u.clone()),
+                    _ => want.push((
+                        1,
+                        Request::Usage {
+                            path: active.clone(),
+                            top: 60,
+                            query: scoped,
+                        },
+                    )),
+                }
+                let tkey = format!("tree {active}");
+                match self.seen.get(&tkey) {
+                    Some(Response::Tree { root, .. }) => o.tree = Some(root.nodes.clone()),
+                    _ => want.push((
+                        2,
+                        Request::Tree {
+                            path: active,
+                            depth: 1,
+                            limit: 120,
+                        },
+                    )),
                 }
             }
             _ => {}
@@ -283,13 +302,34 @@ impl Lenses {
                 // Keyed as `fill` looks it up, never by the path the reply
                 // spells: a key that differs would ask again forever.
                 let (base, _) = lens::place_parts(&o.term.value);
+                let active = if base.is_empty() {
+                    if env.home.is_empty() {
+                        "/".to_string()
+                    } else {
+                        env.home.to_string()
+                    }
+                } else {
+                    full_form(env.home, &base)
+                };
                 let scoped = if reads(&rest) {
                     String::new()
                 } else {
                     rest.clone()
                 };
-                let path = full_form(env.home, &base);
-                self.seen.insert(format!("usage {path} {scoped}"), reply);
+                self.seen.insert(format!("usage {active} {scoped}"), reply);
+            }
+            (Response::Tree { .. }, _) => {
+                let (base, _) = lens::place_parts(&o.term.value);
+                let active = if base.is_empty() {
+                    if env.home.is_empty() {
+                        "/".to_string()
+                    } else {
+                        env.home.to_string()
+                    }
+                } else {
+                    full_form(env.home, &base)
+                };
+                self.seen.insert(format!("tree {active}"), reply);
             }
             _ => return Vec::new(),
         }
@@ -368,6 +408,41 @@ impl Lenses {
     pub fn forget(&mut self, key: &str) {
         self.seen.remove(key);
     }
+
+    /// Term produced by dragging across sparkline bars `[a ..= b]`.
+    pub fn spark_range(&self, a: usize, b: usize) -> Option<String> {
+        let o = self.open.as_ref()?;
+        let (lo, hi) = (a.min(b), a.max(b).min(o.items.len().saturating_sub(1)));
+        if lo == hi {
+            return o.items.get(lo).map(|i| i.term.clone());
+        }
+        let neg = if o.term.not { "!" } else { "" };
+        match o.kind {
+            Lens::Time => {
+                let edges = ["1d", "2d", "7d", "30d", "365d"];
+                Some(format!("{neg}dm:{}", edges.get(hi).copied().unwrap_or("365d")))
+            }
+            Lens::Size => {
+                let lo_edge = ["", "100kb", "10mb", "1gb"].get(lo).copied().unwrap_or("");
+                let hi_edge = ["100kb", "10mb", "1gb", ""].get(hi).copied().unwrap_or("");
+                let val = match (lo_edge.is_empty(), hi_edge.is_empty()) {
+                    (false, false) => format!("{lo_edge}..{hi_edge}"),
+                    (false, true) => format!(">{lo_edge}"),
+                    _ => format!("<{hi_edge}"),
+                };
+                Some(format!("{neg}size:{val}"))
+            }
+            _ => None,
+        }
+    }
+}
+
+pub fn home_path(home: &str, p: &str) -> String {
+    home_form(home, p)
+}
+
+pub fn full_path(home: &str, p: &str) -> String {
+    full_form(home, p)
 }
 
 fn facet_pairs(f: &scour_core::FacetResponse) -> Vec<(String, u64)> {

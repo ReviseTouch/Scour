@@ -71,19 +71,65 @@
   }
   .query .brand { display: flex; align-items: center; }
   /* The filters a query can take: the same list as `:` and Ctrl+Space. */
-  .qfilter {
-    flex: none; align-self: flex-start; height: 34px; padding: 0 12px;
-    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
-    color: var(--ink-2); font: 500 13px/1 var(--sans); cursor: pointer;
+  .qtriggers {
+    flex: none; align-self: flex-start; display: flex; align-items: center; gap: 4px;
   }
-  .qfilter:hover, .qfilter[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
-  /* One line, always: what the results hold on the left, the switches on the
-     right. A long strip is cut, never wrapped, so the list never moves. */
+  .qtrig, .qfilter {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    height: 34px; padding: 0 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    color: var(--ink-2); font: 500 12.5px/1 var(--sans); cursor: pointer;
+    transition: border-color .12s, background .12s, color .12s;
+  }
+  .qtrig .gi { font: 600 13px/1 var(--mono); color: var(--ink-3); }
+  .qtrig:hover, .qfilter:hover, .qfilter[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
+  .qtrig.on { color: var(--q-key); border-color: var(--cap-ring); background: var(--cap); }
+  .qtrig.on .gi { color: var(--q-key); }
+  .qtrig.grep-on { color: var(--q-bad); border-color: var(--cap-read-ring); background: var(--cap-read); }
+  .qtrig.grep-on .gi { color: var(--q-bad); }
+  @media (max-width: 980px) { .qtrig .qlab { display: none; } .qtrig { padding: 0 8px; } }
+  /* Inline on-demand Grep capsule: hidden until opened. */
+  .grep-bar {
+    display: flex; align-items: center; gap: 6px;
+    flex: 0 1 540px; min-width: 320px; height: 34px; padding: 0 8px 0 10px;
+    background: var(--panel); border: 1px solid var(--cap-read-ring);
+    border-radius: 8px; box-shadow: 0 0 0 2px var(--cap-read);
+  }
+  .grep-bar[hidden] { display: none; }
+  .grep-bar:focus-within { border-color: var(--q-bad); }
+  .grep-bar .gp { flex: none; font: 700 13px/1 var(--mono); color: var(--q-bad); user-select: none; }
+  .grep-bar input {
+    flex: 1; min-width: 80px; border: 0; outline: 0; background: none;
+    color: var(--ink); font: 500 13.5px/1 var(--mono); padding: 0;
+  }
+  .grep-bar input::placeholder { color: var(--ink-3); }
+  .grep-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex: none; }
+  .grep-seg button, .grep-flag {
+    border: 0; background: none; color: var(--ink-3); font: 600 11px/1 var(--mono);
+    height: 22px; padding: 0 6px; cursor: pointer;
+  }
+  .grep-seg button:hover, .grep-flag:hover { color: var(--ink); background: var(--hover); }
+  .grep-seg button[aria-pressed="true"], .grep-flag[aria-pressed="true"] {
+    color: var(--ink); background: var(--line-soft);
+  }
+  .grep-flag { border: 1px solid var(--line); border-radius: 6px; flex: none; }
+  .grep-x {
+    border: 0; background: none; color: var(--ink-3); width: 22px; height: 22px;
+    border-radius: 5px; font: 600 14px/1 var(--sans); cursor: pointer; padding: 0; flex: none;
+  }
+  .grep-x:hover { color: var(--ink); background: var(--hover); }
+  /* One line when needed; hidden on an untouched empty query so the window stays calm. */
   .ctxrow {
     flex-basis: 100%; display: flex; align-items: center; gap: 10px;
     margin: 0 -12px -10px -16px; padding: 5px 12px 5px 16px;
     border-top: 1px solid var(--line); min-width: 0;
   }
+  .ctxrow[hidden] { display: none; }
+  .ctxrow .ctx-x {
+    flex: none; border: 0; background: none; color: var(--ink-3); cursor: pointer;
+    font: 600 13px/1 var(--sans); padding: 2px 5px; border-radius: 4px;
+  }
+  .ctxrow .ctx-x:hover { color: var(--ink); background: var(--hover); }
   .narrow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
   .narrow .qread { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .narrow .qread:empty, .narrow .qread[hidden] { display: none; }
@@ -322,23 +368,25 @@
   .qread b { color: var(--ink-2); font-weight: 600; }
   .qread.warn { color: var(--q-bad); }
 
-  /* The lens: opaque, under its term, never wider than the field. */
+  /* The lens: opaque, under its term, expanding for Miller places and sparklines. */
   .lens {
     position: absolute;
-    width: 420px;
-    max-width: 100%;
-    max-height: 340px;
+    width: 430px;
+    max-width: min(720px, calc(100vw - 28px));
+    max-height: min(440px, calc(100vh - 130px));
     overflow-y: auto;
     background: var(--panel-2);
     border: 1px solid var(--line);
-    border-radius: 9px;
-    box-shadow: 0 20px 44px -24px rgba(0,0,0,.75);
+    border-radius: 10px;
+    box-shadow: 0 22px 48px -20px rgba(0,0,0,.78);
     padding: 4px 0;
-    z-index: 31;
+    z-index: 65;
     font: 500 12.5px/1.3 var(--sans);
   }
+  .lens.lens-place { width: min(680px, calc(100vw - 28px)); overflow: hidden; display: flex; flex-direction: column; padding: 0; }
+  .lens.lens-band { width: min(470px, calc(100vw - 28px)); }
   .lens[hidden] { display: none; }
-  .lens .lhead { display: flex; justify-content: space-between; gap: 8px; padding: 5px 12px 6px; color: var(--ink-3); font-size: 11.5px; }
+  .lens .lhead { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px 6px; color: var(--ink-3); font-size: 11.5px; }
   .lens .lhead b { color: var(--ink-2); font-weight: 600; }
   .lens .lgroup { padding: 7px 12px 2px; color: var(--ink-3); font-size: 11px; font-weight: 600; }
   .lens .lgroup:empty { padding: 2px 0 0; border-top: 1px solid var(--line); margin-top: 4px; }
@@ -360,7 +408,87 @@
   .lens .lopt .b i { display: block; height: 100%; background: var(--k3); }
   .lens .lopt .c { text-align: right; font: 500 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
   .lens .lopt .r { grid-column: 2 / 4; text-align: right; color: var(--q-bad); font-size: 11.5px; }
-  .lens .lfoot { margin-top: 4px; padding: 7px 12px 4px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 11.5px; }
+  .lens .lfoot { margin-top: 4px; padding: 7px 12px 5px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 11.5px; }
+  /* 2-column Miller Place Explorer inside `#lens` */
+  .lp-grid { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 250px; max-height: 360px; }
+  @media (max-width: 620px) { .lp-grid { grid-template-columns: 1fr; } }
+  .lp-left { border-right: 1px solid var(--line); overflow-y: auto; padding: 6px 0; background: var(--ground); display: flex; flex-direction: column; }
+  .lp-right { overflow-y: auto; padding: 6px 0; display: flex; flex-direction: column; min-width: 0; }
+  .lp-sec { padding: 4px 12px 3px; font: 600 10.5px/1.2 var(--sans); color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+  .lp-item {
+    display: flex; align-items: center; gap: 7px; width: 100%; border: 0; background: none;
+    padding: 5px 12px; color: var(--ink-2); font: 500 12px/1.3 var(--sans); text-align: left; cursor: pointer;
+  }
+  .lp-item:hover, .lp-item.active { background: var(--line-soft); color: var(--ink); }
+  .lp-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lp-item .sub { font: 500 10.5px var(--mono); color: var(--ink-3); flex: none; }
+  .lp-item .ask-tag { font: 600 10.5px var(--sans); color: var(--q-key); border: 1px solid var(--cap-ring); border-radius: 4px; padding: 1px 5px; }
+  .lp-pick {
+    margin: auto 10px 4px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 6px;
+    background: var(--panel); color: var(--ink-2); font: 500 12px/1.2 var(--sans); cursor: pointer; text-align: center;
+  }
+  .lp-pick:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+  .lp-crumb {
+    display: flex; align-items: center; gap: 3px; padding: 4px 10px 6px;
+    border-bottom: 1px solid var(--line-soft); font: 500 11.5px/1.2 var(--mono); overflow-x: auto; scrollbar-width: none;
+  }
+  .lp-crumb button {
+    border: 0; background: none; color: var(--ink-2); font: inherit; padding: 2px 4px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  }
+  .lp-crumb button:hover { background: var(--line-soft); color: var(--ink); }
+  .lp-crumb button.cur { color: var(--ink); font-weight: 650; }
+  .lp-crumb .direct {
+    margin-left: auto; border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+    font: 500 10.5px var(--sans); color: var(--ink-3);
+  }
+  .lp-crumb .direct.on { color: var(--q-key); border-color: var(--cap-ring); background: var(--cap); }
+  .lp-dir {
+    position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+    cursor: pointer; color: var(--ink); min-width: 0;
+  }
+  .lp-dir:hover, .lp-dir.on { background: var(--pick); }
+  .lp-dir .wbar {
+    position: absolute; left: 8px; top: 3px; bottom: 3px; border-radius: 3px;
+    background: var(--line-soft); pointer-events: none; z-index: 0;
+  }
+  .lp-dir > :not(.wbar) { position: relative; z-index: 1; }
+  .lp-dir .dn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12.5px var(--mono); }
+  .lp-dir .dm { font: 500 11px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+  .lp-dir .da { display: inline-flex; gap: 3px; opacity: .55; transition: opacity .1s; flex: none; }
+  .lp-dir:hover .da, .lp-dir.on .da { opacity: 1; }
+  .lp-dir .da button {
+    width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink-2); font: 700 11px/1 var(--mono); cursor: pointer; padding: 0;
+  }
+  .lp-dir .da button.inc:hover { border-color: var(--q-key); color: var(--q-key); }
+  .lp-dir .da button.exc:hover { border-color: var(--q-not); color: var(--q-not); }
+  /* Sparkline inside Time & Size lenses */
+  .lspark-wrap { padding: 6px 12px 8px; border-bottom: 1px solid var(--line-soft); user-select: none; }
+  .lspark { display: flex; align-items: flex-end; gap: 5px; height: 52px; padding-top: 6px; cursor: crosshair; }
+  .lspark .sbar {
+    flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch;
+    gap: 3px; border-radius: 4px; padding: 2px 2px 0; cursor: pointer;
+  }
+  .lspark .sbar:hover { background: var(--line-soft); }
+  .lspark .sbar i {
+    display: block; width: 100%; min-height: 3px; border-radius: 3px 3px 1px 1px;
+    background: var(--k3); opacity: .65; transition: height .14s, background .12s, opacity .12s;
+  }
+  .lspark .sbar.in i, .lspark .sbar:hover i { background: var(--q-key); opacity: 1; }
+  .lspark-lbls { display: flex; gap: 5px; margin-top: 4px; font: 500 10px/1.1 var(--mono); color: var(--ink-3); text-align: center; }
+  .lspark-lbls span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lspark-note { margin-top: 4px; font-size: 10.5px; color: var(--ink-3); text-align: right; }
+  /* Word lens global switches */
+  .lw-global {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 6px 12px; border-top: 1px solid var(--line-soft); background: var(--ground); font-size: 11.5px; color: var(--ink-2);
+  }
+  .lw-pills { display: inline-flex; gap: 2px; border: 1px solid var(--line); border-radius: 6px; padding: 1px; background: var(--panel); }
+  .lw-pills button {
+    border: 0; background: none; color: var(--ink-3); font: 500 11px/1.3 var(--sans);
+    padding: 2px 7px; border-radius: 4px; cursor: pointer;
+  }
+  .lw-pills button.on { background: var(--line-soft); color: var(--ink); font-weight: 600; }
 
   /* Completions, from the engine's field table. */
   .hints {
@@ -744,15 +872,68 @@
     white-space: nowrap;
   }
   td.kind { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
-  .empty { padding: calc(var(--u) * 12); text-align: center; color: var(--ink-3); font-size: 13px; }
+  .empty { padding: calc(var(--u) * 10) calc(var(--u) * 6) calc(var(--u) * 4); text-align: center; color: var(--ink-3); font-size: 13px; }
   .empty code { font-family: var(--mono); color: var(--ink-2); }
-  .similar { text-align: center; color: var(--ink-2); font-size: 13px; }
-  .similar[hidden] { display: none; }
-  .similar button {
-    margin-left: 6px; border: 0; background: none; padding: 0; font: inherit;
-    color: var(--q-key); cursor: pointer;
+  .similar {
+    max-width: 560px; margin: 8px auto 0; padding: 14px 16px;
+    background: var(--ground); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--ink-2); font-size: 13px; text-align: left;
+    box-shadow: 0 10px 28px -18px rgba(0,0,0,.45);
   }
-  .similar button:hover { text-decoration: underline; }
+  .similar[hidden] { display: none; }
+  .similar .sim-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .similar .sim-q { font: 600 11.5px var(--mono); color: var(--q-key); background: var(--cap); padding: 2px 7px; border-radius: 5px; }
+  .similar .sim-rows { margin: 10px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); padding: 4px 0; }
+  .similar .sim-rows:empty { display: none; }
+  .similar .sim-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+    border: 0; background: none; padding: 5px 6px; border-radius: 5px; cursor: pointer; text-align: left; color: var(--ink);
+  }
+  .similar .sim-row:hover { background: var(--hover); }
+  .similar .sim-row .sn { font: 500 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .similar .sim-row .sp { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 48%; }
+  .similar .sim-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .similar .sim-acts button {
+    border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    padding: 5px 12px; font: 500 12.5px/1.2 var(--sans); color: var(--ink-2); cursor: pointer; margin: 0;
+  }
+  .similar .sim-acts button.pri { border-color: var(--q-key); color: var(--q-key); background: var(--cap); font-weight: 600; }
+  .similar .sim-acts button:hover { color: var(--ink); border-color: var(--ink-3); text-decoration: none; }
+  /* Grep results stream view */
+  .grep-view { flex: 1; overflow-y: auto; padding: 12px 18px 24px; background: var(--panel); min-height: 0; }
+  .grep-view[hidden] { display: none; }
+  .grep-sum {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+    padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--ground); font: 500 12px/1.3 var(--mono); color: var(--ink-2);
+  }
+  .grep-sum .gs-skip { color: var(--ink-3); }
+  .grep-sum .gs-more {
+    margin-left: auto; border: 1px solid var(--q-key); border-radius: 6px; background: var(--cap);
+    color: var(--q-key); font: 600 12px/1.2 var(--sans); padding: 4px 11px; cursor: pointer;
+  }
+  .grep-sum .gs-more:hover { background: var(--hover); }
+  .grep-card {
+    border: 1px solid var(--line-soft); border-radius: 8px; margin-bottom: 8px;
+    background: var(--ground); overflow: hidden;
+  }
+  .grep-card .gc-head {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  .grep-card .gc-head:hover { background: var(--hover); }
+  .grep-card .gc-nm { font: 600 12.5px var(--mono); color: var(--ink); }
+  .grep-card .gc-dir { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .grep-card .gc-cnt { font: 600 11px var(--mono); color: var(--q-bad); background: var(--cap-read); padding: 1px 6px; border-radius: 10px; flex: none; }
+  .grep-line {
+    display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px;
+    padding: 4px 12px; font: 400 12px/1.55 var(--mono); color: var(--ink-2); cursor: pointer;
+  }
+  .grep-line:hover { background: var(--line-soft); color: var(--ink); }
+  .grep-line .gl-no { text-align: right; color: var(--ink-3); user-select: none; font-variant-numeric: tabular-nums; }
+  .grep-line .gl-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-line mark { background: var(--mark); color: var(--ink); font-weight: 600; border-radius: 2px; padding: 0 1px; }
+  .grep-more-note { padding: 4px 12px 6px 68px; font: 500 11px var(--sans); color: var(--ink-3); }
   .rescue { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 14px; font-size: 12.5px; color: var(--ink-3); }
   .rescue[hidden] { display: none; }
   .rescue button {
@@ -1909,17 +2090,52 @@
           <div class="lens" id="lens" role="listbox" data-t-aria="Choices" hidden></div>
         </div>
       </div>
-      <!-- The filters a query can take, as `:` and Ctrl+Space offer them. -->
-      <button type="button" id="qadd" class="qfilter" aria-haspopup="listbox"
-              data-t-title="add a filter (:)" data-t-aria="add a filter"><span data-t="Filter"></span> ▾</button>
-      <!-- Under the bar: what the results hold, each a term a press adds; at
-           its right end the switches for what is shown. -->
-      <div class="ctxrow">
+      <!-- Inline on-demand Grep capsule: zero clutter until opened. -->
+      <div class="grep-bar" id="grep-bar" hidden>
+        <span class="gp" aria-hidden="true">≣</span>
+        <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
+               data-t-ph="Search inside matching files…" data-t-aria="Search inside matching files…">
+        <div class="grep-seg" role="group">
+          <button type="button" data-gmode="text" aria-pressed="true" data-t="Text"></button>
+          <button type="button" data-gmode="regex" aria-pressed="false" data-t="Regex"></button>
+          <button type="button" data-gmode="hex" aria-pressed="false" data-t="Hex"></button>
+        </div>
+        <button type="button" class="grep-flag" id="grep-case" aria-pressed="false"
+                data-t-title="Exact case" data-t-aria="Exact case">Aa</button>
+        <button type="button" class="grep-flag" id="grep-bin" aria-pressed="false"
+                data-t-title="Include binary files" data-t-aria="Include binary files">01</button>
+        <button type="button" class="grep-x" id="grep-close"
+                data-t-title="Close grep" data-t-aria="Close grep">×</button>
+      </div>
+      <!-- Quiet on-demand lenses and filters: unfold only when asked. -->
+      <div class="qtriggers" id="qtriggers">
+        <button type="button" class="qtrig" id="q-loc" data-lens-field="under"
+                data-t-title="Open location lens" data-t-aria="Open location lens">
+          <span class="gi" aria-hidden="true">⛁</span><span class="qlab" data-t="Location"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-time" data-lens-field="dm"
+                data-t-title="Open time lens" data-t-aria="Open time lens">
+          <span class="gi" aria-hidden="true">◷</span><span class="qlab" data-t="Modified"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-fuzzy"
+                data-t-title="Word matching" data-t-aria="Word matching">
+          <span class="gi" aria-hidden="true">≈</span><span class="qlab" data-t="Fuzzy"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-grep"
+                data-t-title="Search inside files (Ctrl+G)" data-t-aria="Search inside files (Ctrl+G)">
+          <span class="gi" aria-hidden="true">≣</span><span class="qlab" data-t="Grep"></span>
+        </button>
+        <button type="button" id="qadd" class="qfilter" aria-haspopup="listbox"
+                data-t-title="add a filter (:)" data-t-aria="add a filter"><span data-t="Filter"></span> ▾</button>
+      </div>
+      <!-- Under the bar: calm and hidden on an empty query, unfolding as the user types or asks. -->
+      <div class="ctxrow" id="ctxrow" hidden>
         <div class="narrow" id="narrow">
           <p class="qread" id="qread"></p>
           <span class="nlbl" id="narrow-lbl" data-t="Narrow:" hidden></span>
           <span class="chips" id="chips"></span>
         </div>
+        <button type="button" class="ctx-x" id="ctx-close" data-t-title="Hide narrowing suggestions" data-t-aria="Hide narrowing suggestions">×</button>
       </div>
     </div>
 
@@ -1995,6 +2211,8 @@
            are read for every search, and the two keys worth knowing. -->
       <span class="mright">
         <button type="button" class="mchip warn" id="m-disk" hidden></button>
+        <button type="button" class="mchip" id="m-narrow"
+                data-t-title="Show narrowing suggestions"><span data-t="Narrow"></span></button>
         <button type="button" class="mchip" id="m-typos"
                 data-t-title="How every word is read; a press changes it"></button>
         <span class="mkeys"><kbd>:</kbd> <span data-t="filter"></span>
@@ -2170,10 +2388,21 @@
           </table>
           <div class="empty" id="empty" hidden
                data-t-html="No matches. Two letters like &lt;code&gt;ab&lt;/code&gt; work too — the trigram index does not refuse them, it scans."></div>
-          <div class="similar" id="similar" hidden><span id="similar-said"></span><button type="button" id="similar-show" data-t="show"></button></div>
+          <div class="similar" id="similar" hidden>
+            <div class="sim-head">
+              <strong id="similar-said"></strong>
+              <span class="sim-q" id="similar-q"></span>
+            </div>
+            <div class="sim-rows" id="similar-rows"></div>
+            <div class="sim-acts">
+              <button type="button" class="pri" id="similar-show" data-t="Show similar (Enter)"></button>
+              <button type="button" id="similar-always" data-t="Always forgive typos"></button>
+            </div>
+          </div>
           <!-- With nothing found: which one filter, left out, would find something. -->
           <div class="rescue" id="rescue" hidden></div>
         </div>
+        <div class="grep-view" id="grep-view" hidden></div>
 
         <div class="restore" id="restore" hidden>
           <button type="button" id="rail-back" data-t="Show the sidebar" hidden></button>
@@ -2535,6 +2764,16 @@
     /* A URL, not a fetch: a blob holds the whole file to show one frame. */
     peekUrl: (path) =>
       `/api/preview?${new URLSearchParams({ path, t: TOKEN })}`,
+    grep: (params, signal) => SERVICE.get("grep", params, signal),
+    tree: (path, signal) => SERVICE.get("tree", { path, limit: 120 }, signal),
+    pickFolder: async (start) => {
+      const r = await fetch(`/api/pick-folder?${new URLSearchParams({ start: start || "", t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`pick-folder: ${r.status}`);
+      return r.json();
+    },
   };
 
   /* The rows the last search returned; nothing else keeps a copy. */
@@ -2636,7 +2875,7 @@
   // The page's own reading of the query, copied from `scour-query`.
   function parse(text) {
     const terms = text.trim().split(/\s+/).filter(Boolean);
-    const out = { text: [], not: [], kind: null, under: null, parent: null,
+    const out = { text: [], not: [], letters: [], fuzzy: [], kind: null, under: null, parent: null,
                   size: null, band: null, ext: null, path: null, isDir: null };
     for (const raw of terms) {
       const neg = raw.startsWith("!");
@@ -2651,16 +2890,18 @@
       }
       const v = sp[1];
       switch (f.name) {
-        case "kind":   out.kind   = fold(v); break;
-        case "under":  out.under  = v;       break;
-        case "parent": out.parent = v.replace(/\/$/, ""); break;
-        case "size":   out.size   = fold(v); break;
-        case "ext":    out.ext    = fold(v); break;
-        case "path":   out.path   = fold(v); break;
+        case "kind":    out.kind    = fold(v); break;
+        case "under":   out.under   = v;       break;
+        case "parent":  out.parent  = v.replace(/\/$/, ""); break;
+        case "size":    out.size    = fold(v); break;
+        case "ext":     out.ext     = fold(v); break;
+        case "path":    out.path    = fold(v); break;
         case "dm": case "dc": case "da": out.band = fold(v); break;
-        case "file":   out.isDir  = false;   break;
-        case "folder": out.isDir  = true;    break;
+        case "file":    out.isDir   = false;   break;
+        case "folder":  out.isDir   = true;    break;
         case "content": out.text.push("\u0000"); break;
+        case "letters": if (!neg && v) out.letters.push(fold(v).replace(/"/g, "")); break;
+        case "fuzzy":   if (!neg && v) out.fuzzy.push(fold(v).replace(/"/g, "")); break;
       }
     }
     return out;
@@ -3107,6 +3348,7 @@
               s.role === "text" &&
               MISTAKEN.has(text.slice(js(s.start), js(s.start + s.len)).toLowerCase()),
           );
+        drawNarrow();
         /* The reading lives in an `auto` grid row, so a longer one wraps after
            the list has painted, with no resize or scroll to notice it. */
         repaint(true);
@@ -3384,19 +3626,96 @@
 
   /* The name, appended as nodes rather than through `innerHTML`: a parse per
    * row measured 15 ms a paint over two hundred rows. */
-  function writeName(td, f, terms) {
+  function writeName(td, f, terms, parsed) {
     // Rewritten whole: the marked run moves with every keystroke.
     td.replaceChildren();
     // A drive's root has no name of its own: `C:/` is called by its path.
     const name = f.name || f.path.replace(/\/+$/, "");
-    const at = span(name, terms);
-    if (!at) {
-      td.append(name);
+    let at = span(name, terms);
+    if (!at && parsed && parsed.fuzzy && parsed.fuzzy.length) {
+      at = fuzzySpan(name, parsed.fuzzy);
+    }
+    if (!at && KEPT && KEPT.typos === "always" && terms.length) {
+      at = fuzzySpan(name, terms);
+    }
+    if (at) {
+      const mark = document.createElement("mark");
+      mark.textContent = name.slice(at[0], at[0] + at[1]);
+      td.append(name.slice(0, at[0]), mark, name.slice(at[0] + at[1]));
       return;
     }
-    const mark = document.createElement("mark");
-    mark.textContent = name.slice(at[0], at[0] + at[1]);
-    td.append(name.slice(0, at[0]), mark, name.slice(at[0] + at[1]));
+    if (parsed && parsed.letters && parsed.letters.length) {
+      const runs = subseqSpans(name, parsed.letters[0]);
+      if (runs) {
+        let pos = 0;
+        for (const [s, e] of runs) {
+          if (s > pos) td.append(name.slice(pos, s));
+          const m = document.createElement("mark");
+          m.textContent = name.slice(s, e);
+          td.append(m);
+          pos = e;
+        }
+        if (pos < name.length) td.append(name.slice(pos));
+        return;
+      }
+    }
+    td.append(name);
+  }
+
+  function subseqSpans(name, needle) {
+    const [text, at] = bare(name);
+    const want = bare(needle)[0];
+    if (!want) return null;
+    let wi = 0;
+    const out = [];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === want[wi]) {
+        const s = at ? at[i] : i;
+        const e = at ? at[i + 1] : i + 1;
+        const prev = out[out.length - 1];
+        if (prev && prev[1] === s) prev[1] = e;
+        else if (!prev || s >= prev[1]) out.push([s, e]);
+        wi++;
+        if (wi === want.length) return out;
+      }
+    }
+    return null;
+  }
+
+  function oneEdit(a, b) {
+    if (a === b) return true;
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    if (a.length === b.length) {
+      if (a.slice(i + 1) === b.slice(i + 1)) return true;
+      return i + 1 < a.length && a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2);
+    }
+    return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+  }
+
+  function fuzzySpan(name, terms) {
+    const [text, at] = bare(name);
+    for (const raw of terms) {
+      const want = bare(raw)[0];
+      if (!want || want.length < 3) continue;
+      let fallback = null;
+      for (const len of [want.length - 1, want.length, want.length + 1]) {
+        if (len < 2 || len > text.length) continue;
+        for (let i = 0; i + len <= text.length; i++) {
+          const sub = text.slice(i, i + len);
+          if (oneEdit(sub, want)) {
+            const from = at ? at[i] : i;
+            const to = at ? at[i + len] : i + len;
+            const res = [from, to - from];
+            if (!/[._\-\s]$/.test(sub)) return res;
+            fallback = fallback || res;
+          }
+        }
+      }
+      if (fallback) return fallback;
+    }
+    return null;
   }
 
   /* Text as a name is searched — case and marks set aside — and where each
@@ -3563,6 +3882,11 @@
     if (e.key === "Enter" && hintBox.hidden) {
       // A text area would break the line; a query is one line however it wraps.
       e.preventDefault();
+      if (!LIST.total && SIMILAR && !similarBox.hidden) {
+        q.value = SIMILAR;
+        render();
+        return;
+      }
       remember(q.value);
       return;
     }
@@ -3872,19 +4196,28 @@
     }
     if (LENS.kind === "place") {
       const [base] = placeParts(t.value);
-      if (!base) {
-        cache("volumes", () => SERVICE.volumes())
-          .then((r) => { if (live()) { LENS.disks = r.disks || []; again(); } })
-          .catch(() => {});
-        return;
-      }
-      const path = fullForm(base);
+      const activeBase = base ? fullForm(base) : (HOME || "/");
+      LENS.placeDir = activeBase;
       const scoped = READS.test(rest) ? "" : rest;
-      LENS.usage = lensSeen.get("usage " + path + " " + scoped) || null;
-      if (LENS.usage) { again(); return; }
-      cache("usage " + path + " " + scoped, () => SERVICE.get("usage", { path, top: 60, q: scoped }, signal))
-        .then((r) => { if (live()) { LENS.usage = r; again(); } })
-        .catch(() => { if (live()) { LENS.usage = { root: { bytes: 0, files: null }, children: [] }; again(); } });
+      LENS.disks = lensSeen.get("volumes") || null;
+      LENS.usage = lensSeen.get("usage " + activeBase + " " + scoped) || null;
+      LENS.tree = lensSeen.get("tree " + activeBase) || null;
+      again();
+      if (!LENS.disks) {
+        cache("volumes", () => SERVICE.volumes().then((r) => r.disks || []))
+          .then((d) => { if (live()) { LENS.disks = d; again(); } })
+          .catch(() => {});
+      }
+      if (!LENS.usage) {
+        cache("usage " + activeBase + " " + scoped, () => SERVICE.get("usage", { path: activeBase, top: 60, q: scoped }, signal))
+          .then((r) => { if (live()) { LENS.usage = r; again(); } })
+          .catch(() => { if (live()) { LENS.usage = { root: { bytes: 0, files: null }, children: [] }; again(); } });
+      }
+      if (!LENS.tree) {
+        cache("tree " + activeBase, () => SERVICE.tree(activeBase, signal).then((r) => r.dirs || []))
+          .then((d) => { if (live()) { LENS.tree = d; again(); } })
+          .catch(() => { if (live()) { LENS.tree = []; again(); } });
+      }
       return;
     }
     lensCounts(rest, mine, signal);
@@ -3909,25 +4242,176 @@
     }
   }
 
+  function lensWriteRaw(text, keepOpen, caretIn) {
+    if (!LENS) return;
+    const { a, b } = LENS;
+    const v = q.value;
+    const tail = !keepOpen && !/\s/.test(v[b] || "") ? " " : "";
+    q.value = v.slice(0, a) + text + tail + v.slice(b);
+    const caret = caretIn ?? (a + text.length + tail.length);
+    q.setSelectionRange(caret, caret);
+    render();
+    if (keepOpen) lensSync(true); else lensClose();
+  }
+
+  function lensPlaceHtml() {
+    const t = LENS.term;
+    const fld = t.field || "under";
+    const [base, part] = placeParts(t.value);
+    const active = LENS.placeDir || (base ? fullForm(base) : (HOME || "/"));
+    const want = fold(part);
+    const disks = LENS.disks || [];
+    const diskHtml = disks.map((d) => {
+      const root = d.volume.roots[0] || "";
+      const name = d.volume.label || root || d.volume.id;
+      const on = ["auto", "chosen", "configured"].includes(d.state);
+      const act = on && (active === root || active.startsWith(root === "/" ? "/" : root + "/"));
+      return on
+        ? '<button type="button" class="lp-item' + (act ? " active" : "") + '" data-pdir="' + escape_(root) + '">' +
+          '<span class="nm">⛁ ' + escape_(name) + '</span><span class="sub">' + escape_(homeForm(root)) + "</span></button>"
+        : '<button type="button" class="lp-item" data-pdisk="' + escape_(d.volume.id) + '">' +
+          '<span class="nm">⛁ ' + escape_(name) + '</span><span class="ask-tag">' + escape_(T("Index it")) + "</span></button>";
+    }).join("");
+    const placeRows = (HOME ? [["~", HOME], ...SCOPES] : SCOPES).map(([label, path]) => {
+      const act = active === path;
+      return '<button type="button" class="lp-item' + (act ? " active" : "") + '" data-pdir="' + escape_(path) + '">' +
+        '<span class="nm">' + escape_(label) + '</span><span class="sub">' + escape_(homeForm(path)) + "</span></button>";
+    }).join("");
+
+    // Breadcrumb segments for the right column
+    const shown = homeForm(active);
+    const segs = [];
+    if (shown.startsWith("~")) {
+      segs.push(["~", HOME]);
+      let cur = HOME;
+      for (const p of shown.slice(1).split("/").filter(Boolean)) { cur += "/" + p; segs.push([p, cur]); }
+    } else {
+      segs.push(["/", "/"]);
+      let cur = "";
+      for (const p of active.split("/").filter(Boolean)) { cur += "/" + p; segs.push([p, cur]); }
+    }
+    const parentPath = active === "/" ? null : (active.lastIndexOf("/") <= 0 ? "/" : active.slice(0, active.lastIndexOf("/")));
+    const crumbHtml =
+      (parentPath ? '<button type="button" data-pdir="' + escape_(parentPath) + '" title="' + escape_(T("Climb up")) + '">‹</button>' : "") +
+      segs.map(([lbl, p], idx) =>
+        (idx ? '<span class="s">/</span>' : "") +
+        '<button type="button" class="' + (idx + 1 === segs.length ? "cur" : "") + '" data-pdir="' + escape_(p) + '">' + escape_(lbl) + "</button>"
+      ).join("") +
+      '<button type="button" class="direct' + (fld === "parent" ? " on" : "") + '" data-pflip="1">' +
+      escape_(T("only what is directly inside")) + "</button>";
+
+    // Merge Usage weights + Tree subdirectories so empty/unweighed folders still appear
+    const byPath = new Map();
+    const u = LENS.usage;
+    for (const c of (u && u.children) || []) {
+      byPath.set(c.path, { path: c.path, name: c.path.slice(c.path.lastIndexOf("/") + 1), bytes: c.bytes || 0, files: c.files || 0 });
+    }
+    for (const d of LENS.tree || []) {
+      if (!byPath.has(d.path)) byPath.set(d.path, { path: d.path, name: d.name, bytes: 0, files: d.children || 0 });
+    }
+    const dirs = [...byPath.values()]
+      .filter((d) => !want || fold(d.name).includes(want))
+      .sort((x, y) => (y.bytes - x.bytes) || (y.files - x.files) || x.name.localeCompare(y.name))
+      .slice(0, 60);
+    const maxBytes = Math.max(1, ...dirs.map((d) => d.bytes || 0));
+    const applyHere = '<div class="lp-dir" data-pchoose="' + escape_(active) + '">' +
+      '<span class="dn">✓ ' + escape_(T("this folder")) + " (" + escape_(shown) + ')</span>' +
+      '<span class="dm">' + (u && u.root && u.root.bytes ? escape_(bytes(u.root.bytes)) : "") + "</span>" +
+      '<span class="da">' +
+      '<button type="button" class="inc" data-pinc="' + escape_(active) + '" title="' + escape_(T("Include folder")) + '">+</button>' +
+      '<button type="button" class="exc" data-pexc="' + escape_(active) + '" title="' + escape_(T("Exclude folder")) + '">!</button>' +
+      "</span></div>";
+    const listHtml = !u && !LENS.tree
+      ? '<div class="lgroup">' + escape_(T("reading the folder…")) + "</div>"
+      : !dirs.length
+      ? '<div class="lgroup">' + escape_(T("no folder here by that name")) + "</div>"
+      : dirs.map((d) => {
+          const pct = d.bytes ? Math.max(3, Math.round(92 * d.bytes / maxBytes)) : 0;
+          const meta = d.bytes ? bytes(d.bytes) : (d.files ? fmt(d.files) : "");
+          return '<div class="lp-dir" data-pdrill="' + escape_(d.path) + '">' +
+            (pct ? '<span class="wbar" style="width:' + pct + '%"></span>' : "") +
+            '<span class="dn">' + escape_(d.name) + '/</span>' +
+            '<span class="dm">' + escape_(meta) + '</span>' +
+            '<span class="da">' +
+            '<button type="button" class="inc" data-pinc="' + escape_(d.path) + '" title="' + escape_(T("Include folder")) + '">+</button>' +
+            '<button type="button" class="exc" data-pexc="' + escape_(d.path) + '" title="' + escape_(T("Exclude folder")) + '">!</button>' +
+            "</span></div>";
+        }).join("");
+
+    return '<div class="lp-grid">' +
+      '<div class="lp-left">' +
+      (diskHtml ? '<div class="lp-sec">' + escape_(T("Disks")) + "</div>" + diskHtml : "") +
+      '<div class="lp-sec">' + escape_(T("Places")) + "</div>" + placeRows +
+      '<button type="button" class="lp-pick" data-ppick="' + escape_(active) + '">📁 ' + escape_(T("Choose folder…")) + "</button>" +
+      "</div>" +
+      '<div class="lp-right">' +
+      '<div class="lp-crumb">' + crumbHtml + "</div>" +
+      applyHere +
+      '<div class="lp-sec">' + escape_(T("Subfolders")) + "</div>" +
+      listHtml +
+      "</div></div>" +
+      '<div class="lfoot">' + escape_(T("→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term.")) + "</div>";
+  }
+
+  function lensSparkHtml(its, peak) {
+    if (LENS.kind !== "time" && LENS.kind !== "size") return "";
+    const lo = LENS.dragA !== undefined ? Math.min(LENS.dragA, LENS.dragB) : LENS.sel;
+    const hi = LENS.dragA !== undefined ? Math.max(LENS.dragA, LENS.dragB) : LENS.sel;
+    return '<div class="lspark-wrap">' +
+      '<div class="lspark" id="lspark">' +
+      its.map((it, i) => {
+        const h = it.n ? Math.max(8, Math.round(100 * Math.abs(it.n) / peak)) : 6;
+        return '<div class="sbar' + (i >= lo && i <= hi ? " in" : "") + '" data-si="' + i + '">' +
+          '<i style="height:' + h + '%"></i></div>';
+      }).join("") +
+      '</div><div class="lspark-lbls">' +
+      its.map((it) => "<span>" + escape_(it.hint || it.label) + "</span>").join("") +
+      '</div><div class="lspark-note">' + escape_(T("Click or drag across bars to pick a range")) + "</div></div>";
+  }
+
+  function lensWordGlobalHtml() {
+    if (LENS.kind !== "word") return "";
+    const typos = (KEPT && KEPT.typos) || "";
+    const exactAcc = !!(KEPT && KEPT.accents_exact);
+    return '<div class="lw-global">' +
+      '<span>' + escape_(T("Typing mistakes")) + ': <span class="lw-pills">' +
+      '<button type="button" class="' + (typos === "" ? "on" : "") + '" data-wtypos="">' + escape_(T("Offer")) + "</button>" +
+      '<button type="button" class="' + (typos === "always" ? "on" : "") + '" data-wtypos="always">' + escape_(T("Always")) + "</button>" +
+      '<button type="button" class="' + (typos === "off" ? "on" : "") + '" data-wtypos="off">' + escape_(T("Off")) + "</button>" +
+      "</span></span>" +
+      '<span>' + escape_(T("Ignore accents")) + ': <span class="lw-pills">' +
+      '<button type="button" class="' + (!exactAcc ? "on" : "") + '" data-wacc="0">' + escape_(T("Always")) + "</button>" +
+      '<button type="button" class="' + (exactAcc ? "on" : "") + '" data-wacc="1">' + escape_(T("Exact")) + "</button>" +
+      "</span></span></div>";
+  }
+
   function lensDraw() {
-    if (!LENS || !LENS.items.length) { lensBox.hidden = true; return; }
-    const its = LENS.items;
-    LENS.sel = Math.max(0, Math.min(LENS.sel, its.length - 1));
-    const peak = Math.max(1, ...its.map((i) => Math.abs(i.n || 0)));
-    const num = (n) => (n === null || n === undefined ? "" : n < 0 ? fmt(-n) + "+" : fmt(n));
-    lensBox.innerHTML =
-      '<div class="lhead"><b>' + escape_(LENS.title) + "</b>" +
-      (its.some((i) => i.count || i.n !== null && i.n !== undefined) ? "<span>" + escape_(T("results it would leave")) + "</span>" : "") + "</div>" +
-      its.map((it, i) =>
-        (it.group ? '<div class="lgroup">' + escape_(it.group.trim()) + "</div>" : "") +
-        '<div class="lopt' + (i === LENS.sel ? " on" : "") + (it.n === 0 ? " zero" : "") + (it.wait ? " wait" : "") +
-        '" role="option" data-i="' + i + '" aria-selected="' + (i === LENS.sel) + '">' +
-        '<span class="l">' + escape_(it.label) + (it.hint ? "<small>" + escape_(it.hint) + "</small>" : "") + "</span>" +
-        (it.reads ? '<span class="r">' + escape_(T("reads files")) + "</span>"
-          : it.n === null || it.n === undefined ? (it.count ? '<span class="b"></span><span class="c">…</span>' : "")
-          : '<span class="b"><i style="width:' + Math.round(100 * Math.abs(it.n) / peak) + '%"></i></span><span class="c">' + num(it.n) + "</span>") +
-        "</div>").join("") +
-      '<div class="lfoot">' + escape_(LENS.foot) + "</div>";
+    if (!LENS || (LENS.kind !== "place" && !LENS.items.length)) { lensBox.hidden = true; return; }
+    lensBox.classList.toggle("lens-place", LENS.kind === "place");
+    lensBox.classList.toggle("lens-band", LENS.kind === "time" || LENS.kind === "size");
+    if (LENS.kind === "place") {
+      lensBox.innerHTML = lensPlaceHtml();
+    } else {
+      const its = LENS.items;
+      LENS.sel = Math.max(0, Math.min(LENS.sel, its.length - 1));
+      const peak = Math.max(1, ...its.map((i) => Math.abs(i.n || 0)));
+      const num = (n) => (n === null || n === undefined ? "" : n < 0 ? fmt(-n) + "+" : fmt(n));
+      lensBox.innerHTML =
+        '<div class="lhead"><b>' + escape_(LENS.title) + "</b>" +
+        (its.some((i) => i.count || i.n !== null && i.n !== undefined) ? "<span>" + escape_(T("results it would leave")) + "</span>" : "") + "</div>" +
+        lensSparkHtml(its, peak) +
+        its.map((it, i) =>
+          (it.group ? '<div class="lgroup">' + escape_(it.group.trim()) + "</div>" : "") +
+          '<div class="lopt' + (i === LENS.sel ? " on" : "") + (it.n === 0 ? " zero" : "") + (it.wait ? " wait" : "") +
+          '" role="option" data-i="' + i + '" aria-selected="' + (i === LENS.sel) + '">' +
+          '<span class="l">' + escape_(it.label) + (it.hint ? "<small>" + escape_(it.hint) + "</small>" : "") + "</span>" +
+          (it.reads ? '<span class="r">' + escape_(T("reads files")) + "</span>"
+            : it.n === null || it.n === undefined ? (it.count ? '<span class="b"></span><span class="c">…</span>' : "")
+            : '<span class="b"><i style="width:' + Math.round(100 * Math.abs(it.n) / peak) + '%"></i></span><span class="c">' + num(it.n) + "</span>") +
+          "</div>").join("") +
+        lensWordGlobalHtml() +
+        '<div class="lfoot">' + escape_(LENS.foot) + "</div>";
+    }
     lensBox.hidden = false;
     q.setAttribute("aria-expanded", "true");
     /* Under the term, at its first letter, on the line it ends on. */
@@ -3936,7 +4420,7 @@
     const rects = el ? [...el.getClientRects()] : [];
     const r = rects[rects.length - 1];
     const left = r ? Math.min(rects[0].left, r.left) - box.left : 0;
-    lensBox.style.left = Math.max(0, Math.min(left, box.width - lensBox.offsetWidth)) + "px";
+    lensBox.style.left = Math.max(-box.left + 12, Math.min(left, innerWidth - box.left - lensBox.offsetWidth - 14)) + "px";
     lensBox.style.top = (r ? r.bottom - box.top + 8 : box.height + 8) + "px";
     const on = lensBox.querySelector(".lopt.on");
     if (on) on.scrollIntoView({ block: "nearest" });
@@ -4037,10 +4521,137 @@
     return true;
   }
 
-  lensBox.addEventListener("mousedown", (e) => {
-    const o = e.target.closest(".lopt");
+  function sparkRangeTerm(kind, a, b, negPrefix) {
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    if (lo === hi) return LENS.items[lo].term;
+    if (kind === "time") {
+      // Cumulative age bands: picking up to `hi` covers up to that horizon; if `lo > 0`, bound both sides.
+      const edges = ["1d", "2d", "7d", "30d", "365d"];
+      return negPrefix + "dm:" + edges[hi];
+    }
+    const loEdge = ["", "100kb", "10mb", "1gb"][lo];
+    const hiEdge = ["100kb", "10mb", "1gb", ""][hi];
+    const val = loEdge && hiEdge ? loEdge + ".." + hiEdge : loEdge ? ">" + loEdge : "<" + hiEdge;
+    return negPrefix + "size:" + val;
+  }
+
+  let sparkDrag = false;
+  lensBox.addEventListener("pointerdown", (e) => {
+    const sb = e.target.closest(".sbar");
+    if (!sb || !LENS) return;
     e.preventDefault();
-    if (!o || !LENS) return;
+    sparkDrag = true;
+    LENS.dragA = LENS.dragB = +sb.dataset.si;
+    lensBox.setPointerCapture(e.pointerId);
+    lensDraw();
+  });
+  lensBox.addEventListener("pointermove", (e) => {
+    if (!sparkDrag || !LENS) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const sb = el && el.closest && el.closest(".sbar");
+    if (sb && +sb.dataset.si !== LENS.dragB) {
+      LENS.dragB = +sb.dataset.si;
+      lensDraw();
+    }
+  });
+  const finishSpark = () => {
+    if (!sparkDrag || !LENS) return;
+    sparkDrag = false;
+    const term = sparkRangeTerm(LENS.kind, LENS.dragA, LENS.dragB, neg(LENS.term));
+    delete LENS.dragA;
+    delete LENS.dragB;
+    lensWriteRaw(term, false);
+  };
+  lensBox.addEventListener("pointerup", finishSpark);
+  lensBox.addEventListener("pointercancel", () => { sparkDrag = false; if (LENS) { delete LENS.dragA; delete LENS.dragB; } });
+
+  lensBox.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".sbar")) { e.preventDefault(); return; }
+    e.preventDefault();
+    if (!LENS) return;
+    const wt = e.target.closest("[data-wtypos]");
+    if (wt) {
+      const next = wt.dataset.wtypos;
+      KEPT = { ...(KEPT || {}), typos: next };
+      keep({ typos: next });
+      drawTypos();
+      lensDraw();
+      setTimeout(render, 120);
+      return;
+    }
+    const wa = e.target.closest("[data-wacc]");
+    if (wa) {
+      const exactAcc = wa.dataset.wacc === "1";
+      KEPT = { ...(KEPT || {}), accents_exact: exactAcc };
+      keep({ accents_exact: exactAcc });
+      lensDraw();
+      setTimeout(render, 120);
+      return;
+    }
+    const pdisk = e.target.closest("[data-pdisk]");
+    if (pdisk) {
+      SERVICE.answerDisk(pdisk.dataset.pdisk, "index")
+        .then(() => { lensSeen.delete("volumes"); flash(T("The disk is being indexed.")); lensFill(); })
+        .catch((err) => flash(String(err.message || err)));
+      return;
+    }
+    const ppick = e.target.closest("[data-ppick]");
+    if (ppick) {
+      const savedA = LENS.a, savedB = LENS.b, savedFld = LENS.term.field || "under", savedNeg = neg(LENS.term);
+      SERVICE.pickFolder(ppick.dataset.ppick)
+        .then((r) => {
+          if (!r || !r.path) return;
+          const v = q.value;
+          const txt = savedNeg + savedFld + ":" + quoteIf(homeForm(r.path)) + " ";
+          q.value = v.slice(0, savedA) + txt + v.slice(savedB);
+          q.focus();
+          q.setSelectionRange(savedA + txt.length, savedA + txt.length);
+          render();
+          lensClose();
+        })
+        .catch((err) => flash(String(err.message || err)));
+      return;
+    }
+    const pinc = e.target.closest("[data-pinc]");
+    if (pinc) {
+      const fld = LENS.term.field || "under";
+      lensWriteRaw(fld + ":" + quoteIf(homeForm(pinc.dataset.pinc)), false);
+      return;
+    }
+    const pexc = e.target.closest("[data-pexc]");
+    if (pexc) {
+      const fld = LENS.term.field || "under";
+      lensWriteRaw("!" + fld + ":" + quoteIf(homeForm(pexc.dataset.pexc)), false);
+      return;
+    }
+    const pchoose = e.target.closest("[data-pchoose]");
+    if (pchoose) {
+      const fld = LENS.term.field || "under";
+      lensWriteRaw(neg(LENS.term) + fld + ":" + quoteIf(homeForm(pchoose.dataset.pchoose)), false);
+      return;
+    }
+    const pflip = e.target.closest("[data-pflip]");
+    if (pflip) {
+      const other = (LENS.term.field || "under") === "under" ? "parent" : "under";
+      const cur = LENS.placeDir || HOME || "/";
+      const raw = neg(LENS.term) + other + ":" + quoteIf(homeForm(cur === "/" ? "/" : cur + "/"));
+      const caret = LENS.a + raw.length - (raw.endsWith('"') ? 1 : 0);
+      lensWriteRaw(raw, true, caret);
+      return;
+    }
+    const pdir = e.target.closest("[data-pdir]") || e.target.closest("[data-pdrill]");
+    if (pdir) {
+      const target = pdir.dataset.pdir || pdir.dataset.pdrill;
+      const fld = LENS.term.field || "under";
+      const shown = homeForm(target);
+      const slash = shown.endsWith("/") ? shown : shown + "/";
+      const raw = neg(LENS.term) + fld + ":" + quoteIf(slash);
+      const caret = LENS.a + raw.length - (raw.endsWith('"') ? 1 : 0);
+      lensWriteRaw(raw, true, caret);
+      return;
+    }
+    const o = e.target.closest(".lopt");
+    if (!o) return;
     const it = LENS.items[+o.dataset.i];
     lensChoose(+o.dataset.i, !!(it && (it.stays || it.dir)));
   });
@@ -4289,12 +4900,29 @@
      most, and the last week. One `facets` walk and one `usage`, after the
      search has landed; nothing for a query that reads files. The usage names
      every child: it ranks them by bytes, the strip by files. */
+  const ctxRow = document.getElementById("ctxrow");
   const chipsBox = document.getElementById("chips");
   const narrowLbl = document.getElementById("narrow-lbl");
+  const narrowToggleBtn = document.getElementById("m-narrow");
   let narrowGen = 0, narrowStop = null, narrowTimer = 0, CHIPS = [];
+  let NARROW_PINNED = false, NARROW_HIDDEN = false;
+  function syncTriggers(text) {
+    const ts = terms(text);
+    const hasField = (names) => ts.some(([a, b]) => {
+      const sp = fieldSplit(text.slice(a, b).replace(/^!/, ""));
+      const f = sp && LENS_FIELDS[fold(sp[0])];
+      return f && names.includes(f);
+    });
+    document.getElementById("q-loc").classList.toggle("on", hasField(["under", "parent"]));
+    document.getElementById("q-time").classList.toggle("on", hasField(["dm"]));
+    document.getElementById("q-fuzzy").classList.toggle("on", hasField(["fuzzy", "letters"]) || !!(KEPT && KEPT.typos === "always"));
+    document.getElementById("q-grep").classList.toggle("grep-on", !grepBar.hidden || hasField(["content"]));
+  }
   function drawNarrow() {
+    const emptyQ = !q.value.trim();
     const wrong = qread.classList.contains("warn") || !!qread.querySelector(".fix");
-    const show = !wrong && CHIPS.length > 0;
+    const allowStrip = wrong || (!NARROW_HIDDEN && (!emptyQ || NARROW_PINNED));
+    const show = !wrong && CHIPS.length > 0 && (!emptyQ || NARROW_PINNED);
     chipsBox.hidden = !show;
     narrowLbl.hidden = !show;
     qread.style.display = show ? "none" : "";
@@ -4302,12 +4930,36 @@
       '<button type="button" data-i="' + i + '" title="' + escape_(c.term) + '">' + escape_(c.label) +
       "<b>" + fmt(c.n) + "</b></button>").join("") : "";
     document.getElementById("narrow").title = qread.textContent || "";
+    const hasRead = !emptyQ && !qread.hidden && !!qread.textContent.trim();
+    ctxRow.hidden = !allowStrip || (!show && !wrong && !hasRead);
+    if (narrowToggleBtn) narrowToggleBtn.setAttribute("aria-pressed", String(!ctxRow.hidden));
   }
+  document.getElementById("ctx-close").addEventListener("click", () => {
+    NARROW_PINNED = false;
+    NARROW_HIDDEN = true;
+    drawNarrow();
+  });
+  narrowToggleBtn.addEventListener("click", () => {
+    if (!ctxRow.hidden) {
+      NARROW_PINNED = false;
+      NARROW_HIDDEN = true;
+      drawNarrow();
+    } else {
+      NARROW_HIDDEN = false;
+      NARROW_PINNED = true;
+      narrowSoon(q.value, LIST.total || 100);
+      drawNarrow();
+    }
+  });
   function narrowSoon(text, total) {
     clearTimeout(narrowTimer);
     const mine = ++narrowGen;
     if (narrowStop) narrowStop.abort();
-    if (READS.test(text) || total < 2 || (KEPT && KEPT.narrow_off)) { CHIPS = []; drawNarrow(); return; }
+    if ((!text.trim() && !NARROW_PINNED) || NARROW_HIDDEN || READS.test(text) || total < 2 || (KEPT && KEPT.narrow_off)) {
+      CHIPS = [];
+      drawNarrow();
+      return;
+    }
     narrowTimer = setTimeout(() => {
       narrowStop = new AbortController();
       const signal = narrowStop.signal;
@@ -4417,17 +5069,245 @@
     q.focus();
   });
 
+  let similarGen = 0;
   function offerSimilar(similar) {
+    const mine = ++similarGen;
+    const rowsEl = document.getElementById("similar-rows");
     similarBox.hidden = !similar;
-    if (!similar) return;
+    if (rowsEl) rowsEl.innerHTML = "";
+    if (!similar) { SIMILAR = ""; return; }
     SIMILAR = similar.query;
     document.getElementById("similar-said").textContent =
       T("Similar: {n} files —", { n: fmt(similar.total) + (similar.capped ? "+" : "") });
+    document.getElementById("similar-q").textContent = similar.query;
+    SERVICE.search(similar.query, sortKey, sortDesc, 3, 0)
+      .then((r) => {
+        if (mine !== similarGen || similarBox.hidden || !rowsEl) return;
+        const hits = (r.rows || []).slice(0, 3);
+        rowsEl.innerHTML = hits.map((h, idx) =>
+          '<button type="button" class="sim-row" data-si="' + idx + '">' +
+          '<span class="sn">' + escape_(h.name) + '</span>' +
+          '<span class="sp">' + escape_(homeForm(h.dir)) + "</span></button>"
+        ).join("");
+        rowsEl.__hits = hits.map(fromService);
+      })
+      .catch(() => {});
   }
   document.getElementById("similar-show").addEventListener("click", () => {
+    if (!SIMILAR) return;
     q.value = SIMILAR;
     render();
     q.focus();
+  });
+  document.getElementById("similar-always").addEventListener("click", () => {
+    KEPT = { ...(KEPT || {}), typos: "always" };
+    keep({ typos: "always" });
+    drawTypos();
+    setTimeout(render, 120);
+    q.focus();
+  });
+  document.getElementById("similar-rows").addEventListener("click", (e) => {
+    const b = e.target.closest(".sim-row");
+    const rowsEl = document.getElementById("similar-rows");
+    const f = b && rowsEl.__hits && rowsEl.__hits[+b.dataset.si];
+    if (!f) return;
+    setPeek(true, false);
+    drawPeek(f);
+  });
+
+  /* ---------------- On-demand Grep capsule & micro-triggers ---------------- */
+  const grepBar = document.getElementById("grep-bar");
+  const grepInput = document.getElementById("grep-q");
+  const grepView = document.getElementById("grep-view");
+  const grepCaseBtn = document.getElementById("grep-case");
+  const grepBinBtn = document.getElementById("grep-bin");
+  let GREP = { mode: "text", exact: false, binary: false, files: [], next: null, gen: 0, stop: null, timer: 0 };
+
+  function setGrepOpen(open) {
+    grepBar.hidden = !open;
+    syncTriggers(q.value);
+    if (!open) {
+      if (GREP.stop) GREP.stop.abort();
+      clearTimeout(GREP.timer);
+      GREP.files = [];
+      GREP.next = null;
+      grepView.hidden = true;
+      scrollEl.hidden = false;
+      q.focus();
+      return;
+    }
+    grepInput.focus();
+    grepInput.select();
+    if (grepInput.value.trim()) grepSoon(false);
+  }
+
+  function grepSoon(append) {
+    clearTimeout(GREP.timer);
+    if (grepBar.hidden) return;
+    const pattern = grepInput.value;
+    if (!pattern) {
+      if (GREP.stop) GREP.stop.abort();
+      grepView.hidden = true;
+      scrollEl.hidden = false;
+      return;
+    }
+    GREP.timer = setTimeout(() => runGrep(append), append ? 0 : 180);
+  }
+
+  function runGrep(append) {
+    const pattern = grepInput.value;
+    if (!pattern || grepBar.hidden) return;
+    const mine = ++GREP.gen;
+    if (GREP.stop) GREP.stop.abort();
+    GREP.stop = new AbortController();
+    const offset = append && GREP.next != null ? GREP.next : 0;
+    if (!append) {
+      GREP.files = [];
+      GREP.next = null;
+      grepView.innerHTML = '<div class="grep-sum">' + escape_(T("Scanning matching files…")) + "</div>";
+      grepView.hidden = false;
+      scrollEl.hidden = true;
+    }
+    SERVICE.grep({
+      q: q.value,
+      pattern,
+      mode: GREP.mode,
+      exact: GREP.exact ? "1" : "0",
+      binary: GREP.binary ? "1" : "0",
+      offset,
+      top: 50,
+      hits: 5,
+    }, GREP.stop.signal).then((res) => {
+      if (mine !== GREP.gen) return;
+      GREP.files = append ? GREP.files.concat(res.files || []) : (res.files || []);
+      GREP.next = res.next ?? null;
+      drawGrep(res);
+    }).catch((err) => {
+      if (err && err.name === "AbortError") return;
+      if (mine !== GREP.gen) return;
+      grepView.innerHTML = '<div class="grep-sum">' + escape_(String(err.message || err)) + "</div>";
+    });
+  }
+
+  function drawGrep(res) {
+    grepView.hidden = false;
+    scrollEl.hidden = true;
+    const skips = [];
+    if (res.binary) skips.push(T("{n} binary skipped", { n: fmt(res.binary) }));
+    if (res.too_big) skips.push(T("{n} too large", { n: fmt(res.too_big) }));
+    if (res.unreadable) skips.push(fmt(res.unreadable) + " " + T("unreadable"));
+    const head = '<div class="grep-sum">' +
+      "<span>" + escape_(T("{f} files · {s} scanned · {b} read", {
+        f: fmt(GREP.files.length), s: fmt(res.scanned || 0), b: bytes(res.read || 0),
+      })) + " · " + MS.format((res.took_us || 0) / 1000) + " ms</span>" +
+      (skips.length ? '<span class="gs-skip">' + escape_(skips.join(" · ")) + "</span>" : "") +
+      (GREP.next != null ? '<button type="button" class="gs-more" id="grep-more">' + escape_(T("Read more")) + " →</button>" : "") +
+      "</div>";
+    const cards = !GREP.files.length
+      ? '<div class="empty">' + escape_(T("No files held that pattern in the scanned batch.")) + "</div>"
+      : GREP.files.map((gf, fi) => {
+          const slash = gf.path.lastIndexOf("/");
+          const nm = slash >= 0 ? gf.path.slice(slash + 1) : gf.path;
+          const dir = slash > 0 ? gf.path.slice(0, slash) : "/";
+          const lines = (gf.hits || []).map((h) =>
+            '<div class="grep-line" data-gfi="' + fi + '">' +
+            '<span class="gl-no">' + (h.line != null ? h.line : "@" + h.offset) + "</span>" +
+            '<span class="gl-txt">' + escape_((h.pre || "").slice(-48)) + "<mark>" + escape_(h.hit || "") + "</mark>" + escape_(h.post || "") + "</span></div>"
+          ).join("");
+          return '<div class="grep-card">' +
+            '<div class="gc-head" data-gfi="' + fi + '" data-open="1">' +
+            '<span class="gc-nm">' + escape_(nm) + "</span>" +
+            '<span class="gc-dir">' + escape_(homeForm(dir)) + "</span>" +
+            '<span class="gc-cnt">' + fmt((gf.hits || []).length) + (gf.more ? "+" : "") + "</span></div>" +
+            lines +
+            (gf.more ? '<div class="grep-more-note">' + escape_(T("More matches in file…")) + "</div>" : "") +
+            "</div>";
+        }).join("");
+    grepView.innerHTML = head + cards;
+  }
+
+  grepView.addEventListener("click", (e) => {
+    if (e.target.closest("#grep-more")) { grepSoon(true); return; }
+    const row = e.target.closest("[data-gfi]");
+    const gf = row && GREP.files[+row.dataset.gfi];
+    if (!gf) return;
+    const slash = gf.path.lastIndexOf("/");
+    const dir = slash > 0 ? gf.path.slice(0, slash) : "/";
+    const nm = slash >= 0 ? gf.path.slice(slash + 1) : gf.path;
+    setPeek(true, false);
+    drawPeek({ path: dir, name: nm, is_dir: false, size: 0, mtime: now, kind: "", found: gf.hits });
+  });
+  grepView.addEventListener("dblclick", (e) => {
+    const row = e.target.closest("[data-gfi]");
+    const gf = row && GREP.files[+row.dataset.gfi];
+    if (gf) launch(gf.path, "file");
+  });
+  grepInput.addEventListener("input", () => grepSoon(false));
+  grepInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); setGrepOpen(false); }
+    else if (e.key === "Enter") { e.preventDefault(); runGrep(false); }
+  });
+  document.querySelector(".grep-seg").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-gmode]");
+    if (!b) return;
+    GREP.mode = b.dataset.gmode;
+    for (const x of document.querySelectorAll("[data-gmode]")) x.setAttribute("aria-pressed", String(x === b));
+    grepSoon(false);
+  });
+  grepCaseBtn.addEventListener("click", () => {
+    GREP.exact = !GREP.exact;
+    grepCaseBtn.setAttribute("aria-pressed", String(GREP.exact));
+    grepSoon(false);
+  });
+  grepBinBtn.addEventListener("click", () => {
+    GREP.binary = !GREP.binary;
+    grepBinBtn.setAttribute("aria-pressed", String(GREP.binary));
+    grepSoon(false);
+  });
+  document.getElementById("grep-close").addEventListener("click", () => setGrepOpen(false));
+  document.getElementById("q-grep").addEventListener("click", () => setGrepOpen(grepBar.hidden));
+
+  function openOrFocusLensField(fieldName) {
+    q.focus();
+    const v = q.value;
+    const found = terms(v).find(([a, b]) => {
+      const sp = fieldSplit(v.slice(a, b).replace(/^!/, ""));
+      const f = sp && LENS_FIELDS[fold(sp[0])];
+      return f === fieldName || (fieldName === "under" && f === "parent");
+    });
+    if (found) {
+      const end = v[found[1] - 1] === '"' ? found[1] - 1 : found[1];
+      q.setSelectionRange(end, end);
+      paint(q.value);
+      lensSync(true);
+      return;
+    }
+    const lead = v.length && !/\s$/.test(v) ? " " : "";
+    const add = fieldName + ":";
+    q.value = v + lead + add;
+    q.setSelectionRange(q.value.length, q.value.length);
+    render();
+    lensSync(true);
+  }
+  document.getElementById("q-loc").addEventListener("mousedown", (e) => { e.preventDefault(); openOrFocusLensField("under"); });
+  document.getElementById("q-time").addEventListener("mousedown", (e) => { e.preventDefault(); openOrFocusLensField("dm"); });
+  document.getElementById("q-fuzzy").addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    q.focus();
+    const t = lensTerm(q.value, q.selectionStart) || terms(q.value).map(([a, b]) => lensTerm(q.value, b)).find((x) => x && !x.named && x.value.length >= 2);
+    if (t && lensKindOf(t) === "word") {
+      q.setSelectionRange(t.b, t.b);
+      paint(q.value);
+      lensSync(true);
+      return;
+    }
+    openOrFocusLensField("fuzzy");
+  });
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "g" || e.key === "G" || (e.shiftKey && (e.key === "f" || e.key === "F")))) {
+      e.preventDefault();
+      setGrepOpen(grepBar.hidden || document.activeElement !== grepInput ? true : false);
+    }
   });
 
   /* Not how many matched: a capped count is a floor, and sizing by it moved
@@ -4621,7 +5501,7 @@
 
     // The marked letters move with the query, so a row whose file has not
     // changed is still rewritten when the terms have. Joined once, not per row.
-    const marks = parsed.text.join("\u0001");
+    const marks = [parsed.text.join("\u0001"), (parsed.letters || []).join("\u0001"), (parsed.fuzzy || []).join("\u0001")].join("\u0002");
     for (let i = from; i < to; i++) {
       // Which row of the whole list this slot shows; a shift-range is measured
       // in these, and a slot shows a different one after every scroll.
@@ -4698,7 +5578,7 @@
     /* A tile is a picture and a name and no columns: which columns are shown
        says nothing about what a tile holds. */
     if (tr.__nm) {
-      writeName(tr.__nm, f, parsed.text);
+      writeName(tr.__nm, f, parsed.text, parsed);
       return;
     }
     for (let c = 0; c < cols.length; c++) {
@@ -5181,11 +6061,13 @@
     const queryChanged = LIST.query !== text;
     /* Everything that depends only on the text happens at typing speed. */
     paint(text);
+    syncTriggers(text);
     refreshReading(text);
     showHints();
     /* The lens is help, never in the way: a fault in it must not stop the search. */
     try { lensSync(false); } catch (e) { console.error("scour: the lens did not open:", e); lensClose(); }
     syncHeads();
+    if (queryChanged && !grepBar.hidden && grepInput.value) grepSoon(false);
 
     /* One search in flight: a window is around a hundred kilobytes, and six
      * are parsed before `generation` discards them. `generation` stays — what
@@ -5517,7 +6399,7 @@
     { id: "name",  msgid: "Name",      key: "name",  w: 240, min: 110, near: 52, far: 30, max: 520,
       write: (td, f, p) => {
         if (td.className !== "name") td.className = "name";
-        writeName(td, f, p.text);
+        writeName(td, f, p.text, p);
       } },
     { id: "path",  msgid: "Location",  key: "path",  w: 320, min: 120, near: 48, far: 70, max: 0,
       write: (td, f) => {

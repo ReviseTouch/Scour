@@ -107,6 +107,19 @@ pub enum Ask {
     /// The desktop's key. Reaches no service — but travels this lane even so:
     /// binding runs `gsettings`, and a process must not start on the draw path.
     Hotkey(Deed),
+    Tree {
+        path: String,
+    },
+    Grep {
+        generation: u64,
+        append: bool,
+        query: String,
+        pattern: String,
+        mode: scour_proto::GrepMode,
+        exact_case: bool,
+        binary: bool,
+        offset: u32,
+    },
     /// Stop: the terminal is closing.
     Done,
 }
@@ -120,6 +133,15 @@ pub enum Got {
         offset: u32,
         limit: u32,
         reply: Box<scour_core::SearchResponse>,
+    },
+    Tree {
+        path: String,
+        dirs: Vec<String>,
+    },
+    Grep {
+        generation: u64,
+        append: bool,
+        reply: Box<scour_proto::GrepResponse>,
     },
     /// The rail's counts, or the strip's.
     Facets {
@@ -432,9 +454,11 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Ask::Search { generation, .. }
             | Ask::Facets { generation, .. }
             | Ask::Explain { generation, .. }
+            | Ask::Grep { generation, .. }
             | Ask::Count { generation, .. } => *generation,
             _ => 0,
         };
+        let grep_append = matches!(ask, Ask::Grep { append: true, .. });
         let Some(link) = client.as_mut() else {
             // A msgid, not a sentence: `App::upset` puts it through the
             // catalogue. The socket it failed on is in `SCOUR_TUI_TRACE`.
@@ -545,6 +569,32 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 },
             },
             Ask::Remember(change) => Request::SetSettings { change },
+            Ask::Tree { path } => Request::Tree {
+                path,
+                depth: 1,
+                limit: 80,
+            },
+            Ask::Grep {
+                query,
+                pattern,
+                mode,
+                exact_case,
+                binary,
+                offset,
+                ..
+            } => Request::Grep {
+                query,
+                pattern,
+                mode,
+                exact_case,
+                binary,
+                offset,
+                top: 50,
+                hits: 4,
+                read_budget: 256 << 20,
+                max_size: 64 << 20,
+                timeout_ms: 6_000,
+            },
             Ask::Export { query, to } => {
                 // Answered in pieces, so not through `call` — `Client::stream`.
                 match export(link, &query, &to, out) {
@@ -696,6 +746,25 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                         .collect(),
                     mounts,
                 ));
+            }
+            Ok(Response::Tree { root, .. }) => {
+                let dirs = root
+                    .nodes
+                    .into_iter()
+                    .filter(|n| n.is_dir)
+                    .map(|n| n.path)
+                    .collect();
+                let _ = out.send(Got::Tree {
+                    path: root.path,
+                    dirs,
+                });
+            }
+            Ok(Response::Grep(r)) => {
+                let _ = out.send(Got::Grep {
+                    generation,
+                    append: grep_append,
+                    reply: Box::new(r),
+                });
             }
             Ok(other) => {
                 let _ = out.send(Got::Trouble {

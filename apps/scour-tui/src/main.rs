@@ -12,6 +12,7 @@ mod keys;
 mod link;
 mod report;
 mod theme;
+mod v2;
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -487,6 +488,12 @@ fn run(
             }
             Beat::Reply(Got::Booting) => state.booting(),
             Beat::Reply(Got::Booted(why)) => state.booted(why),
+            Beat::Reply(Got::Tree { path, dirs }) => state.tree_landed(path, dirs),
+            Beat::Reply(Got::Grep {
+                generation,
+                append,
+                reply,
+            }) => state.grep_landed(generation, append, *reply),
         }
         if let Some(change) = state.order_to_keep() {
             act(Want::Remember(change), link);
@@ -571,6 +578,12 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }
             Beat::Reply(Got::Booting) => state.booting(),
             Beat::Reply(Got::Booted(why)) => state.booted(why),
+            Beat::Reply(Got::Tree { path, dirs }) => state.tree_landed(path, dirs),
+            Beat::Reply(Got::Grep {
+                generation,
+                append,
+                reply,
+            }) => state.grep_landed(generation, append, *reply),
             _ => {}
         }
     }
@@ -693,5 +706,25 @@ fn act(want: Want, link: &Link) {
         // On the slow lane like the rest: `gsettings` is a process to start.
         Want::Hotkey(deed) => link.later(Ask::Hotkey(deed)),
         Want::Export { query, to } => link.later(Ask::Export { query, to }),
+        Want::Tree(path) => link.later(Ask::Tree { path }),
+        Want::Grep {
+            generation,
+            append,
+            query,
+            pattern,
+            mode,
+            exact_case,
+            binary,
+            offset,
+        } => link.later(Ask::Grep {
+            generation,
+            append,
+            query,
+            pattern,
+            mode,
+            exact_case,
+            binary,
+            offset,
+        }),
     }
 }

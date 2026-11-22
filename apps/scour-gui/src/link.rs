@@ -137,6 +137,12 @@ pub enum Ask {
         slot: u32,
         request: Request,
     },
+    /// Read matching files for a grep pattern.
+    Grep {
+        generation: u64,
+        append: bool,
+        request: Request,
+    },
     Stop,
 }
 
@@ -151,6 +157,17 @@ pub enum Got {
         /// be told from one that came back full.
         limit: u32,
         reply: Box<Response>,
+    },
+    Grep {
+        generation: u64,
+        append: bool,
+        reply: Box<Response>,
+    },
+    PickedFolder {
+        a: usize,
+        b: usize,
+        prefix: String,
+        path: String,
     },
     Facets {
         query_revision: u64,
@@ -254,6 +271,7 @@ struct Freshness {
     search: Arc<AtomicU64>,
     query: Arc<AtomicU64>,
     lens: Arc<AtomicU64>,
+    grep: Arc<AtomicU64>,
 }
 
 impl Freshness {
@@ -278,6 +296,9 @@ impl Freshness {
             Ask::Lens { generation, .. } => {
                 self.lens.fetch_max(*generation, Ordering::Release);
             }
+            Ask::Grep { generation, .. } => {
+                self.grep.fetch_max(*generation, Ordering::Release);
+            }
             _ => {}
         }
     }
@@ -292,6 +313,7 @@ impl Freshness {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
             Ask::Lens { generation, .. } => *generation == self.lens.load(Ordering::Acquire),
+            Ask::Grep { generation, .. } => *generation == self.grep.load(Ordering::Acquire),
             // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
@@ -398,6 +420,7 @@ impl Link {
             | Ask::PeekFacts { .. }
             | Ask::Lens { .. }
             | Ask::Narrow { .. }
+            | Ask::Grep { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -467,6 +490,8 @@ enum Lane {
     Lens,
     /// The narrowing line under the bar.
     Narrow,
+    /// Reading matching files for a grep pattern.
+    Grep,
 }
 
 /// Have a service at `addr`, starting one if nobody else has. At most once for
@@ -562,6 +587,7 @@ fn spawn_lane(
                 Ask::Lens { slot, .. } | Ask::Narrow { slot, .. } => slot,
                 _ => 0,
             };
+            let grep_append = matches!(ask, Ask::Grep { append: true, .. });
             let (revision, request, facets) = match ask {
                 Ask::Search {
                     generation,
@@ -746,6 +772,11 @@ fn spawn_lane(
                     request,
                     ..
                 } => (query_revision, request, Lane::Narrow),
+                Ask::Grep {
+                    generation,
+                    request,
+                    ..
+                } => (generation, request, Lane::Grep),
                 Ask::Stop => break,
             };
             // The page this request asked for, read back off the request so the
@@ -776,6 +807,11 @@ fn spawn_lane(
                         },
                         Lane::Narrow => Got::Narrow {
                             query_revision: revision,
+                            reply,
+                        },
+                        Lane::Grep => Got::Grep {
+                            generation: revision,
+                            append: grep_append,
                             reply,
                         },
                         Lane::Search => Got::Search {
@@ -848,6 +884,7 @@ fn spawn_lane(
                             | Lane::Peek
                             | Lane::Lens
                             | Lane::Narrow
+                            | Lane::Grep
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

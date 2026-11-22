@@ -6,6 +6,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+mod pick;
+pub use pick::pick_folder;
+
 /// One program that will take this kind of file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opener {

@@ -52,6 +52,27 @@ pub fn band(now: i64, mtime: i64) -> i32 {
     scour_ui::format::band(now, mtime) as i32
 }
 
+fn one_edit(a: &[char], b: &[char]) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() && i < b.len() && a[i] == b[i] {
+        i += 1;
+    }
+    if a.len() == b.len() {
+        a[i + 1..] == b[i + 1..]
+            || (i + 1 < a.len() && a[i] == b[i + 1] && a[i + 1] == b[i] && a[i + 2..] == b[i + 2..])
+    } else if a.len() > b.len() {
+        a[i + 1..] == b[i..]
+    } else {
+        a[i..] == b[i + 1..]
+    }
+}
+
 /// A name cut into what precedes the match, the match, and what follows.
 /// The search runs on folded text and Turkish folding changes byte lengths, so
 /// an offset goes back through `fold_indexed` before it touches the original.
@@ -65,6 +86,9 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
     let (folded, back) = folder.fold_indexed(name);
     let mut best: Option<(usize, usize)> = None;
     for term in terms {
+        if term.starts_with('^') || term.starts_with('~') {
+            continue;
+        }
         let needle = folder.fold(term);
         if needle.is_empty() {
             continue;
@@ -75,6 +99,45 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
             let cand = (at, end);
             if best.is_none_or(|(b_at, b_end)| (at, end - at) < (b_at, b_end - b_at)) {
                 best = Some(cand);
+            }
+        }
+    }
+    // Approximate 1-edit fallback for `fuzzy:` (`~word`) terms.
+    if best.is_none() {
+        let chars: Vec<(usize, char)> = folded.char_indices().collect();
+        for term in terms.iter().filter_map(|t| t.strip_prefix('~')) {
+            let want: Vec<char> = folder.fold(term).chars().collect();
+            if want.len() < 3 {
+                continue;
+            }
+            'lens: for len in [want.len() - 1, want.len(), want.len() + 1] {
+                if len < 2 || len > chars.len() {
+                    continue;
+                }
+                for w in 0..=chars.len() - len {
+                    let sub: Vec<char> = chars[w..w + len].iter().map(|(_, c)| *c).collect();
+                    if one_edit(&sub, &want)
+                        && !sub.last().is_some_and(|c| matches!(c, '.' | '_' | '-' | ' '))
+                    {
+                        let from = chars[w].0;
+                        let to = chars.get(w + len).map_or(folded.len(), |(p, _)| *p);
+                        best = Some((from, to));
+                        break 'lens;
+                    }
+                }
+            }
+            if best.is_some() {
+                break;
+            }
+        }
+    }
+    // Subsequence `letters:` (`^word`) span fallback: highlights the first coalesced run.
+    if best.is_none() {
+        for term in terms.iter().filter_map(|t| t.strip_prefix('^')) {
+            if let Some(spans) = scour_ui::query::subseq_spans(name, term)
+                && let Some(&(a, b)) = spans.first()
+            {
+                return (&name[..a], &name[a..b], &name[b..]);
             }
         }
     }

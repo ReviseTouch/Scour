@@ -51,6 +51,39 @@ export struct Found {
     post: string,
 }
 
+export struct PlaceLeft {
+    group: string,
+    label: string,
+    sub: string,
+    target: string,
+    ask-disk: bool,
+    active: bool,
+}
+
+export struct PlaceCrumb {
+    label: string,
+    path: string,
+}
+
+export struct PlaceDir {
+    name: string,
+    path: string,
+    meta: string,
+    bar: float,
+}
+
+export struct GrepItem {
+    header: bool,
+    file-idx: int,
+    name: string,
+    dir: string,
+    count: string,
+    line: string,
+    pre: string,
+    hit: string,
+    post: string,
+}
+
 export struct Row {
     // One per shown column, in the order they are shown. Rebuilt only when the
     // chosen columns change; widths travel separately in `cw`.
@@ -1339,7 +1372,15 @@ export component MainWindow inherits Window {
     // The lens.
     in property <bool> lens-open;
     in property <bool> lens-launching;
+    in property <string> lens-kind;
     in property <[LensRow]> lens-rows;
+    in property <[PlaceLeft]> lens-places;
+    in property <[PlaceCrumb]> lens-crumbs;
+    in property <[PlaceDir]> lens-dirs;
+    in property <string> lens-place-cur;
+    in property <string> lens-place-shown;
+    in property <string> lens-place-up;
+    in property <bool> lens-place-direct;
     in property <int> lens-sel;
     in property <string> lens-title;
     in property <string> lens-said;
@@ -1347,9 +1388,55 @@ export component MainWindow inherits Window {
     in property <string> lens-reads;
     in property <int> lens-line;
     in property <int> lens-col;
+    in property <bool> loc-on;
+    in property <bool> time-on;
+    in property <bool> fuzzy-on;
+    in property <bool> narrow-shown;
+    in property <string> word-loc: "Location";
+    in property <string> word-time: "Modified";
+    in property <string> word-fuzzy: "Fuzzy";
+    in property <string> word-grep: "Grep";
+    in property <string> word-grep-ph: "Search inside matching files…";
+    in property <string> word-text: "Text";
+    in property <string> word-regex: "Regex";
+    in property <string> word-hex: "Hex";
+    in property <string> word-read-more: "Read more";
+    in property <string> word-choose-folder: "Choose folder…";
+    in property <string> word-this-folder: "this folder";
+    in property <string> word-subfolders: "Subfolders";
+    in property <string> word-direct-only: "only what is directly inside";
+    in property <string> word-spark-hint: "Click or drag across bars to pick a range";
+    in property <string> word-similar-always: "Always forgive typos";
+    in property <string> word-narrow-pill: "Narrow";
+    in-out property <bool> grep-open;
+    in property <bool> grep-active;
+    in-out property <string> grep-pattern;
+    in property <string> grep-mode: "text";
+    in property <bool> grep-case;
+    in property <bool> grep-binary;
+    in property <int> grep-focus-ask;
+    in property <string> grep-summary;
+    in property <string> grep-empty;
+    in property <bool> grep-more-on;
+    in property <[GrepItem]> grep-items;
+    in property <string> similar-query;
+    changed grep-focus-ask => { grep-input.focus(); grep-input.select-all(); }
     callback lens-step(int);
     callback lens-pick(int, bool);
     callback lens-close();
+    callback lens-field(string);
+    callback lens-fuzzy();
+    callback lens-spark-range(int, int);
+    callback lens-place-act(string, string);
+    callback narrow-toggled();
+    callback grep-toggled();
+    callback grep-edited(string);
+    callback grep-mode-picked(string);
+    callback grep-case-toggled();
+    callback grep-bin-toggled();
+    callback grep-more();
+    callback grep-clicked(int);
+    callback grep-opened(int);
     // Leave the term the caret ends: the lens shuts, a space follows it.
     callback lens-exit() -> bool;
     callback lens-escape();
@@ -2688,11 +2775,22 @@ export component MainWindow inherits Window {
                             root.key-action("rename");
                             return accept;
                         }
+                        // Ctrl+G or Ctrl+Shift+F toggles the on-demand Grep capsule.
+                        if (e.modifiers.control && !e.modifiers.alt
+                                && (e.text == "g" || e.text == "G"
+                                    || (e.modifiers.shift && (e.text == "f" || e.text == "F")))) {
+                            root.grep-toggled();
+                            return accept;
+                        }
                         if (e.text == Key.Return && e.modifiers.control) {
                             root.key-action("folder");
                             return accept;
                         }
                         if (e.text == Key.Return) {
+                            if (root.rows.length == 0 && root.similar-said != "") {
+                                root.similar-clicked();
+                                return accept;
+                            }
                             // What was committed to is what the history takes.
                             root.query-committed();
                             root.activated(root.selected);
@@ -2865,9 +2963,215 @@ export component MainWindow inherits Window {
 
                 }
 
-                // The filters a query can take, as `:` and Ctrl+Space offer them.
-                VerticalLayout {
+                // On-demand inline Grep capsule: hidden until opened.
+                Rectangle {
+                    visible: root.grep-open;
+                    width: root.grep-open ? min(410px, max(230px, root.width * 0.34)) : 0px;
+                    height: 34px;
+                    background: Theme.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: grep-input.has-focus ? Theme.q-bad : Theme.cap-read-ring;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 6px;
+                        spacing: 5px;
+                        Text {
+                            text: "≣";
+                            color: Theme.q-bad;
+                            font-family: Fonts.mono;
+                            font-size: 13px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            clip: true;
+                            if root.grep-pattern == "": Text {
+                                width: parent.width;
+                                height: parent.height;
+                                text: root.word-grep-ph;
+                                color: Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            grep-input := TextInput {
+                                width: parent.width;
+                                height: parent.height;
+                                text <=> root.grep-pattern;
+                                font-family: Fonts.mono;
+                                font-size: 13px;
+                                color: Theme.ink;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                                single-line: true;
+                                vertical-alignment: center;
+                                edited => { root.grep-edited(self.text); }
+                                key-pressed(e) => {
+                                    if (e.text == Key.Escape) {
+                                        root.grep-toggled();
+                                        return accept;
+                                    }
+                                    if (e.modifiers.control && (e.text == "g" || e.text == "G")) {
+                                        root.grep-toggled();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+                        }
+                        for m in [
+                            { id: "text", label: root.word-text },
+                            { id: "regex", label: root.word-regex },
+                            { id: "hex", label: root.word-hex },
+                        ]: Rectangle {
+                            y: 6px;
+                            height: 22px;
+                            width: mlbl.preferred-width + 10px;
+                            border-radius: 5px;
+                            background: root.grep-mode == m.id ? Theme.line-soft : mtouch.has-hover ? Theme.hover : transparent;
+                            border-width: Theme.hair;
+                            border-color: Theme.line;
+                            mlbl := Text {
+                                text: m.label;
+                                color: root.grep-mode == m.id ? Theme.ink : Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            mtouch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-mode-picked(m.id); }
+                            }
+                        }
+                        Rectangle {
+                            y: 6px;
+                            height: 22px;
+                            width: 24px;
+                            border-radius: 5px;
+                            background: root.grep-case ? Theme.line-soft : ctouch.has-hover ? Theme.hover : transparent;
+                            border-width: Theme.hair;
+                            border-color: Theme.line;
+                            Text {
+                                text: "Aa";
+                                color: root.grep-case ? Theme.ink : Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            ctouch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-case-toggled(); }
+                            }
+                        }
+                        Rectangle {
+                            y: 6px;
+                            height: 22px;
+                            width: 24px;
+                            border-radius: 5px;
+                            background: root.grep-binary ? Theme.line-soft : btouch.has-hover ? Theme.hover : transparent;
+                            border-width: Theme.hair;
+                            border-color: Theme.line;
+                            Text {
+                                text: "01";
+                                color: root.grep-binary ? Theme.ink : Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            btouch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-bin-toggled(); }
+                            }
+                        }
+                        Rectangle {
+                            y: 6px;
+                            height: 22px;
+                            width: 20px;
+                            border-radius: 5px;
+                            background: gxtouch.has-hover ? Theme.hover : transparent;
+                            Text {
+                                text: "×";
+                                color: gxtouch.has-hover ? Theme.ink : Theme.ink-3;
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            gxtouch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-toggled(); }
+                            }
+                        }
+                    }
+                }
+
+                // Quiet on-demand micro-triggers: unfold rich lenses only when asked.
+                HorizontalLayout {
+                    spacing: 4px;
                     alignment: start;
+                    for trig in [
+                        { id: "loc", g: "⛁", label: root.word-loc, on: root.loc-on, warn: false },
+                        { id: "time", g: "◷", label: root.word-time, on: root.time-on, warn: false },
+                        { id: "fuzzy", g: "≈", label: root.word-fuzzy, on: root.fuzzy-on, warn: false },
+                        { id: "grep", g: "≣", label: root.word-grep, on: root.grep-open, warn: true },
+                    ]: Rectangle {
+                        height: 34px;
+                        width: root.width >= 960px ? (trow.preferred-width + 18px) : 32px;
+                        border-radius: 8px;
+                        border-width: Theme.hair;
+                        border-color: trig.on ? (trig.warn ? Theme.cap-read-ring : Theme.cap-ring)
+                            : thit.has-hover ? Theme.ink-3 : Theme.line;
+                        background: trig.on ? (trig.warn ? Theme.cap-read : Theme.cap)
+                            : thit.has-hover ? Theme.hover : Theme.panel;
+                        trow := HorizontalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Text {
+                                text: trig.g;
+                                color: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key) : Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 12.5px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            if root.width >= 960px: Text {
+                                text: trig.label;
+                                color: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key)
+                                    : thit.has-hover ? Theme.ink : Theme.ink-2;
+                                font-size: 12.5px;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                            }
+                        }
+                        thit := TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                    if (trig.id == "grep") {
+                                        root.grep-toggled();
+                                    } else if (trig.id == "fuzzy") {
+                                        input.focus();
+                                        root.lens-fuzzy();
+                                    } else if (trig.id == "loc") {
+                                        input.focus();
+                                        root.lens-field("under");
+                                    } else {
+                                        input.focus();
+                                        root.lens-field("dm");
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Push {
                         height: 34px;
                         label: root.word-filter-button;
@@ -2879,10 +3183,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-                // Under the bar: what the results hold, each a term a press adds;
-                // the switches for what is shown at its right end. One line, always:
-                // a long strip is cut, never wrapped, so the list never moves.
-                HorizontalLayout {
+                // Under the bar: calm and collapsed on an empty query unless opened.
+                if root.narrow-shown || root.fix-said != "" || root.reading-warn || (root.query != "" && root.reading != ""): HorizontalLayout {
                     height: 30px;
                     spacing: 8px;
 
@@ -3997,11 +4299,11 @@ export component MainWindow inherits Window {
                     // Capped to nothing rather than put behind an `if`: an id
                     // inside a conditional is out of scope, and both views must
                     // stay readable by name.
-                    visible: !root.grid;
+                    visible: !root.grid && !root.grep-active;
                     // With `max-height`: a `ScrollView` asks for fifty pixels
                     // whatever it holds, so capping the height alone leaves a band.
                     min-height: 0px;
-                    max-height: root.grid ? 0px : 100000px;
+                    max-height: (root.grid || root.grep-active) ? 0px : 100000px;
 
                     // Slots that are never destroyed, not a `ListView`: that one
                     // drops the row scrolling out and builds the one scrolling
@@ -4299,9 +4601,9 @@ export component MainWindow inherits Window {
                 // an `if`, which would take its id out of scope.
                 tiles := ListView {
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                    visible: root.grid;
+                    visible: root.grid && !root.grep-active;
                     min-height: 0px;
-                    max-height: root.grid ? 100000px : 0px;
+                    max-height: (root.grid && !root.grep-active) ? 100000px : 0px;
 
                     for line[i] in root.lines: Rectangle {
                         height: root.tile-h;
@@ -4429,6 +4731,137 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+                // Stream of files and matching lines when the Grep capsule is active.
+                VerticalLayout {
+                    visible: root.grep-active;
+                    min-height: 0px;
+                    max-height: root.grep-active ? 100000px : 0px;
+                    vertical-stretch: root.grep-active ? 1 : 0;
+
+                    Rectangle {
+                        height: 36px;
+                        background: Theme.ground;
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            Text {
+                                text: root.grep-summary;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            if root.grep-more-on: VerticalLayout {
+                                alignment: center;
+                                Push {
+                                    label: root.word-read-more + " →";
+                                    asking: true;
+                                    clicked => { root.grep-more(); }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.grep-empty != "": Rectangle {
+                        vertical-stretch: 1;
+                        Text {
+                            text: root.grep-empty;
+                            color: Theme.ink-3;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if root.grep-empty == "": ListView {
+                        vertical-stretch: 1;
+                        for gitem in root.grep-items: Rectangle {
+                            height: gitem.header ? 32px : 25px;
+                            background: ghit.has-hover ? Theme.hover : gitem.header ? Theme.ground : transparent;
+                            if gitem.header: Rectangle {
+                                y: 0px;
+                                height: 1px;
+                                background: Theme.line-soft;
+                            }
+                            if gitem.header: HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 8px;
+                                Text {
+                                    text: gitem.name;
+                                    color: Theme.ink;
+                                    font-family: Fonts.mono;
+                                    font-size: 12.5px;
+                                    font-weight: 650;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: gitem.dir;
+                                    color: Theme.ink-3;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 18px;
+                                        width: gcnt.preferred-width + 12px;
+                                        border-radius: 9px;
+                                        background: Theme.cap-read;
+                                        gcnt := Text {
+                                            text: gitem.count;
+                                            color: Theme.q-bad;
+                                            font-family: Fonts.mono;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                            if !gitem.header: HorizontalLayout {
+                                padding-left: 18px;
+                                padding-right: 14px;
+                                spacing: 10px;
+                                Text {
+                                    width: 44px;
+                                    text: gitem.line;
+                                    color: Theme.ink-3;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                                Marked {
+                                    horizontal-stretch: 1;
+                                    height: parent.height;
+                                    pre: gitem.pre;
+                                    hit: gitem.hit;
+                                    post: gitem.post;
+                                    colour: Theme.ink-2;
+                                }
+                            }
+                            ghit := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-clicked(gitem.file-idx); }
+                                double-clicked => { root.grep-opened(gitem.file-idx); }
+                            }
+                        }
+                    }
+                }
+
                 // The first-run offer, under the list: bind a key once, and no
                 // face asks again. It stays while an error has to be read.
                 if root.key-nudge || root.key-nudge-error != "": Rectangle {
@@ -5162,6 +5595,28 @@ export component MainWindow inherits Window {
                     alignment: center;
                     Rectangle {
                         height: 20px;
+                        width: nar-text.preferred-width + 16px;
+                        border-radius: 6px;
+                        border-width: Theme.hair;
+                        border-color: root.narrow-shown ? Theme.cap-ring : nar-touch.has-hover ? Theme.ink-3 : Theme.line;
+                        background: root.narrow-shown ? Theme.cap : transparent;
+                        nar-text := Text {
+                            text: root.word-narrow-pill;
+                            color: root.narrow-shown ? Theme.q-key : nar-touch.has-hover ? Theme.ink : Theme.ink-2;
+                            font-size: 11.5px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        nar-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.narrow-toggled(); }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 20px;
                         width: typos-text.preferred-width + 16px;
                         border-radius: 6px;
                         border-width: Theme.hair;
@@ -5354,27 +5809,347 @@ export component MainWindow inherits Window {
         }
 
 
-        // The lens: under the term the caret is on, the term's choices, each
-        // with what it would leave. Opaque, above the list; it never takes
-        // the keyboard, which stays in the field.
-        if root.lens-open && root.lens-rows.length > 0: Rectangle {
+        // The lens: under the term the caret is on, expanding to a 2-column
+        // Miller place explorer or interactive sparkline histogram when needed.
+        if root.lens-open && (root.lens-kind == "place" || root.lens-rows.length > 0): Rectangle {
             x: clamp(field.absolute-position.x + field.pad + field.advance * root.lens-col - 12px,
                 8px, root.width - self.width - 8px);
             y: field.absolute-position.y + field.top + (root.lens-line + 1) * 22px + 6px;
-            width: 420px;
-            height: min(lens-body.preferred-height, 360px);
+            width: root.lens-kind == "place" ? min(680px, root.width - 20px)
+                : (root.lens-kind == "time" || root.lens-kind == "size") ? min(470px, root.width - 20px)
+                : min(430px, root.width - 20px);
+            height: root.lens-kind == "place" ? min(370px, root.height - self.y - 16px)
+                : min(lens-body.preferred-height, 410px);
             background: Theme.panel-2;
             border-width: Theme.hair;
             border-color: Theme.line;
-            border-radius: 9px;
+            border-radius: 10px;
             clip: true;
-            drop-shadow-blur: 14px;
-            drop-shadow-color: #00000055;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #0000005c;
             drop-shadow-offset-y: 6px;
 
+            TouchArea {}
+
+            if root.lens-kind == "place": VerticalLayout {
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    // Left column: Disks + Places + OS Folder Picker
+                    Rectangle {
+                        width: 215px;
+                        background: Theme.ground;
+                        Rectangle {
+                            x: parent.width - 1px;
+                            width: 1px;
+                            height: parent.height;
+                            background: Theme.line;
+                        }
+                        VerticalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            spacing: 2px;
+                            Flickable {
+                                vertical-stretch: 1;
+                                viewport-height: pleft-col.preferred-height;
+                                pleft-col := VerticalLayout {
+                                    for pl in root.lens-places: VerticalLayout {
+                                        if pl.group != "": Rectangle {
+                                            height: 20px;
+                                            Text {
+                                                x: 12px;
+                                                text: pl.group;
+                                                color: Theme.ink-3;
+                                                font-size: 10.5px;
+                                                font-weight: 650;
+                                                vertical-alignment: bottom;
+                                            }
+                                        }
+                                        Rectangle {
+                                            height: 26px;
+                                            background: pl.active ? Theme.selection : plhit.has-hover ? Theme.hover : transparent;
+                                            HorizontalLayout {
+                                                padding-left: 12px;
+                                                padding-right: 10px;
+                                                spacing: 6px;
+                                                Text {
+                                                    text: pl.label;
+                                                    color: Theme.ink;
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                    horizontal-stretch: 1;
+                                                }
+                                                Text {
+                                                    text: pl.sub;
+                                                    color: pl.ask-disk ? Theme.q-key : Theme.ink-3;
+                                                    font-family: Fonts.mono;
+                                                    font-size: 10.5px;
+                                                    font-weight: pl.ask-disk ? 600 : 400;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            plhit := TouchArea {
+                                                mouse-cursor: pointer;
+                                                pointer-event(e) => {
+                                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                        root.lens-place-act(pl.ask-disk ? "disk" : "dir", pl.target);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                Rectangle {
+                                    height: 28px;
+                                    border-radius: 6px;
+                                    border-width: Theme.hair;
+                                    border-color: pickhit.has-hover ? Theme.ink-3 : Theme.line;
+                                    background: pickhit.has-hover ? Theme.hover : Theme.panel;
+                                    Text {
+                                        text: "📁 " + root.word-choose-folder;
+                                        color: Theme.ink-2;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    pickhit := TouchArea {
+                                        mouse-cursor: pointer;
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.lens-place-act("pick", root.lens-place-cur);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Right column: Breadcrumb + Direct switch + Weighted subfolders
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Rectangle {
+                            height: 30px;
+                            Rectangle {
+                                y: parent.height - 1px;
+                                height: 1px;
+                                background: Theme.line-soft;
+                            }
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 3px;
+                                if root.lens-place-up != "": Rectangle {
+                                    width: 20px;
+                                    border-radius: 4px;
+                                    background: uphit.has-hover ? Theme.hover : transparent;
+                                    Text {
+                                        text: "‹";
+                                        color: Theme.ink-2;
+                                        font-size: 14px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    uphit := TouchArea {
+                                        mouse-cursor: pointer;
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.lens-place-act("dir", root.lens-place-up);
+                                            }
+                                        }
+                                    }
+                                }
+                                Flickable {
+                                    horizontal-stretch: 1;
+                                    interactive: false;
+                                    viewport-width: crumb-row.preferred-width;
+                                    crumb-row := HorizontalLayout {
+                                        spacing: 2px;
+                                        alignment: start;
+                                        for cr[ci] in root.lens-crumbs: HorizontalLayout {
+                                            spacing: 2px;
+                                            if ci > 0: Text {
+                                                text: "/";
+                                                color: Theme.ink-3;
+                                                font-family: Fonts.mono;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                            }
+                                            Rectangle {
+                                                width: crtxt.preferred-width + 8px;
+                                                border-radius: 4px;
+                                                background: crhit.has-hover ? Theme.hover : transparent;
+                                                crtxt := Text {
+                                                    text: cr.label;
+                                                    color: ci == root.lens-crumbs.length - 1 ? Theme.ink : Theme.ink-2;
+                                                    font-family: Fonts.mono;
+                                                    font-size: 11.5px;
+                                                    font-weight: ci == root.lens-crumbs.length - 1 ? 650 : 500;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                crhit := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    pointer-event(e) => {
+                                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                            root.lens-place-act("dir", cr.path);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 20px;
+                                        width: dirtxt.preferred-width + 12px;
+                                        border-radius: 5px;
+                                        border-width: Theme.hair;
+                                        border-color: root.lens-place-direct ? Theme.cap-ring : Theme.line;
+                                        background: root.lens-place-direct ? Theme.cap : dirhit.has-hover ? Theme.hover : transparent;
+                                        dirtxt := Text {
+                                            text: root.word-direct-only;
+                                            color: root.lens-place-direct ? Theme.q-key : Theme.ink-3;
+                                            font-size: 10.5px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        dirhit := TouchArea {
+                                            mouse-cursor: pointer;
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                    root.lens-place-act("flip", root.lens-place-cur);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Apply current folder row
+                        Rectangle {
+                            height: 28px;
+                            background: curhit.has-hover ? Theme.selection : transparent;
+                            curhit := TouchArea {
+                                mouse-cursor: pointer;
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        root.lens-place-act("choose", root.lens-place-cur);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 6px;
+                                Text {
+                                    text: "✓ " + root.word-this-folder + " (" + root.lens-place-shown + ")";
+                                    color: Theme.q-key;
+                                    font-family: Fonts.mono;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                                PairButton {
+                                    y: 6px;
+                                    label: "+";
+                                    pressed => { root.lens-place-act("inc", root.lens-place-cur); }
+                                }
+                                PairButton {
+                                    y: 6px;
+                                    label: "!";
+                                    pressed => { root.lens-place-act("exc", root.lens-place-cur); }
+                                }
+                            }
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            viewport-height: pdir-col.preferred-height;
+                            pdir-col := VerticalLayout {
+                                for d in root.lens-dirs: Rectangle {
+                                    height: 26px;
+                                    background: dhit.has-hover ? Theme.hover : transparent;
+                                    if d.bar > 0: Rectangle {
+                                        x: 8px;
+                                        y: 3px;
+                                        height: 20px;
+                                        width: (parent.width - 16px) * d.bar * 0.88;
+                                        border-radius: 3px;
+                                        background: Theme.line-soft;
+                                    }
+                                    dhit := TouchArea {
+                                        mouse-cursor: pointer;
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.lens-place-act("dir", d.path);
+                                            }
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        padding-left: 12px;
+                                        padding-right: 10px;
+                                        spacing: 6px;
+                                        Text {
+                                            text: d.name;
+                                            color: Theme.ink;
+                                            font-family: Fonts.mono;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                        Text {
+                                            text: d.meta;
+                                            color: Theme.ink-3;
+                                            font-family: Fonts.mono;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                        PairButton {
+                                            y: 5px;
+                                            label: "+";
+                                            pressed => { root.lens-place-act("inc", d.path); }
+                                        }
+                                        PairButton {
+                                            y: 5px;
+                                            label: "!";
+                                            pressed => { root.lens-place-act("exc", d.path); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.line; }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    height: 26px;
+                    Text {
+                        text: root.lens-foot;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
             lens-flick := Flickable {
+                visible: root.lens-kind != "place";
                 viewport-height: lens-body.preferred-height;
-                // The chosen line in sight: rows are 26px, a heading 20px more.
                 property <int> sel: root.lens-sel;
                 changed sel => {
                     let at = 30px + self.sel * 26px;
@@ -5408,6 +6183,82 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                     }
+
+                    // Interactive Sparkline Scrubber for Time & Size lenses
+                    if (root.lens-kind == "time" || root.lens-kind == "size") && root.lens-rows.length > 0: VerticalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-bottom: 6px;
+                        spacing: 3px;
+                        spark-box := Rectangle {
+                            height: 48px;
+                            property <bool> dragging: false;
+                            property <int> drag-a: root.lens-sel;
+                            property <int> drag-b: root.lens-sel;
+                            HorizontalLayout {
+                                spacing: 5px;
+                                for srow[si] in root.lens-rows: Rectangle {
+                                    horizontal-stretch: 1;
+                                    property <bool> lit: spark-box.dragging
+                                        ? (si >= min(spark-box.drag-a, spark-box.drag-b) && si <= max(spark-box.drag-a, spark-box.drag-b))
+                                        : si == root.lens-sel;
+                                    Rectangle {
+                                        width: parent.width;
+                                        height: max(4px, (parent.height - 6px) * max(0.08, srow.bar));
+                                        y: parent.height - self.height;
+                                        border-radius: 3px;
+                                        background: parent.lit ? Theme.q-key : Theme.k3.with-alpha(0.65);
+                                    }
+                                }
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                function idx-at(x: length) -> int {
+                                    return clamp(
+                                        Math.floor(x * root.lens-rows.length / max(1px, spark-box.width)),
+                                        0,
+                                        max(0, root.lens-rows.length - 1));
+                                }
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        let idx = self.idx-at(self.mouse-x);
+                                        spark-box.dragging = true;
+                                        spark-box.drag-a = idx;
+                                        spark-box.drag-b = idx;
+                                    }
+                                    if (e.kind == PointerEventKind.up && spark-box.dragging) {
+                                        spark-box.dragging = false;
+                                        root.lens-spark-range(spark-box.drag-a, spark-box.drag-b);
+                                    }
+                                }
+                                moved => {
+                                    if (spark-box.dragging) {
+                                        spark-box.drag-b = self.idx-at(self.mouse-x);
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 5px;
+                            for srow in root.lens-rows: Text {
+                                horizontal-stretch: 1;
+                                text: srow.hint != "" ? srow.hint : srow.label;
+                                color: Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10px;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        Text {
+                            text: root.word-spark-hint;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            horizontal-alignment: right;
+                        }
+                        Rectangle { height: 1px; background: Theme.line-soft; }
+                    }
+
                     for row[i] in root.lens-rows: VerticalLayout {
                         if row.group != "": Rectangle {
                             height: row.group == " " ? 7px : 20px;
@@ -5495,6 +6346,28 @@ export component MainWindow inherits Window {
                                         root.lens-pick(i, row.stays);
                                     }
                                 }
+                            }
+                        }
+                    }
+                    if root.lens-kind == "word": HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 6px;
+                        Text {
+                            text: root.typos-said;
+                            color: Theme.ink-2;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Push {
+                            label: root.typos-choice == "always" ? "✓" : "≈";
+                            plain: true;
+                            clicked => {
+                                root.typos-picked(root.typos-choice == "" ? "always"
+                                    : root.typos-choice == "always" ? "off" : "");
                             }
                         }
                     }
@@ -6798,29 +7671,63 @@ export component MainWindow inherits Window {
         }
     }
 
-    // A search that found nothing, and what it nearly found: one line where
-    // the first rows would have been, the word at its end a press.
-    if root.similar-said != "" && root.panel == "": Rectangle {
+    // Elevated Zero-Hit Similar Rescue Card when a search finds nothing.
+    if root.similar-said != "" && root.panel == "" && !root.grep-active: Rectangle {
         x: list.absolute-position.x + (list.width - self.width) / 2;
-        y: list.absolute-position.y + 72px;
-        width: similar-line.preferred-width;
-        height: 24px;
-        similar-line := HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: root.similar-said;
-                color: Theme.ink-2;
-                font-size: 13px;
-                vertical-alignment: center;
+        y: list.absolute-position.y + 68px;
+        width: min(500px, list.width - 32px);
+        height: sim-col.preferred-height + 24px;
+        background: Theme.ground;
+        border-radius: 10px;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: #00000033;
+        drop-shadow-offset-y: 4px;
+
+        sim-col := VerticalLayout {
+            x: 16px;
+            y: 12px;
+            width: parent.width - 32px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.similar-said;
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Rectangle {
+                    height: 20px;
+                    width: sqtxt.preferred-width + 12px;
+                    border-radius: 5px;
+                    background: Theme.cap;
+                    sqtxt := Text {
+                        text: root.similar-query;
+                        color: Theme.q-key;
+                        font-family: Fonts.mono;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
-            Text {
-                text: root.similar-show;
-                color: Theme.q-key;
-                font-size: 13px;
-                vertical-alignment: center;
-                TouchArea {
-                    mouse-cursor: pointer;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Push {
+                    label: root.similar-show;
+                    asking: true;
                     clicked => { root.similar-clicked(); }
+                }
+                Push {
+                    label: root.word-similar-always;
+                    clicked => { root.typos-picked("always"); }
                 }
             }
         }
@@ -6829,9 +7736,9 @@ export component MainWindow inherits Window {
 
     // Nothing found: each filter, left out on its own, and what would then be
     // found. A press takes that filter out.
-    if root.offers.length > 0 && root.panel == "": Rectangle {
+    if root.offers.length > 0 && root.panel == "" && !root.grep-active: Rectangle {
         x: list.absolute-position.x + (list.width - self.width) / 2;
-        y: list.absolute-position.y + 104px;
+        y: list.absolute-position.y + (root.similar-said != "" ? 168px : 104px);
         width: max(offers-col.preferred-width, 200px);
         height: offers-col.preferred-height;
         offers-col := VerticalLayout {

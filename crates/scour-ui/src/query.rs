@@ -129,6 +129,47 @@ pub fn toggle(text: &str, term: &str) -> String {
     parts.join(" ")
 }
 
+fn fold_char(c: char) -> char {
+    match c {
+        'İ' | 'I' | 'ı' => 'i',
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
+/// Positive `letters:` (or `harfler:`) values in a query, for subsequence highlighting.
+pub fn letters_terms(text: &str) -> Vec<String> {
+    crate::lens::terms(text)
+        .into_iter()
+        .filter(|t| !t.not && t.field == Some("letters") && !t.value.is_empty())
+        .map(|t| t.value)
+        .collect()
+}
+
+/// Coalesced byte spans in `name` matching the characters of `needle` in order.
+pub fn subseq_spans(name: &str, needle: &str) -> Option<Vec<(usize, usize)>> {
+    let want: Vec<char> = needle.chars().map(fold_char).collect();
+    if want.is_empty() {
+        return None;
+    }
+    let mut wi = 0;
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (at, ch) in name.char_indices() {
+        if fold_char(ch) == want[wi] {
+            let end = at + ch.len_utf8();
+            if let Some(last) = out.last_mut().filter(|(_, e)| *e == at) {
+                last.1 = end;
+            } else {
+                out.push((at, end));
+            }
+            wi += 1;
+            if wi == want.len() {
+                return Some(out);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +219,15 @@ mod tests {
         );
         assert_eq!(of_kind("code"), "kind:code");
         assert_eq!(of_age(7), "dm:7d");
+    }
+
+    #[test]
+    fn subsequence_spans_coalesce_adjacent_hits_and_fold_turkish_i() {
+        assert_eq!(letters_terms("letters:scrgui !letters:bad"), ["scrgui"]);
+        let spans = subseq_spans("scour-gui", "scrgui").expect("matches");
+        let pieces: Vec<&str> = spans.iter().map(|&(a, b)| &"scour-gui"[a..b]).collect();
+        assert_eq!(pieces, ["sc", "r", "gui"]);
+        let tr = subseq_spans("İndirilenler", "indr").expect("turkish i");
+        assert_eq!(&"İndirilenler"[tr[0].0..tr[0].1], "İnd");
     }
 }

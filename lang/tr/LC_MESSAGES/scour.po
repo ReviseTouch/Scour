@@ -2677,3 +2677,114 @@ msgstr "Yapılandırmadaki gibi"
 
 msgid "Found in the file"
 msgstr "Dosyada bulunanlar"
+
+# --- Contextual lenses, progressive disclosure & grep ---
+
+msgid "Grep"
+msgstr "İçerik"
+
+msgid "Search inside files (Ctrl+G)"
+msgstr "Dosya içinde ara (Ctrl+G)"
+
+msgid "Search inside matching files…"
+msgstr "Eşleşen dosyaların içinde ara…"
+
+msgid "Text"
+msgstr "Metin"
+
+msgid "Regex"
+msgstr "Regex"
+
+msgid "Hex"
+msgstr "Hex"
+
+msgid "Exact case"
+msgstr "Büyük/küçük harf duyarlı"
+
+msgid "Include binary files"
+msgstr "İkili dosyaları da oku"
+
+msgid "Close grep"
+msgstr "İçerik aramayı kapat"
+
+msgid "Read more"
+msgstr "Devamını oku"
+
+msgid "{f} files · {s} scanned · {b} read"
+msgstr "{f} dosya · {s} tarandı · {b} okundu"
+
+msgid "{n} binary skipped"
+msgstr "{n} ikili atlandı"
+
+msgid "{n} too large"
+msgstr "{n} çok büyük"
+
+msgid "Scanning matching files…"
+msgstr "Eşleşen dosyalar taranıyor…"
+
+msgid "No files held that pattern in the scanned batch."
+msgstr "Taranan dosyalarda bu desen bulunamadı."
+
+msgid "Choose folder…"
+msgstr "Klasör seç…"
+
+msgid "Subfolders"
+msgstr "Alt klasörler"
+
+msgid "Include folder"
+msgstr "Klasörü dahil et"
+
+msgid "Exclude folder"
+msgstr "Klasörü dışla"
+
+msgid "Climb up"
+msgstr "Üst klasöre çık"
+
+msgid "Click or drag across bars to pick a range"
+msgstr "Aralık seçmek için çubuklara tıklayın ya da sürükleyin"
+
+msgid "Fuzzy"
+msgstr "Esnek"
+
+msgid "Exact"
+msgstr "Tam"
+
+msgid "Offer"
+msgstr "Öner"
+
+msgid "Show similar (Enter)"
+msgstr "Benzerleri göster (Enter)"
+
+msgid "Always forgive typos"
+msgstr "Yazım hatalarını hep hoş gör"
+
+msgid "Near matches in the index"
+msgstr "İndeksteki yakın eşleşmeler"
+
+msgid "Show narrowing suggestions"
+msgstr "Daraltma önerilerini göster"
+
+msgid "Hide narrowing suggestions"
+msgstr "Daraltma önerilerini gizle"
+
+msgid "Narrow"
+msgstr "Daralt"
+
+msgid "More matches in file…"
+msgstr "Dosyada daha fazla eşleşme…"
+
+msgid "Open location lens"
+msgstr "Konum seçiciyi aç"
+
+msgid "Open time lens"
+msgstr "Tarih seçiciyi aç"
+
+msgid "Word matching"
+msgstr "Kelime eşleştirme"
+
+msgid "folder explorer · filter & fuzzy lens"
+msgstr "klasör gezgini · filtre ve esnek eşleşme merceği"
+
+msgid "search inside matching files (grep)"
+msgstr "eşleşen dosyaların içinde ara (grep)"
+

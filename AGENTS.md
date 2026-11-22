@@ -126,8 +126,9 @@ are refused in the one `call` every tool goes through — `Request::is_mutating`
 One page and its JSON routes; no framework, no async runtime. **127.0.0.1
 only**, a token per run, `Origin` checked, `GET` reads and `POST` acts.
 `/api/open` runs executables through the index's own `stat` fence; `--no-run`
-reveals the folder instead, `--no-launch` removes the route, `--no-thumbnails`
-removes `/api/thumb`. `rescan` and `maintain` are not routed.
+reveals the folder instead, `--no-launch` removes launching routes (`/api/open`,
+`/api/pick-folder`), `--no-preview` removes `/api/preview` and `/api/grep`, and
+`--no-thumbnails` removes `/api/thumb`. `maintain` is not routed.
 
 ### Window — `scour-gui`, terminal — `scour-tui`
 

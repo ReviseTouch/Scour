@@ -11,9 +11,10 @@ use scour_proto::Response;
 use scour_ui::lens;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use crate::link::{Ask, Link};
+use crate::link::{Ask, Got, Link};
 use crate::qbar::{self, Field};
-use crate::qlens::{Chosen, Env, Lenses};
+use crate::qlens::{self, Chosen, Env, Lenses};
+use crate::ui::{PlaceCrumb, PlaceDir, PlaceLeft};
 use crate::{LensRow, MainWindow, Reach, State};
 
 /// Everything the bar keeps between presses.
@@ -39,6 +40,8 @@ pub struct QueryBar {
     narrow_total: u64,
     /// The line switched off in the settings: nothing is asked for it.
     pub narrow_off: bool,
+    pub narrow_pinned: bool,
+    pub narrow_hidden: bool,
     narrow_facets: Option<scour_core::FacetResponse>,
     narrow_usage: Option<scour_core::UsageResponse>,
     chips: Vec<(String, u64, String)>,
@@ -139,6 +142,13 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     w.set_q_first(qb.field.first as i32);
     w.set_caret_line(line);
     w.set_caret_col(col);
+    let ts = lens::terms(&text);
+    w.set_loc_on(ts.iter().any(|t| matches!(t.field, Some("under" | "parent"))));
+    w.set_time_on(ts.iter().any(|t| t.field == Some("dm")));
+    w.set_fuzzy_on(
+        ts.iter().any(|t| matches!(t.field, Some("fuzzy" | "letters")))
+            || w.get_typos_choice() == "always",
+    );
     if lensing != Lensing::Keep {
         let focused = qb.anchor == qb.cursor;
         let wants = if focused {
@@ -158,10 +168,26 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
 /// The open lens, as rows and words.
 fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     let text = w.get_query().to_string();
-    let Some(o) = qb.lenses.open.as_ref().filter(|o| !o.items.is_empty()) else {
+    let Some(o) = qb
+        .lenses
+        .open
+        .as_ref()
+        .filter(|o| o.kind == lens::Lens::Place || !o.items.is_empty())
+    else {
         w.set_lens_open(false);
         return;
     };
+    let kind_tag = match o.kind {
+        lens::Lens::Place => "place",
+        lens::Lens::Time => "time",
+        lens::Lens::Size => "size",
+        lens::Lens::Word => "word",
+        _ => "",
+    };
+    w.set_lens_kind(kind_tag.into());
+    if o.kind == lens::Lens::Place {
+        show_place_lens(w, o, &qb.places, cat);
+    }
     let peak = o
         .items
         .iter()
@@ -207,6 +233,160 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     w.set_lens_col(col);
     w.set_lens_launching(o.kind == lens::Lens::Launch);
     w.set_lens_open(true);
+}
+
+fn show_place_lens(
+    w: &MainWindow,
+    o: &qlens::Open,
+    places: &[(String, String)],
+    cat: &Catalogue,
+) {
+    let hm = home();
+    let (base, part) = lens::place_parts(&o.term.value);
+    let active = if base.is_empty() {
+        if hm.is_empty() { "/".to_owned() } else { hm.clone() }
+    } else {
+        qlens::full_path(&hm, &base)
+    };
+    let want = part.to_lowercase();
+    let mut left: Vec<PlaceLeft> = Vec::new();
+    let mut first_disk = true;
+    for d in o.disks.iter().flatten() {
+        let root = d.volume.roots.first().cloned().unwrap_or_default();
+        let name = if d.volume.label.is_empty() {
+            root.clone()
+        } else {
+            d.volume.label.clone()
+        };
+        let on = d.state.indexed();
+        let act = on
+            && (active == root
+                || active.starts_with(&if root == "/" { "/".into() } else { format!("{root}/") }));
+        left.push(PlaceLeft {
+            group: if first_disk {
+                cat.get("Disks").as_ref().into()
+            } else {
+                slint::SharedString::new()
+            },
+            label: format!("⛁ {name}").into(),
+            sub: if on {
+                qlens::home_path(&hm, &root).into()
+            } else {
+                cat.get("Index it").as_ref().into()
+            },
+            target: if on { root.into() } else { d.volume.id.as_str().into() },
+            ask_disk: !on,
+            active: act,
+        });
+        first_disk = false;
+    }
+    let mut all_places: Vec<(String, String)> = Vec::new();
+    if !hm.is_empty() {
+        all_places.push(("~".into(), hm.clone()));
+    }
+    all_places.extend_from_slice(places);
+    for (idx, (label, path)) in all_places.into_iter().enumerate() {
+        left.push(PlaceLeft {
+            group: if idx == 0 {
+                cat.get("Places").as_ref().into()
+            } else {
+                slint::SharedString::new()
+            },
+            label: label.into(),
+            sub: qlens::home_path(&hm, &path).into(),
+            target: path.as_str().into(),
+            ask_disk: false,
+            active: active == path,
+        });
+    }
+    w.set_lens_places(ModelRc::new(VecModel::from(left)));
+    w.set_lens_place_cur(active.as_str().into());
+    w.set_lens_place_shown(qlens::home_path(&hm, &active).into());
+    w.set_lens_place_direct(o.term.field == Some("parent"));
+    w.set_lens_place_up(if active == "/" {
+        slint::SharedString::new()
+    } else {
+        match active.rfind('/') {
+            Some(0) | None => "/".into(),
+            Some(i) => active[..i].into(),
+        }
+    });
+
+    let shown = qlens::home_path(&hm, &active);
+    let mut crumbs = Vec::new();
+    if shown.starts_with('~') && !hm.is_empty() {
+        let mut cur = hm.clone();
+        crumbs.push(PlaceCrumb {
+            label: "~".into(),
+            path: cur.as_str().into(),
+        });
+        for seg in shown[1..].split('/').filter(|s| !s.is_empty()) {
+            cur = format!("{cur}/{seg}");
+            crumbs.push(PlaceCrumb {
+                label: seg.into(),
+                path: cur.as_str().into(),
+            });
+        }
+    } else {
+        crumbs.push(PlaceCrumb {
+            label: "/".into(),
+            path: "/".into(),
+        });
+        let mut cur = String::new();
+        for seg in active.split('/').filter(|s| !s.is_empty()) {
+            cur = format!("{cur}/{seg}");
+            crumbs.push(PlaceCrumb {
+                label: seg.into(),
+                path: cur.as_str().into(),
+            });
+        }
+    }
+    w.set_lens_crumbs(ModelRc::new(VecModel::from(crumbs)));
+
+    let mut by_path: std::collections::BTreeMap<String, (String, u64, u64)> =
+        std::collections::BTreeMap::new();
+    if let Some(u) = &o.usage {
+        for c in &u.children {
+            let nm = c.path.rsplit('/').next().unwrap_or(&c.path).to_owned();
+            by_path.insert(c.path.clone(), (nm, c.bytes, c.files));
+        }
+    }
+    if let Some(nodes) = &o.tree {
+        for n in nodes.iter().filter(|n| n.is_dir) {
+            by_path
+                .entry(n.path.clone())
+                .or_insert_with(|| (n.name.clone(), 0, n.children));
+        }
+    }
+    let mut dirs: Vec<(String, String, u64, u64)> = by_path
+        .into_iter()
+        .filter(|(_, (nm, _, _))| want.is_empty() || nm.to_lowercase().contains(&want))
+        .map(|(p, (nm, b, f))| (p, nm, b, f))
+        .collect();
+    dirs.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then(a.1.cmp(&b.1)));
+    dirs.truncate(60);
+    let max_b = dirs.iter().map(|d| d.2).max().unwrap_or(0).max(1);
+    let mark = crate::marks();
+    let dir_rows: Vec<PlaceDir> = dirs
+        .into_iter()
+        .map(|(path, nm, b, f)| PlaceDir {
+            name: format!("{nm}/").into(),
+            path: path.into(),
+            meta: if b > 0 {
+                scour_ui::format::compact_bytes(b, mark.1).into()
+            } else if f > 0 {
+                scour_ui::format::grouped(f, mark.0).into()
+            } else {
+                slint::SharedString::new()
+            },
+            bar: if b > 0 {
+                (b as f32 / max_b as f32).clamp(0.04, 1.0)
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    w.set_lens_dirs(ModelRc::new(VecModel::from(dir_rows)));
 }
 
 /// Put a new query in the field, search it, and put the caret at `caret`.
@@ -351,13 +531,16 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
 /// the service's CPU and 280 MB of its memory, for chips nobody had touched.
 /// Only crossing the two the line needs asks again.
 pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
-    if s.qb.narrow_off {
+    let empty_unpinned = s.query.trim().is_empty() && !s.qb.narrow_pinned;
+    if s.qb.narrow_off || s.qb.narrow_hidden || empty_unpinned {
         if !s.qb.chips.is_empty() {
             s.qb.chips.clear();
             show_chips(w, &s.qb, cat);
         }
+        w.set_narrow_shown(false);
         return;
     }
+    w.set_narrow_shown(true);
     let text = s.query.clone();
     if s.qb.narrow_for == text && (s.qb.narrow_total < 2) == (total < 2) {
         return;
@@ -1017,6 +1200,267 @@ pub fn wire(
                 let n = q.len();
                 write(&w, &state, q, n);
             }
+        });
+    }
+    wire_v2(window, state, link, cat, redraw);
+}
+
+fn open_or_focus_field(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    redraw: &impl Fn(Lensing),
+    field_name: &str,
+) {
+    let text = w.get_query().to_string();
+    let existing = lens::terms(&text).into_iter().find(|t| {
+        t.field == Some(field_name) || (field_name == "under" && t.field == Some("parent"))
+    });
+    if let Some(t) = existing {
+        let end = if text[..t.end].ends_with('"') {
+            t.end - 1
+        } else {
+            t.end
+        };
+        {
+            let mut st = state.borrow_mut();
+            st.qb.anchor = end;
+            st.qb.cursor = end;
+        }
+        w.set_caret_to(end as i32);
+        w.set_caret_ask(w.get_caret_ask() + 1);
+        redraw(Lensing::Asked);
+        return;
+    }
+    let lead = if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
+    let q = format!("{text}{lead}{field_name}:");
+    let caret = q.len();
+    write(w, state, q, caret);
+    redraw(Lensing::Asked);
+}
+
+pub fn picked_folder(w: &MainWindow, state: &Rc<RefCell<State>>, a: usize, b: usize, prefix: String, path: String) {
+    let text = w.get_query().to_string();
+    let a = a.min(text.len());
+    let b = b.min(text.len()).max(a);
+    let shown = qlens::home_path(&home(), &path);
+    let quoted = if shown.chars().any(char::is_whitespace) {
+        format!("\"{shown}\"")
+    } else {
+        shown
+    };
+    let tail = if !text[b..].starts_with(char::is_whitespace) { " " } else { "" };
+    let ins = format!("{prefix}{quoted}{tail}");
+    let q = format!("{}{ins}{}", &text[..a], &text[b..]);
+    let caret = a + ins.len();
+    state.borrow_mut().qb.lenses.close();
+    w.set_lens_open(false);
+    write(w, state, q, caret);
+}
+
+fn wire_v2(
+    window: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    cat: &Rc<RefCell<Rc<Catalogue>>>,
+    redraw: impl Fn(Lensing) + Clone + 'static,
+) {
+    {
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        window.on_lens_field(move |name| {
+            if let Some(w) = weak.upgrade() {
+                open_or_focus_field(&w, &state, &redraw, name.as_str());
+            }
+        });
+    }
+    {
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        window.on_lens_fuzzy(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let c = state.borrow().qb.cursor.min(text.len());
+            let word = lens::term_at(&text, c)
+                .filter(|t| lens::lens_of(&text, t) == Some(lens::Lens::Word))
+                .or_else(|| {
+                    lens::terms(&text)
+                        .into_iter()
+                        .find(|t| lens::lens_of(&text, t) == Some(lens::Lens::Word))
+                });
+            if let Some(t) = word {
+                {
+                    let mut st = state.borrow_mut();
+                    st.qb.anchor = t.end;
+                    st.qb.cursor = t.end;
+                }
+                w.set_caret_to(t.end as i32);
+                w.set_caret_ask(w.get_caret_ask() + 1);
+                redraw(Lensing::Asked);
+            } else {
+                open_or_focus_field(&w, &state, &redraw, "fuzzy");
+            }
+        });
+    }
+    {
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        window.on_lens_spark_range(move |a, b| {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let edit = {
+                let st = state.borrow();
+                let Some(o) = st.qb.lenses.open.as_ref() else { return };
+                st.qb
+                    .lenses
+                    .spark_range(a.max(0) as usize, b.max(0) as usize)
+                    .map(|term| (o.a, o.b, term))
+            };
+            let Some((la, lb, term)) = edit else { return };
+            let tail = if !text[lb..].starts_with(char::is_whitespace) { " " } else { "" };
+            let q = format!("{}{term}{tail}{}", &text[..la], &text[lb..]);
+            let caret = la + term.len() + tail.len();
+            state.borrow_mut().qb.lenses.close();
+            w.set_lens_open(false);
+            write(&w, &state, q, caret);
+            redraw(Lensing::Keep);
+        });
+    }
+    {
+        let (weak, state, link, cat, redraw) = (
+            window.as_weak(),
+            Rc::clone(state),
+            Rc::clone(link),
+            Rc::clone(cat),
+            redraw.clone(),
+        );
+        window.on_lens_place_act(move |what, target| {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let hm = home();
+            let info = {
+                let st = state.borrow();
+                st.qb
+                    .lenses
+                    .open
+                    .as_ref()
+                    .map(|o| (o.a, o.b, o.term.field.unwrap_or("under"), o.term.not))
+            };
+            let Some((a, b, fld, is_not)) = info else { return };
+            let neg = if is_not { "!" } else { "" };
+            match what.as_str() {
+                "disk" => {
+                    link.send(Ask::Disk {
+                        volume: target.to_string(),
+                        what: "index".into(),
+                    });
+                    crate::told(
+                        &w,
+                        cat.borrow()
+                            .get("The disk is being indexed.")
+                            .as_ref()
+                            .into(),
+                    );
+                    state.borrow_mut().qb.lenses.forget("volumes");
+                    redraw(Lensing::Asked);
+                }
+                "pick" => {
+                    let start = target.to_string();
+                    let prefix = format!("{neg}{fld}:");
+                    std::thread::spawn(move || {
+                        let start_p = (!start.is_empty()).then(|| std::path::Path::new(&start));
+                        if let Some(chosen) = scour_openers::pick_folder(start_p) {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                crate::deliver(Got::PickedFolder {
+                                    a,
+                                    b,
+                                    prefix,
+                                    path: chosen,
+                                });
+                            });
+                        }
+                    });
+                }
+                "dir" => {
+                    let shown = qlens::home_path(&hm, target.as_str());
+                    let slash = if shown.ends_with('/') {
+                        shown
+                    } else {
+                        format!("{shown}/")
+                    };
+                    let quoted = if slash.chars().any(char::is_whitespace) {
+                        format!("\"{slash}\"")
+                    } else {
+                        slash
+                    };
+                    let raw = format!("{neg}{fld}:{quoted}");
+                    let caret = a + raw.len() - usize::from(raw.ends_with('"'));
+                    let q = format!("{}{raw}{}", &text[..a], &text[b..]);
+                    write(&w, &state, q, caret);
+                    redraw(Lensing::Asked);
+                }
+                "flip" => {
+                    let other = if fld == "under" { "parent" } else { "under" };
+                    let shown = qlens::home_path(&hm, target.as_str());
+                    let slash = if shown == "/" { "/".into() } else { format!("{shown}/") };
+                    let quoted = if slash.chars().any(char::is_whitespace) {
+                        format!("\"{slash}\"")
+                    } else {
+                        slash
+                    };
+                    let raw = format!("{neg}{other}:{quoted}");
+                    let caret = a + raw.len() - usize::from(raw.ends_with('"'));
+                    let q = format!("{}{raw}{}", &text[..a], &text[b..]);
+                    write(&w, &state, q, caret);
+                    redraw(Lensing::Asked);
+                }
+                "choose" | "inc" | "exc" => {
+                    let pfx = match what.as_str() {
+                        "exc" => format!("!{fld}:"),
+                        "inc" => format!("{fld}:"),
+                        _ => format!("{neg}{fld}:"),
+                    };
+                    let shown = qlens::home_path(&hm, target.as_str());
+                    let quoted = if shown.chars().any(char::is_whitespace) {
+                        format!("\"{shown}\"")
+                    } else {
+                        shown
+                    };
+                    let tail = if !text[b..].starts_with(char::is_whitespace) { " " } else { "" };
+                    let ins = format!("{pfx}{quoted}{tail}");
+                    let q = format!("{}{ins}{}", &text[..a], &text[b..]);
+                    let caret = a + ins.len();
+                    state.borrow_mut().qb.lenses.close();
+                    w.set_lens_open(false);
+                    write(&w, &state, q, caret);
+                    redraw(Lensing::Keep);
+                }
+                _ => {}
+            }
+        });
+    }
+    {
+        let (weak, state, link, cat) = (
+            window.as_weak(),
+            Rc::clone(state),
+            Rc::clone(link),
+            Rc::clone(cat),
+        );
+        window.on_narrow_toggled(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let total = {
+                let mut s = state.borrow_mut();
+                if w.get_narrow_shown() {
+                    s.qb.narrow_pinned = false;
+                    s.qb.narrow_hidden = true;
+                } else {
+                    s.qb.narrow_hidden = false;
+                    s.qb.narrow_pinned = true;
+                    s.qb.narrow_for.clear();
+                }
+                s.qb.narrow_total.max(100)
+            };
+            narrow(&w, &mut state.borrow_mut(), &link, &cat.borrow(), total);
         });
     }
 }

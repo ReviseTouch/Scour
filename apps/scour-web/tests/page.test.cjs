@@ -674,3 +674,22 @@ test('the lens names its fields, places and kinds as the window does', () => {
   assert.equal(kind({ raw: 'a', named: false, field: null, value: 'a' }), null);
   assert.equal(run('LENS_FIELDS["t\\u00fcr"]'), 'kind');
 });
+
+test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos', () => {
+  const c = context();
+  vm.runInContext(section('  function bare(s) {', '\n  function completions('), c);
+  vm.runInContext(section('  function subseqSpans(name, needle) {', '\n  /* Text as a name is searched'), c);
+  const run = (src) => JSON.parse(JSON.stringify(vm.runInContext(src, c)));
+  assert.deepEqual(run('subseqSpans("scour-gui", "scrgui")'), [[0, 2], [4, 5], [6, 9]]);
+  assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
+});
+
+test('sparkline range scrubbing produces valid size and time terms', () => {
+  const c = context();
+  c.LENS = { items: [{ term: 'size:<100kb' }, { term: 'size:100kb..10mb' }, { term: 'size:10mb..1gb' }, { term: 'size:>1gb' }] };
+  vm.runInContext(section('  function sparkRangeTerm(', '\n  let sparkDrag = false;'), c);
+  assert.equal(c.sparkRangeTerm('size', 1, 2, ''), 'size:100kb..1gb');
+  assert.equal(c.sparkRangeTerm('size', 0, 1, ''), 'size:<10mb');
+  assert.equal(c.sparkRangeTerm('size', 2, 3, '!'), '!size:>10mb');
+  assert.equal(c.sparkRangeTerm('time', 1, 3, ''), 'dm:30d');
+});

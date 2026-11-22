@@ -27,6 +27,8 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+← →", "sort by the next column · or click a heading"),
     ("Ctrl+↑ ↓", "reverse the order"),
     ("Tab", "the rail, and back"),
+    ("Ctrl+P · Ctrl+F", "folder explorer · filter & fuzzy lens"),
+    ("Ctrl+G", "search inside matching files (grep)"),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
     ("Ctrl+D", "disks"),
@@ -148,6 +150,21 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
     }
 
     // A panel takes the arrows and `Enter`; the query still types under it.
+    if app.panel == Panel::Lens {
+        match key.code {
+            KeyCode::Right | KeyCode::Tab => return app.lens_press(true),
+            KeyCode::Left | KeyCode::Backspace if app.v2.place_mode => return app.lens_climb_up(),
+            KeyCode::Char('!') if !ctrl && app.v2.place_mode => {
+                app.panel_at = 1;
+                return app.lens_press(false);
+            }
+            KeyCode::Char('o') if !ctrl && app.v2.place_mode => {
+                app.panel_at = 2;
+                return app.lens_press(false);
+            }
+            _ => {}
+        }
+    }
     if app.panel != Panel::None {
         match key.code {
             KeyCode::Esc => {
@@ -220,9 +237,23 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         // them on their own section.
         KeyCode::F(5) => return app.open_settings(Panel::General),
         // A `content:` query's reading: on from where it stopped, and again.
+        KeyCode::F(6) if app.v2.grep_open && app.v2.grep_next.is_some() => {
+            return app.dispatch_grep(true);
+        }
+        KeyCode::F(8) if app.v2.grep_open => {
+            app.v2.grep_mode = match app.v2.grep_mode {
+                scour_proto::GrepMode::Text => scour_proto::GrepMode::Regex,
+                scour_proto::GrepMode::Regex => scour_proto::GrepMode::Hex,
+                scour_proto::GrepMode::Hex => scour_proto::GrepMode::Text,
+            };
+            return app.dispatch_grep(false);
+        }
         KeyCode::F(6) | KeyCode::F(7) if app.reading.is_some() => {
             return Want::Reread(key.code == KeyCode::F(7));
         }
+        KeyCode::Char('p') if ctrl => return app.open_place_lens(),
+        KeyCode::Char('f') if ctrl => return app.open_context_lens(),
+        KeyCode::Char('g') if ctrl => return app.toggle_grep(),
         // Asked when it opens: this panel is the only thing changing them.
         KeyCode::Char('k') if ctrl => return app.open_settings(Panel::Rules),
         KeyCode::Char('l') if ctrl => return app.open_settings(Panel::General),
@@ -305,6 +336,30 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
         KeyCode::Enter => return open(app, shift),
         _ => {}
+    }
+
+    if app.v2.grep_open {
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char('c') if alt => {
+                app.v2.grep_exact = !app.v2.grep_exact;
+                return app.dispatch_grep(false);
+            }
+            KeyCode::Char('b') if alt => {
+                app.v2.grep_binary = !app.v2.grep_binary;
+                return app.dispatch_grep(false);
+            }
+            KeyCode::Esc => return app.toggle_grep(),
+            KeyCode::Backspace if app.mode == Mode::Search => {
+                app.v2.grep_pattern.pop();
+                return app.dispatch_grep(false);
+            }
+            KeyCode::Char(c) if !ctrl && !alt && app.mode == Mode::Search => {
+                app.v2.grep_pattern.push(c);
+                return app.dispatch_grep(false);
+            }
+            _ => {}
+        }
     }
 
     match app.mode {
@@ -421,6 +476,7 @@ fn panel_press(app: &mut App) -> Want {
         },
         Panel::Later => app.later_side(1, true),
         Panel::Searching => app.searching_side(1),
+        Panel::Lens => app.lens_press(false),
         Panel::Keys | Panel::About | Panel::None => Want::Nothing,
     }
 }

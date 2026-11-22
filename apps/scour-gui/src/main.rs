@@ -11,6 +11,7 @@ mod autostart;
 mod disks;
 mod drag;
 mod frame;
+mod grep_ui;
 mod hotkey;
 mod install;
 mod link;
@@ -142,6 +143,8 @@ const PAGE_MAX: u32 = rows::SPAN as u32;
 struct State {
     /// The query field: its layout, the caret, the lens. See `qwire`.
     qb: qwire::QueryBar,
+    /// On-demand inline Grep capsule state.
+    grep: grep_ui::GrepUi,
     /// The query that shows what the search in sight nearly found, when it
     /// found nothing and the service offered. See `SearchResponse::similar`.
     similar: String,
@@ -740,6 +743,7 @@ fn main() -> Result<()> {
 
     let state = Rc::new(RefCell::new(State {
         qb: qwire::QueryBar::off(kept.narrow_off),
+        grep: grep_ui::GrepUi::default(),
         similar: String::new(),
         mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
@@ -1250,6 +1254,9 @@ fn main() -> Result<()> {
                     &cat.borrow(),
                     qwire::Lensing::Follow,
                 );
+                if state.borrow().grep.open && !state.borrow().grep.pattern.is_empty() {
+                    grep_ui::trigger(&w, &mut state.borrow_mut(), &link, &cat.borrow(), false);
+                }
                 let s = state.borrow();
                 if w.get_past_open() {
                     let lines = past_matching(&s.past, &s.query);
@@ -1376,6 +1383,7 @@ fn main() -> Result<()> {
         });
     }
     qwire::wire(&window, &state, &link, &cat);
+    grep_ui::wire(&window, &state, &link, &cat);
 
     // Two buttons: one writes a file, the other opens the settings. A second
     // press closes them.
@@ -4579,6 +4587,16 @@ fn apply(
 ) {
     match got {
         Got::Key(done) => hotkey::landed(w, cat, *done),
+        Got::Grep {
+            generation,
+            append,
+            reply,
+        } => {
+            grep_ui::answered(w, &mut state.borrow_mut(), cat, generation, append, *reply);
+        }
+        Got::PickedFolder { a, b, prefix, path } => {
+            qwire::picked_folder(w, state, a, b, prefix, path);
+        }
         Got::Down(why) => {
             let mut s = state.borrow_mut();
             s.down = true;
@@ -4693,6 +4711,11 @@ fn apply(
                         .into(),
                     None => slint::SharedString::new(),
                 });
+                w.set_similar_query(
+                    offered
+                        .map(|s| slint::SharedString::from(s.query.as_str()))
+                        .unwrap_or_default(),
+                );
                 state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
                 qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total);
                 qwire::narrow(w, &mut state.borrow_mut(), link, cat, r.total);
@@ -5755,8 +5778,19 @@ fn terms_of(query: &str) -> Vec<String> {
     let mut quoted = false;
     let push = |w: &mut String, quoted: bool, out: &mut Vec<String>| {
         let t = std::mem::take(w);
-        // A field term is not text in the name; in quotes a colon is the phrase.
-        if t.is_empty() || (!quoted && (t.contains(':') || t.starts_with('!'))) {
+        if t.is_empty() || (!quoted && t.starts_with('!')) {
+            return;
+        }
+        if !quoted && let Some((f, v)) = t.split_once(':') {
+            let fl = f.to_lowercase();
+            let v = v.trim_matches('"').trim_matches('*');
+            if !v.is_empty() {
+                if matches!(fl.as_str(), "fuzzy" | "typo" | "benzer") {
+                    out.push(format!("~{v}"));
+                } else if matches!(fl.as_str(), "letters" | "harfler") {
+                    out.push(format!("^{v}"));
+                }
+            }
             return;
         }
         let t = t.trim_matches('*');
@@ -5980,7 +6014,23 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         cat,
         "letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes.",
     ));
-    w.set_similar_show(t(cat, "show"));
+    w.set_similar_show(t(cat, "Show similar (Enter)"));
+    w.set_word_similar_always(t(cat, "Always forgive typos"));
+    w.set_word_loc(t(cat, "Location"));
+    w.set_word_time(t(cat, "Modified"));
+    w.set_word_fuzzy(t(cat, "Fuzzy"));
+    w.set_word_grep(t(cat, "Grep"));
+    w.set_word_grep_ph(t(cat, "Search inside matching files…"));
+    w.set_word_text(t(cat, "Text"));
+    w.set_word_regex(t(cat, "Regex"));
+    w.set_word_hex(t(cat, "Hex"));
+    w.set_word_read_more(t(cat, "Read more"));
+    w.set_word_choose_folder(t(cat, "Choose folder…"));
+    w.set_word_this_folder(t(cat, "this folder"));
+    w.set_word_subfolders(t(cat, "Subfolders"));
+    w.set_word_direct_only(t(cat, "only what is directly inside"));
+    w.set_word_spark_hint(t(cat, "Click or drag across bars to pick a range"));
+    w.set_word_narrow_pill(t(cat, "Narrow"));
     w.set_set_later(t(cat, "Disks that come later"));
     w.set_set_removable(t(cat, "A disk plugged in"));
     w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));
@@ -7277,6 +7327,7 @@ mod tests {
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             qb: Default::default(),
+            grep: Default::default(),
             similar: String::new(),
             mounts: Vec::new(),
             indexed: 0,
@@ -7352,6 +7403,7 @@ mod tests {
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
             qb: Default::default(),
+            grep: Default::default(),
             similar: String::new(),
             mounts: Vec::new(),
             stirred: std::time::Instant::now(),
