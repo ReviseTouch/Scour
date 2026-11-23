@@ -51,6 +51,8 @@
        list is `auto`, so leftover height lands on the list. */
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    /* The one column is the window's width, not what its widest row would like. */
+    grid-template-columns: minmax(0, 1fr);
     min-height: 0;
     height: 100%;
   }
@@ -193,47 +195,60 @@
      coloured layer wraps by the same rules at the same width, so a term is
      drawn where its letters are. */
   .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; --q-lh: 36px; }
+  /* The textarea owns the text, the keys, the clipboard and the input method,
+     and shows nothing: no letters, no caret, no selection. What is seen is the
+     layer under it, drawn by the page, so a capsule can hold a picture and a
+     word that are not as wide as the letters they stand for. */
   .qfield textarea {
     display: block;
+    position: absolute;
+    inset: 0;
     width: 100%;
-    height: var(--q-lh);
-    max-height: calc(var(--q-lh) * 3);
+    height: 100%;
+    box-sizing: border-box;
     resize: none;
-    overflow: hidden auto;
-    scrollbar-width: none;
+    overflow: hidden;
     background: none;
     border: 0;
     outline: 0;
     color: transparent;
-    caret-color: var(--ink);
+    caret-color: transparent;
     font: 500 16px/var(--q-lh) var(--mono);
     letter-spacing: -.01em;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    white-space: pre;
     padding: 0 22px 0 0;
     margin: 0;
-    position: relative;
     z-index: 2;
   }
+  .qfield textarea::selection { background: transparent; color: transparent; }
   .qfield textarea::-webkit-scrollbar { display: none; }
-  /* The query stays real text — selectable, copyable — and this layer colours it. */
+  /* The drawn query: the browser lays it out and wraps it, so a capsule is as
+     wide as what it holds. Every character of the query is a character here,
+     in order, hidden or not, which is how a caret is found for an offset. */
   .qshadow {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
+    position: relative;
+    display: block;
+    min-height: var(--q-lh);
+    max-height: calc(var(--q-lh) * 3);
+    overflow-y: auto;
+    scrollbar-width: none;
     font: 500 16px/var(--q-lh) var(--mono);
     letter-spacing: -.01em;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     padding: 0 22px 0 0;
-    overflow: hidden;
     pointer-events: none;
     /* A bare term: blue for wanted, red for `!`. See `scour_ui::Palette`. */
     color: var(--q-term);
     z-index: 1;
   }
+  .qshadow::-webkit-scrollbar { display: none; }
+  /* The caret and the selection, drawn over the layer, under the textarea. */
+  .qdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+  .qdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }
+  .qdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--q-key); border-radius: 1px; animation: qblink 1.06s steps(1) infinite; }
+  @keyframes qblink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .qdecor .qcaret { animation: none; } }
   /* Role → colour is the frontend's only job; the engine sends the spans. */
   .qshadow .r-field { color: var(--q-key); font-weight: 700; }
   .qshadow .r-value { color: var(--q-val); }
@@ -271,45 +286,81 @@
 
   .qfield textarea::placeholder { color: var(--ink-3); font-weight: 500; }
 
-  /* A filter is a capsule: a tint and a hairline ring, both outside the
-     letters' own boxes, so the coloured layer keeps the typed text's widths.
-     A plain word stays bare; an excluded one is tinted red; `content:` amber,
-     because it reads files. */
+  /* A filter is a capsule: a header, and what it holds. 32px in a 36px line,
+     so the line keeps its height. A plain word stays bare; an excluded one is
+     tinted red; `content:` amber, because it reads files. */
   .qshadow .term.cap {
+    display: inline-flex;
+    align-items: stretch;
+    vertical-align: top;
+    height: 32px;
+    margin: 2px 0;
+    max-width: 100%;
+    box-sizing: border-box;
     border-radius: 8px;
-    /* Tall as the window's: the padding is the tint's, it moves no letter. */
-    padding-block: 5px;
     background: var(--cap);
-    box-shadow: 0 0 0 2px var(--cap), 0 0 0 3px var(--cap-ring);
-    -webkit-box-decoration-break: clone;
-    box-decoration-break: clone;
+    box-shadow: inset 0 0 0 1px var(--cap-ring);
+    letter-spacing: 0;
+    --art: var(--q-key);
   }
-  .qshadow .term.cap.read { --cap: var(--cap-read); --cap-ring: var(--cap-read-ring); }
-  .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); }
-  .qshadow .term.cap.idle { --cap: transparent; --cap-ring: var(--line); }
+  .qshadow .term.cap.read { --cap: var(--cap-read); --cap-ring: var(--cap-read-ring); --art: var(--q-bad); }
+  .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); --art: var(--q-not); }
+  .qshadow .term.cap.idle { --cap: transparent; --cap-ring: var(--line); --art: var(--ink-3); }
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
   /* The filter the caret is in is being written: the field's own focus. */
-  .qshadow .term.cap.edit { box-shadow: 0 0 0 2px var(--cap), 0 0 0 4px var(--focus); }
-  /* An empty one says what it is waiting for, past its ring. */
-  .qshadow .term.cap.idle.edit { position: relative; }
-  .qshadow .term.cap.idle.edit::after {
-    content: attr(data-hint); position: absolute; left: 100%; top: 0; bottom: 0;
-    margin-left: 10px; display: flex; align-items: center; white-space: nowrap;
-    color: var(--ink-3); font: 400 14px/1 var(--sans); letter-spacing: 0;
-  }
-  /* A capsule's frame — field, colon, quotes — is one colour, the label's:
-     it is not typed into. Only the value reads as text. */
+  .qshadow .term.cap.edit { box-shadow: inset 0 0 0 2px var(--focus); }
+  /* The header: a picture and a name, over its own tint. Its letters stay in
+     the text, at no width, so every offset has a place. */
   .qshadow .term.cap .cap-head {
-    border-radius: 7px 0 0 7px;
-    padding-block: 5px;
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    padding: 0 9px 0 7px;
+    border-radius: 8px 0 0 8px;
     background: color-mix(in srgb, var(--cap-ring) 55%, transparent);
-    box-shadow: inset -1px 0 0 var(--cap-ring),
-                -2px 0 0 color-mix(in srgb, var(--cap-ring) 55%, transparent),
-                0 2px 0 color-mix(in srgb, var(--cap-ring) 55%, transparent),
-                0 -2px 0 color-mix(in srgb, var(--cap-ring) 55%, transparent);
+    box-shadow: inset 0 0 0 1px var(--cap-ring);
+    font-size: 0;
   }
+  .qshadow .term.cap .cap-head > :not(.art) { font-size: 0; }
+  .qshadow .term.cap .art { font: 600 12px/1 var(--sans); letter-spacing: 0; color: var(--art); }
+  .qshadow .term.cap .head-art { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .qshadow .term.cap .head-art svg { width: 16px; height: 16px; flex: none; }
+  .qshadow .term.cap .head-art .bang { font: 700 13px/1 var(--sans); color: var(--q-not); }
+  /* A header the page has no picture for keeps its letters, small and close. */
+  .qshadow .term.cap .cap-head.letters { font-size: 12.5px; letter-spacing: -.5px; padding: 0 6px 0 8px; }
+  .qshadow .term.cap .cap-head.letters > * { font-size: 12.5px; }
+  /* What it holds. */
+  .qshadow .term.cap .val {
+    display: block;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0 11px 0 10px;
+    line-height: 32px;
+    border-radius: 0 8px 8px 0;
+    overflow-wrap: anywhere;
+  }
+  .qshadow .term.cap.edit .val {
+    background: var(--panel);
+    margin: 2px 2px 2px 0;
+    padding: 0 9px;
+    line-height: 28px;
+    min-width: 88px;
+    border-radius: 0 6px 6px 0;
+  }
+  .qshadow .term.cap.idle .val { min-width: 88px; background: var(--panel); margin: 1px 1px 1px 0; border-radius: 0 7px 7px 0; line-height: 30px; }
+  .qshadow .term.cap .val:empty::before {
+    content: attr(data-hint); color: var(--ink-3); font: 400 14px var(--sans); line-height: inherit; letter-spacing: 0;
+  }
+  /* What it holds, said in words: `7d` is "last 7 days". The letters stay. */
+  .qshadow .term.cap.said:not(.edit) .val { display: none; }
+  .qshadow .term.cap .said-art {
+    display: block; padding: 0 11px 0 10px; line-height: 32px; font: 600 15px/32px var(--sans);
+    color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .qshadow .term.cap.neg .said-art { color: var(--q-not); text-decoration: line-through; }
+  .qshadow .term.cap.neg:not(.edit):not(.said) .val { text-decoration: line-through; text-decoration-color: var(--q-not); }
+  .qshadow .term.cap.said.edit .said-art { display: none; }
   .qshadow .term.cap .r-colon, .qshadow .term.cap .r-quote { color: var(--q-key); font-weight: 700; }
-  .qshadow .term.cap .cap-head .r-colon { opacity: .55; }
   .qshadow .term.cap.neg .r-colon, .qshadow .term.cap.neg .r-quote,
   .qshadow .term.cap.neg .r-field { color: var(--q-not); }
   .qshadow .term.word.hov {
@@ -2136,6 +2187,7 @@
         <span class="prompt" aria-hidden="true">⌕</span>
         <div class="qfield">
           <div class="qshadow" id="shadow"></div>
+          <div class="qdecor" id="qdecor" aria-hidden="true"></div>
           <!-- A text area, so a long query wraps onto a second and third line
                instead of scrolling out of sight. Enter never breaks a line. -->
           <textarea id="q" rows="1" spellcheck="false" autocomplete="off"
@@ -3299,7 +3351,9 @@
     const last = rects[rects.length - 1];
     const w = pair.offsetWidth;
     pair.style.left = Math.max(0, Math.min(last.right - box.left - w + 4, box.width - w)) + "px";
-    pair.style.top = (last.top - box.top - 17) + "px";
+    /* Over the line the term is on, as the window puts it: the pair stands
+       in the room above, and covers none of what is being pointed at. */
+    pair.style.top = (last.top + last.height / 2 - 18 - box.top - 24) + "px";
     markHover();
   }
 
@@ -3523,7 +3577,9 @@
     const sp = body.startsWith('"') ? null : fieldSplit(body);
     const f = sp && field(sp[0]);
     if (sp && !f) return "word";
-    if (f && sp[1] && f.takes !== "none" && !accepts(f, sp[1])) return "word";
+    /* A value that cannot be read yet keeps its capsule — a filter being
+       written — and the wavy line on its value says the rest. */
+    if (f && sp[1] && f.takes !== "none" && !accepts(f, sp[1])) return "cap unread";
     // A filter with nothing after its colon is left out of the search: drawn
     // idle until it holds something.
     if (f && f.takes !== "none" && !(sp[1] || "").replace(/"/g, "").trim()) return "cap idle";
@@ -3582,6 +3638,191 @@
     return a + (neg ? 1 : 0) + sp[0].length + 1;
   }
 
+  /* The pictures a capsule's header is drawn as, on the capsule's own tint:
+     the same strokes the window draws. */
+  const SVG = (d) => '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + "</svg>";
+  const FOLDER_ART = SVG('<path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/>');
+  const FIELD_ART = {
+    under: FOLDER_ART, parent: FOLDER_ART,
+    dm: SVG('<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>'),
+    kind: SVG('<path d="M8 2.2l3 5H5z"/><circle cx="4.8" cy="11.2" r="2.3"/><rect x="9.3" y="9" width="4.5" height="4.5" rx="0.8"/>'),
+    ext: SVG('<path d="M2.5 3.5v4.1l6 6 5-5-6-6H3.5a1 1 0 0 0-1 1z"/><circle cx="5.5" cy="5.5" r="1"/>'),
+    size: SVG('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/><rect x="5.5" y="5.5" width="5" height="5" rx="0.8"/>'),
+    content: SVG('<path d="M3 4h10M3 7h10M3 10h6"/><circle cx="11.5" cy="11.5" r="1.8"/><path d="M12.8 12.8l1.2 1.2"/>'),
+    fuzzy: SVG('<path d="M2.5 6.5c1.4-1.4 2.6-1.4 4 0s2.6 1.4 4 0 2.1-1 3-.6"/><path d="M2.5 10.5c1.4-1.4 2.6-1.4 4 0s2.6 1.4 4 0 2.1-1 3-.6"/>'),
+  };
+  const FIELD_LABEL = { under: "Location", parent: "Location", dm: "Modified", kind: "Type", ext: "Extension", size: "Size", content: "Inside" };
+  const fieldLabel = (f) => T(FIELD_LABEL[f] || f);
+
+  /* The canonical name of the field a capsule is for, or null. */
+  function capField(text, a, b) {
+    const raw = text.slice(a, b);
+    const sp = fieldSplit(raw.startsWith("!") ? raw.slice(1) : raw);
+    const f = sp && field(sp[0]);
+    return f ? f.name : null;
+  }
+
+  /* What a filter holds, in the words its lens offers it in: `7d` is "last 7
+     days", `doc` "Document". Empty when there are none, and the letters show. */
+  function saidValue(text, a, b, fld) {
+    const raw = text.slice(a, b);
+    const sp = fieldSplit(raw.startsWith("!") ? raw.slice(1) : raw);
+    const v = ((sp && sp[1]) || "").replace(/^"|"$/g, "");
+    if (!v) return "";
+    try {
+      const band = (list) => { const m = list.find((x) => x[0] === v); return m ? T(m[1]) : ""; };
+      if (fld === "dm") return band(LENS_TIMES);
+      if (fld === "size") return band(LENS_SIZES);
+      if (fld === "kind" && KIND_VALUES.includes(v)) return KIND_KEY[v] || "";
+    } catch (_) { /* the lists are not made yet: the letters show */ }
+    return "";
+  }
+
+  /* Every text node of the drawn layer, in order, with where it starts in the
+     query. The pictures hold no query text, so the offsets are the textarea's. */
+  let SEGS = [];
+  function indexSegments() {
+    SEGS = [];
+    let acc = 0;
+    const walk = document.createTreeWalker(shadow, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement && n.parentElement.closest(".art") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const len = n.nodeValue.length;
+      SEGS.push({ node: n, start: acc, end: acc + len });
+      acc += len;
+    }
+  }
+
+  function charRects(seg, i, j) {
+    const r = document.createRange();
+    r.setStart(seg.node, i);
+    r.setEnd(seg.node, j);
+    return [...r.getClientRects()].filter((x) => x.width > 0.1);
+  }
+
+  /* Where the caret is drawn for an offset: the middle of the line, left of
+     the character there, or right of the one before. A capsule's hidden
+     letters have no width, so there it is the capsule's own boxes. */
+  function caretBox(off) {
+    for (const s of SEGS) {
+      if (off >= s.start && off < s.end) {
+        const r = charRects(s, off - s.start, off - s.start + 1)[0];
+        if (r) return { x: r.left, y: r.top + r.height / 2 };
+      }
+    }
+    for (const s of SEGS) {
+      if (off > s.start && off <= s.end) {
+        const r = charRects(s, off - s.start - 1, off - s.start).pop();
+        if (r) return { x: r.right, y: r.top + r.height / 2 };
+      }
+    }
+    for (const el of shadow.querySelectorAll(".term.cap")) {
+      const a = +el.dataset.a, b = +el.dataset.b;
+      if (off < a || off > b) continue;
+      const said = el.querySelector(".said-art");
+      if (said && said.offsetParent) {
+        const r = said.getBoundingClientRect();
+        return { x: off < b ? r.left + 10 : r.right - 11, y: r.top + r.height / 2 };
+      }
+      const val = el.querySelector(".val");
+      if (val && val.offsetParent) {
+        const r = val.getBoundingClientRect();
+        return { x: r.left + (parseFloat(getComputedStyle(val).paddingLeft) || 0), y: r.top + r.height / 2 };
+      }
+      const r = el.getBoundingClientRect();
+      return { x: r.left, y: r.top + r.height / 2 };
+    }
+    return null;
+  }
+
+  const decor = document.getElementById("qdecor");
+  let decorAgain = false;
+  /* The caret, or the selection's boxes, over the layer. */
+  function drawDecor() {
+    decor.innerHTML = "";
+    if (document.activeElement !== q) return;
+    const box = qfield.getBoundingClientRect();
+    const a = q.selectionStart ?? 0, c = q.selectionEnd ?? 0;
+    let html = "";
+    if (a === c) {
+      const p = caretBox(a);
+      if (!p) return;
+      /* Past three lines the layer scrolls: keep the caret in sight. */
+      if (!decorAgain && (p.y - 14 < box.top || p.y + 14 > box.bottom)) {
+        shadow.scrollTop += p.y - 14 < box.top ? p.y - 14 - box.top : p.y + 14 - box.bottom;
+        decorAgain = true;
+        drawDecor();
+        decorAgain = false;
+        return;
+      }
+      html = '<div class="qcaret" style="left:' + (p.x - box.left) + "px;top:" + (p.y - box.top - 11) + 'px;height:22px"></div>';
+    } else {
+      const lo = Math.min(a, c), hi = Math.max(a, c);
+      const whole = [];
+      for (const el of shadow.querySelectorAll(".term.cap")) {
+        if (lo <= +el.dataset.a && hi >= +el.dataset.b) {
+          whole.push([+el.dataset.a, +el.dataset.b]);
+          for (const r of el.getClientRects()) {
+            html += '<div class="qsel" style="left:' + (r.left - box.left) + "px;top:" + (r.top - box.top) +
+              "px;width:" + r.width + "px;height:" + r.height + 'px"></div>';
+          }
+        }
+      }
+      for (const s of SEGS) {
+        const from = Math.max(lo, s.start), to = Math.min(hi, s.end);
+        if (from >= to || whole.some(([wa, wb]) => s.start >= wa && s.end <= wb)) continue;
+        for (const r of charRects(s, from - s.start, to - s.start)) {
+          const mid = r.top + r.height / 2;
+          html += '<div class="qsel" style="left:' + (r.left - box.left) + "px;top:" + (mid - box.top - 14) +
+            "px;width:" + r.width + 'px;height:28px"></div>';
+        }
+      }
+    }
+    decor.innerHTML = html;
+  }
+
+  /* The offset of the query under a point of the screen. The textarea stands
+     over the layer and sees nothing of it, so it steps aside for the question. */
+  function offsetAtPoint(x, y) {
+    const was = q.style.pointerEvents;
+    q.style.pointerEvents = "none";
+    shadow.style.pointerEvents = "auto";
+    const el = document.elementFromPoint(x, y);
+    let pos = null;
+    if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(x, y);
+      if (p) pos = { node: p.offsetNode, off: p.offset };
+    } else if (document.caretRangeFromPoint) {
+      const r = document.caretRangeFromPoint(x, y);
+      if (r) pos = { node: r.startContainer, off: r.startOffset };
+    }
+    q.style.pointerEvents = was;
+    shadow.style.pointerEvents = "";
+    const art = el && el.closest && el.closest(".art");
+    if (art) {
+      const term = art.closest(".term");
+      if (term) {
+        if (art.classList.contains("said-art")) {
+          const b = +term.dataset.b;
+          return q.value[b - 1] === '"' ? b - 1 : b;
+        }
+        return +term.dataset.h;
+      }
+    }
+    if (!pos) return q.value.length;
+    let seg = SEGS.find((s) => s.node === pos.node);
+    if (seg) return seg.start + Math.min(pos.off, seg.end - seg.start);
+    /* An element: the point is between its children. */
+    const kid = pos.node.childNodes && pos.node.childNodes[pos.off];
+    if (kid) {
+      seg = SEGS.find((s) => kid === s.node || (kid.contains && kid.contains(s.node)));
+      if (seg) return seg.start;
+    }
+    const last = [...SEGS].reverse().find((s) => pos.node.contains && pos.node.contains(s.node));
+    return last ? last.end : q.value.length;
+  }
+
   function paint(text) {
     // A caret sits between characters, so both neighbours are candidates:
     // backspace takes the one behind, Delete the one ahead.
@@ -3616,26 +3857,61 @@
       return plain ? escape_(t) : '<span class="' + cls + '">' + escape_(t) + "</span>";
     };
     /* The runs are the engine's; the terms around them are cut here, so a
-       run that crosses a term's edge is drawn in two. */
-    let k = 0, open = false, headOpen = false, headAt = -1, at = 0, html = "";
+       run that crosses a term's edge is drawn in two. A capsule is a header,
+       and the value it holds; the header's letters and a value said in words
+       sit in the text at no width, so every offset of the query is somewhere. */
+    let k = 0, open = false, headOpen = false, valOpen = false, headAt = -1, at = 0, html = "", tm = null;
+    const closeHead = () => {
+      html += "</span>";
+      headOpen = false;
+      html += '<span class="val"' + (tm.hint ? ' data-hint="' + escape_(tm.hint) + '"' : "") + ">";
+      valOpen = true;
+    };
+    const closeTerm = () => {
+      if (headOpen) closeHead();
+      if (valOpen) {
+        html += "</span>";
+        valOpen = false;
+        if (tm.said) html += '<span class="art said-art">' + escape_(tm.said) + "</span>";
+      }
+      html += "</span>";
+      open = false;
+      tm = null;
+      k++;
+    };
     for (const [role, t, not] of paintSpans(text)) {
       let i = 0;
       while (i < t.length) {
         const pos = at + i;
-        if (headOpen && pos >= headAt) { html += "</span>"; headOpen = false; }
-        if (open && pos >= ts[k][1]) { html += "</span>"; open = false; k++; }
+        if (headOpen && pos >= headAt) closeHead();
+        if (open && pos >= ts[k][1]) closeTerm();
         while (!open && k < ts.length && ts[k][1] <= pos) k++;
         if (!open && k < ts.length && pos >= ts[k][0]) {
           const [a, b] = ts[k];
           let cls = termClass(text.slice(a, b));
           const isCap = /\bcap\b/.test(cls);
-          if (isCap && caret > a && caret <= b && q.selectionEnd === caret) cls += " edit";
-          html += '<span class="term ' + cls +
-            '" data-a="' + a + '" data-b="' + b + '"' +
-            (/\bidle\b/.test(cls) ? ' data-hint="' + escape_(capHint(text.slice(a, b))) + '"' : "") + ">";
+          const edit = isCap && caret > a && caret <= b && q.selectionEnd === caret;
+          if (edit) cls += " edit";
+          headAt = isCap ? capHeadOf(text, a, b) : -1;
+          tm = { hint: "", said: "" };
+          let headHtml = "";
+          if (isCap && headAt > a) {
+            const fld = capField(text, a, b);
+            const art = fld && FIELD_ART[fld];
+            const neg = text[a] === "!";
+            if (art) {
+              headHtml = '<span class="cap-head"><span class="art head-art">' +
+                (neg ? '<span class="bang">!</span>' : "") + art +
+                (fld === "fuzzy" ? "" : '<span class="nm">' + escape_(fieldLabel(fld)) + "</span>") + "</span>";
+              if (!edit) tm.said = saidValue(text, a, b, fld);
+              if (tm.said) cls += " said";
+            } else headHtml = '<span class="cap-head letters">';
+            if (/\bidle\b/.test(cls)) tm.hint = capHint(text.slice(a, b));
+          }
+          html += '<span class="term ' + cls + '" data-a="' + a + '" data-b="' + b + '" data-h="' + headAt + '">';
           open = true;
-          headAt = /\bcap\b/.test(cls) ? capHeadOf(text, a, b) : -1;
-          if (headAt > pos) { html += '<span class="cap-head">'; headOpen = true; }
+          if (headAt > a) { html += headHtml; headOpen = true; }
+          else tm = { hint: "", said: "" };
         }
         let next = at + t.length;
         if (headOpen) next = Math.min(next, headAt);
@@ -3646,20 +3922,17 @@
       }
       at += t.length;
     }
-    if (headOpen) html += "</span>";
-    if (open) html += "</span>";
+    if (open) closeTerm();
     shadow.innerHTML = html;
     fitQuery();
     markHover();
   }
 
-  /* One to three lines, as many as the text takes; past three the box scrolls
-     and the coloured layer follows. */
+  /* The query is laid out by the browser, one to three lines of it, and the
+     caret and selection are drawn over what it made. */
   function fitQuery() {
-    q.style.height = "0px";
-    const lh = parseFloat(getComputedStyle(q).lineHeight) || 22;
-    q.style.height = Math.min(q.scrollHeight, lh * 3) + "px";
-    shadow.scrollTop = q.scrollTop;
+    indexSegments();
+    drawDecor();
   }
 
   /* Whether a row has a picture arrives with it from one `stat`. Never
@@ -7464,7 +7737,44 @@
     if (e.key.startsWith("Arrow") && hintBox.hidden && !LENS) showHints();
     if (/^(Arrow(Left|Right)|Home|End)$/.test(e.key)) lensSync(false);
   });
-  q.addEventListener("scroll", () => { shadow.scrollTop = q.scrollTop; });
+  /* The textarea is the one that is pressed, and its own idea of where a
+     letter is has nothing to do with what is drawn: a press is placed from the
+     drawing, and a drag goes on from there. */
+  let qDrag = null;
+  const setRange = (anchor, off) => {
+    q.setSelectionRange(Math.min(anchor, off), Math.max(anchor, off), off < anchor ? "backward" : "forward");
+  };
+  q.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    q.focus({ preventScroll: true });
+    const v = q.value, off = offsetAtPoint(e.clientX, e.clientY);
+    if (e.detail >= 3) { q.setSelectionRange(0, v.length); return; }
+    if (e.detail === 2) {
+      let lo = off, hi = off;
+      while (lo > 0 && !/\s/.test(v[lo - 1])) lo--;
+      while (hi < v.length && !/\s/.test(v[hi])) hi++;
+      q.setSelectionRange(lo, hi);
+      return;
+    }
+    const anchor = e.shiftKey ? (q.selectionDirection === "backward" ? q.selectionEnd : q.selectionStart) : off;
+    qDrag = { anchor };
+    setRange(anchor, off);
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!qDrag) return;
+    if (!(e.buttons & 1)) { qDrag = null; return; }
+    setRange(qDrag.anchor, offsetAtPoint(e.clientX, e.clientY));
+  });
+  document.addEventListener("mouseup", () => { qDrag = null; });
+  q.addEventListener("wheel", (e) => {
+    if (shadow.scrollHeight <= shadow.clientHeight) return;
+    e.preventDefault();
+    shadow.scrollTop += e.deltaY;
+    drawDecor();
+  }, { passive: false });
+  addEventListener("resize", () => paint(q.value));
+  document.fonts.ready.then(() => paint(q.value));
 
   /* A browser cannot open a local file, so the bridge asks the desktop. Both
    * fences are the bridge's — the path must be one the index holds, and

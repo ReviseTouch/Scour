@@ -731,6 +731,39 @@ test('drawGrep renders sortable headers and aligned metadata columns without mis
   assert.match(c.grepView.innerHTML, /<mark>İstanbul<\/mark>/);
 });
 
+test('a filter says what it holds in words, and an empty one waits for its value', () => {
+  const q = { value: '', selectionStart: 0, selectionEnd: 0, setSelectionRange() {} };
+  const c = vm.createContext({
+    Set, Map, Math, TextEncoder,
+    document: { activeElement: null, getElementById: () => ({}) },
+    q, shadow: { innerHTML: '' },
+    LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
+    fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
+    T: (id) => id, KIND_KEY: { doc: 'Document' }, KIND_VALUES: ['doc'],
+    LENS_TIMES: [['7d', 'last 7 days']], LENS_SIZES: [],
+  });
+  vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
+  vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
+
+  // Not being written: `7d` is said as "last 7 days", the letters stay in the text.
+  c.paint('dm:7d kind:doc');
+  assert.match(c.shadow.innerHTML, /class="term cap said"[^>]*>.*<span class="art said-art">last 7 days<\/span>/s);
+  assert.match(c.shadow.innerHTML, /<span class="art said-art">Document<\/span>/);
+  assert.match(c.shadow.innerHTML, /<span class="val">7d<\/span>/);
+
+  // Being written (the caret is in it): as typed, in its well.
+  q.selectionStart = q.selectionEnd = 4;
+  c.document.activeElement = q;
+  c.paint('dm:7d kind:doc');
+  assert.doesNotMatch(c.shadow.innerHTML.split('data-a="6"')[0], /said-art/);
+  assert.match(c.shadow.innerHTML, /class="term cap edit"/);
+
+  // Nothing after the colon: idle, and it says what it wants.
+  q.selectionStart = q.selectionEnd = 0;
+  c.paint('kind:doc dm:');
+  assert.match(c.shadow.innerHTML, /class="term cap idle"[^>]*>.*<span class="val" data-hint="when\?"><\/span>/s);
+});
+
 test('capsule field headers render as cap-head and block caret or backspace inside ext:', () => {
   const q = {
     value: 'ext:docx',
@@ -745,13 +778,15 @@ test('capsule field headers render as cap-head and block caret or backspace insi
     q, shadow: { innerHTML: '' },
     LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
     fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
+    T: (id) => id, KIND_KEY: {}, KIND_VALUES: [],
   });
   vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
-  vm.runInContext(section('  const ENCODER =', '\n  /* One to three lines'), c);
+  vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
   vm.runInContext(section('  let lastQueryCaret = 0,', '\n  /* Leave the term'), c);
 
   c.paint('ext:docx');
-  assert.match(c.shadow.innerHTML, /<span class="cap-head">ext:<\/span>docx/);
+  // The header's letters stay in the text, behind its picture; the value is its own box.
+  assert.match(c.shadow.innerHTML, /<span class="cap-head"><span class="art head-art">.*ext:<\/span><span class="val">docx<\/span>/s);
 
   // Clicking inside `ex|t:docx` snaps to `ext:|docx` (index 4).
   c.clampQuerySelection();
