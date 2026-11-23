@@ -8,7 +8,7 @@ use std::rc::Rc;
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_proto::Response;
-use scour_ui::lens;
+use scour_ui::{frame, lens};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::link::{Ask, Got, Link};
@@ -400,6 +400,7 @@ fn write(w: &MainWindow, s: &Rc<RefCell<State>>, query: String, caret: usize) {
     w.set_hov_on(false);
     w.set_query(query.as_str().into());
     w.invoke_query_changed(query.into());
+    w.set_anchor_to(-1);
     w.set_caret_to(caret as i32);
     w.set_caret_ask(w.get_caret_ask() + 1);
 }
@@ -779,55 +780,77 @@ fn exit(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
     true
 }
 
-/// Backspace at a capsule's frame: past the closing quote it steps inside;
-/// in empty quotes it takes both; after a bare `field:` the whole term.
+fn known_field(spans: &[scour_core::Span], t: &lens::Term) -> bool {
+    let inside =
+        |sp: &&scour_core::Span| (sp.start as usize) < t.end && (sp.start + sp.len) as usize > t.start;
+    let unknown = spans
+        .iter()
+        .filter(inside)
+        .any(|sp| sp.role == scour_core::Role::UnknownField);
+    !unknown
+        && (t.field.is_some()
+            || spans
+                .iter()
+                .filter(inside)
+                .any(|sp| sp.role == scour_core::Role::Field))
+}
+
+fn apply_frame_edit(w: &MainWindow, s: &Rc<RefCell<State>>, next: (String, usize)) -> bool {
+    let current = w.get_query().to_string();
+    let (query, caret) = next;
+    if query == current {
+        s.borrow_mut().qb.anchor = caret;
+        s.borrow_mut().qb.cursor = caret;
+        w.set_anchor_to(-1);
+        w.set_caret_to(caret as i32);
+        w.set_caret_ask(w.get_caret_ask() + 1);
+    } else {
+        if query.len() < current.len() {
+            s.borrow_mut().qb.lenses.close();
+            w.set_lens_open(false);
+        }
+        write(w, s, query, caret);
+    }
+    true
+}
+
 fn frame_backspace(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
     let text = w.get_query().to_string();
-    let (anchor, c) = {
+    let (anchor, c, spans) = {
         let st = s.borrow();
-        (st.qb.anchor, st.qb.cursor.min(text.len()))
+        (st.qb.anchor, st.qb.cursor.min(text.len()), st.spans.clone())
     };
     if anchor != c {
         return false;
     }
-    let Some(t) = lens::term_at(&text, c) else {
-        return false;
+    frame::backspace(&text, c, |t| known_field(&spans, t))
+        .is_some_and(|next| apply_frame_edit(w, s, next))
+}
+
+fn frame_delete(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
+    let text = w.get_query().to_string();
+    let (anchor, c, spans) = {
+        let st = s.borrow();
+        (st.qb.anchor, st.qb.cursor.min(text.len()), st.spans.clone())
     };
-    let raw = &text[t.start..t.end];
-    let body = raw.strip_prefix('!').unwrap_or(raw);
-    let Some(colon) = body.find(':') else {
+    if anchor != c {
         return false;
+    }
+    frame::delete_forward(&text, c, |t| known_field(&spans, t))
+        .is_some_and(|next| apply_frame_edit(w, s, next))
+}
+
+fn frame_before_char(w: &MainWindow, s: &Rc<RefCell<State>>, ch: &str) -> bool {
+    let text = w.get_query().to_string();
+    let (anchor, c, spans) = {
+        let st = s.borrow();
+        (st.qb.anchor, st.qb.cursor.min(text.len()), st.spans.clone())
     };
-    if t.field.is_none() {
+    if anchor != c {
         return false;
     }
-    let head = t.start + usize::from(t.not) + colon + 1;
-    let b = text.as_bytes();
-    let quoted = b.get(head) == Some(&b'"');
-    if quoted && c == t.end && c >= 1 && b[c - 1] == b'"' && c - 1 > head {
-        s.borrow_mut().qb.cursor = c - 1;
-        s.borrow_mut().qb.anchor = c - 1;
-        w.set_caret_to((c - 1) as i32);
-        w.set_caret_ask(w.get_caret_ask() + 1);
-        return true;
-    }
-    if quoted && c == head + 1 && b.get(c) == Some(&b'"') {
-        write(
-            w,
-            s,
-            format!("{}{}", &text[..head], &text[head + 2..]),
-            head,
-        );
-        return true;
-    }
-    if c == head && c == t.end {
-        let (query, caret) = lens::replace(&text, &t, "");
-        s.borrow_mut().qb.lenses.close();
-        w.set_lens_open(false);
-        write(w, s, query, caret);
-        return true;
-    }
-    false
+    frame::insert_before(&text, c, ch, |t| known_field(&spans, t))
+        .is_some_and(|next| apply_frame_edit(w, s, next))
 }
 
 /// The launcher shut without a choice: a lone `:` it left goes with it.
@@ -872,12 +895,27 @@ pub fn wire(
         });
     }
     {
-        let (state, redraw) = (Rc::clone(state), redraw.clone());
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
         window.on_q_caret(move |a, c| {
-            {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let raw_a = a.max(0) as usize;
+            let raw_c = c.max(0) as usize;
+            let (sa, sc) = {
                 let mut s = state.borrow_mut();
-                s.qb.anchor = a.max(0) as usize;
-                s.qb.cursor = c.max(0) as usize;
+                let prev = s.qb.cursor;
+                let (sa, sc) = frame::clamp_selection(&text, prev, raw_a, raw_c, |t| {
+                    known_field(&s.spans, t)
+                });
+                s.qb.anchor = sa;
+                s.qb.cursor = sc;
+                (sa, sc)
+            };
+            if (sa, sc) != (raw_a, raw_c) {
+                w.set_anchor_to(if sa == sc { -1 } else { sa as i32 });
+                w.set_caret_to(sc as i32);
+                w.set_caret_ask(w.get_caret_ask() + 1);
+                return;
             }
             redraw(Lensing::Follow);
         });
@@ -887,29 +925,24 @@ pub fn wire(
         window.on_q_hit(move |line, col| {
             let Some(w) = weak.upgrade() else { return 0 };
             let text = w.get_query().to_string();
-            state.borrow().qb.field.hit(&text, line, col) as i32
+            let s = state.borrow();
+            let off = s.qb.field.hit(&text, line, col);
+            frame::snap_press(&text, off, |t| known_field(&s.spans, t)) as i32
         });
     }
     {
-        let weak = window.as_weak();
-        window.on_q_word(move |at| {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_q_word(move |line, col| {
             let Some(w) = weak.upgrade() else {
                 return Reach::default();
             };
             let text = w.get_query().to_string();
-            let at = (at.max(0) as usize).min(text.len());
-            match lens::terms(&text)
-                .into_iter()
-                .find(|t| at >= t.start && at <= t.end)
-            {
-                Some(t) => Reach {
-                    from: t.start as i32,
-                    to: t.end as i32,
-                },
-                None => Reach {
-                    from: at as i32,
-                    to: at as i32,
-                },
+            let s = state.borrow();
+            let at = s.qb.field.hit(&text, line, col);
+            let (from, to) = frame::word_range(&text, at, |t| known_field(&s.spans, t));
+            Reach {
+                from: from as i32,
+                to: to as i32,
             }
         });
     }
@@ -1068,6 +1101,17 @@ pub fn wire(
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
         window.on_q_backspace(move || weak.upgrade().is_some_and(|w| frame_backspace(&w, &state)));
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_q_delete(move || weak.upgrade().is_some_and(|w| frame_delete(&w, &state)));
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window.on_q_before_char(move |ch| {
+            weak.upgrade()
+                .is_some_and(|w| frame_before_char(&w, &state, ch.as_str()))
+        });
     }
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));

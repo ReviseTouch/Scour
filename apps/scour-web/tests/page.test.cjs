@@ -730,3 +730,44 @@ test('drawGrep renders sortable headers and aligned metadata columns without mis
   assert.match(c.grepView.innerHTML, /~\/Belgeler/);
   assert.match(c.grepView.innerHTML, /<mark>İstanbul<\/mark>/);
 });
+
+test('capsule field headers render as cap-head and block caret or backspace inside ext:', () => {
+  const q = {
+    value: 'ext:docx',
+    selectionStart: 2,
+    selectionEnd: 2,
+    selectionDirection: 'forward',
+    setSelectionRange(a, b, d) { this.selectionStart = a; this.selectionEnd = b; if (d) this.selectionDirection = d; },
+  };
+  const c = vm.createContext({
+    Set, Map, Math, TextEncoder,
+    document: { activeElement: q, getElementById: () => ({}) },
+    q, shadow: { innerHTML: '' },
+    LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
+    fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
+  });
+  vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
+  vm.runInContext(section('  const ENCODER =', '\n  /* One to three lines'), c);
+  vm.runInContext(section('  let lastQueryCaret = 0,', '\n  /* Leave the term'), c);
+
+  c.paint('ext:docx');
+  assert.match(c.shadow.innerHTML, /<span class="cap-head">ext:<\/span>docx/);
+
+  // Clicking inside `ex|t:docx` snaps to `ext:|docx` (index 4).
+  c.clampQuerySelection();
+  assert.equal(q.selectionStart, 4);
+
+  // Pressing ArrowLeft from `ext:|docx` (4 -> 3) jumps across `ext:` to index 0.
+  q.setSelectionRange(3, 3);
+  c.clampQuerySelection();
+  assert.equal(q.selectionStart, 0);
+
+  // Backspace at `ext:|docx` keeps `ext:docx` intact; Backspace at `ext:|` deletes the capsule.
+  q.setSelectionRange(4, 4);
+  assert.equal(c.frameBackspace(), true);
+  assert.equal(q.value, 'ext:docx');
+  q.value = 'ext:';
+  q.setSelectionRange(4, 4);
+  assert.equal(c.frameBackspace(), true);
+  assert.equal(q.value, '');
+});

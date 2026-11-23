@@ -4,7 +4,7 @@
 //! this says where everything is drawn: the lines, the coloured runs, the
 //! capsules, the caret and the selection, and which term a point is over.
 
-use scour_ui::{lens, wrap};
+use scour_ui::{frame, lens, wrap};
 
 use crate::{Cap, Sel, Span};
 
@@ -99,15 +99,21 @@ impl Field {
                 0
             };
             let (a, b) = (chars_before(query, t.start), chars_before(query, t.end));
-            self.each_line(a, b, |line, at, len| {
-                out.push(Cap {
-                    line,
-                    at,
-                    len,
-                    tone,
-                    hov: false,
-                })
-            });
+            let head_ch = frame::head_of(query, &t, |_| named)
+                .map_or(a, |h| chars_before(query, h));
+            for (i, l) in self.lines.iter().enumerate() {
+                let (s, e) = (a.max(l.start), b.min(l.end));
+                if s < e {
+                    out.push(Cap {
+                        line: i as i32,
+                        at: (s - l.start) as i32,
+                        len: (e - s) as i32,
+                        head: (head_ch.clamp(s, e) - s) as i32,
+                        tone,
+                        hov: false,
+                    });
+                }
+            }
         }
         out
     }

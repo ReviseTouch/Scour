@@ -47,6 +47,7 @@ pub fn reading_said(running: bool, done: bool) -> &'static str {
         (false, false) => READ_HALF,
     }
 }
+pub mod frame;
 pub mod lens;
 pub mod menu;
 pub mod query;

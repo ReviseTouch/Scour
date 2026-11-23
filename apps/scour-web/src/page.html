@@ -278,7 +278,16 @@
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
   /* A capsule's frame — field, colon, quotes — is one colour, the label's:
      it is not typed into. Only the value reads as text. */
+  .qshadow .term.cap .cap-head {
+    border-radius: 4px 0 0 4px;
+    background: color-mix(in srgb, var(--cap-ring) 42%, transparent);
+    box-shadow: inset -1px 0 0 var(--cap-ring),
+                -2px 0 0 color-mix(in srgb, var(--cap-ring) 42%, transparent),
+                0 2px 0 color-mix(in srgb, var(--cap-ring) 42%, transparent),
+                0 -2px 0 color-mix(in srgb, var(--cap-ring) 42%, transparent);
+  }
   .qshadow .term.cap .r-colon, .qshadow .term.cap .r-quote { color: var(--q-key); font-weight: 700; }
+  .qshadow .term.cap .cap-head .r-colon { opacity: .55; }
   .qshadow .term.cap.neg .r-colon, .qshadow .term.cap.neg .r-quote,
   .qshadow .term.cap.neg .r-field { color: var(--q-not); }
   .qshadow .term.word.hov {
@@ -3494,14 +3503,33 @@
     return neg ? "cap neg" : "word";
   }
 
+  function capHeadOf(text, a, b) {
+    const raw = text.slice(a, b);
+    const neg = raw.startsWith("!");
+    const body = neg ? raw.slice(1) : raw;
+    const sp = body.startsWith('"') ? null : fieldSplit(body);
+    if (!sp || !field(sp[0])) return -1;
+    return a + (neg ? 1 : 0) + sp[0].length + 1;
+  }
+
   function paint(text) {
     // A caret sits between characters, so both neighbours are candidates:
     // backspace takes the one behind, Delete the one ahead.
     const caret = document.activeElement === q ? (q.selectionStart ?? -1) : -1;
+    const ts = terms(text);
+    const locked = new Set();
+    for (const [a, b] of ts) {
+      const h = capHeadOf(text, a, b);
+      if (h > a) {
+        for (let p = a; p < h; p++) locked.add(p);
+        if (text[h] === '"') locked.add(h);
+        if (b > h + 1 && text[b - 1] === '"') locked.add(b - 1);
+      }
+    }
     const touch = new Set();
     if (caret >= 0 && q.selectionEnd === caret) {
-      if (caret > 0) touch.add(caret - 1);
-      if (caret < text.length) touch.add(caret);
+      if (caret > 0 && !locked.has(caret - 1)) touch.add(caret - 1);
+      if (caret < text.length && !locked.has(caret)) touch.add(caret);
     }
     const piece = (role, t, not, at) => {
       // An excluded run needs an element of its own, even the space inside
@@ -3519,21 +3547,25 @@
     };
     /* The runs are the engine's; the terms around them are cut here, so a
        run that crosses a term's edge is drawn in two. */
-    const ts = terms(text);
-    let k = 0, open = false, at = 0, html = "";
+    let k = 0, open = false, headOpen = false, headAt = -1, at = 0, html = "";
     for (const [role, t, not] of paintSpans(text)) {
       let i = 0;
       while (i < t.length) {
         const pos = at + i;
+        if (headOpen && pos >= headAt) { html += "</span>"; headOpen = false; }
         if (open && pos >= ts[k][1]) { html += "</span>"; open = false; k++; }
         while (!open && k < ts.length && ts[k][1] <= pos) k++;
         if (!open && k < ts.length && pos >= ts[k][0]) {
           const [a, b] = ts[k];
-          html += '<span class="term ' + termClass(text.slice(a, b)) +
+          const cls = termClass(text.slice(a, b));
+          html += '<span class="term ' + cls +
             '" data-a="' + a + '" data-b="' + b + '">';
           open = true;
+          headAt = /\bcap\b/.test(cls) ? capHeadOf(text, a, b) : -1;
+          if (headAt > pos) { html += '<span class="cap-head">'; headOpen = true; }
         }
         let next = at + t.length;
+        if (headOpen) next = Math.min(next, headAt);
         if (open) next = Math.min(next, ts[k][1]);
         else if (k < ts.length) next = Math.min(next, ts[k][0]);
         html += piece(role, t.slice(i, next - at), not, pos);
@@ -3541,6 +3573,7 @@
       }
       at += t.length;
     }
+    if (headOpen) html += "</span>";
     if (open) html += "</span>";
     shadow.innerHTML = html;
     fitQuery();
@@ -4501,33 +4534,123 @@
     render();
   }
 
+  let lastQueryCaret = 0, queryPressing = false, clampingSel = false;
+
+  function clampQuerySelection() {
+    if (clampingSel) return false;
+    const v = q.value;
+    const a = q.selectionStart ?? 0, c = q.selectionEnd ?? 0;
+    const back = q.selectionDirection === "backward";
+    if (a === c) {
+      for (const [ta, tb] of terms(v)) {
+        const head = capHeadOf(v, ta, tb);
+        if (head < 0) continue;
+        const entry = head < tb && v[head] === '"' ? head + 1 : head;
+        if ((queryPressing ? c >= ta : c > ta) && c < entry) {
+          const to = !queryPressing && lastQueryCaret >= entry && c < lastQueryCaret ? ta : entry;
+          clampingSel = true;
+          q.setSelectionRange(to, to);
+          clampingSel = false;
+          lastQueryCaret = to;
+          return true;
+        }
+      }
+      lastQueryCaret = c;
+      return false;
+    }
+    let lo = a, hi = c;
+    for (const [ta, tb] of terms(v)) {
+      const head = capHeadOf(v, ta, tb);
+      if (head < 0) continue;
+      if (lo < head && hi > ta) {
+        lo = Math.min(lo, ta);
+        hi = Math.max(hi, tb);
+      }
+    }
+    if (lo !== a || hi !== c) {
+      clampingSel = true;
+      q.setSelectionRange(lo, hi, back ? "backward" : "forward");
+      clampingSel = false;
+      lastQueryCaret = back ? lo : hi;
+      return true;
+    }
+    lastQueryCaret = back ? a : c;
+    return false;
+  }
+
   function frameBackspace() {
     const c = q.selectionStart, v = q.value;
-    const t = lensTerm(v, c);
-    if (!t || !t.named) return false;
-    const body = t.raw.replace(/^!/, "");
-    const head = t.a + (t.not ? 1 : 0) + body.indexOf(":") + 1;
-    const quoted = v[head] === '"';
-    if (quoted && c === t.b && v[c - 1] === '"' && c - 1 > head) {
-      q.setSelectionRange(c - 1, c - 1);
-      paint(v);
-      lensSync(true);
-      return true;
+    for (const [ta, tb] of terms(v)) {
+      const head = capHeadOf(v, ta, tb);
+      if (head < 0) continue;
+      const quoted = v[head] === '"';
+      if (quoted && c === tb && v[c - 1] === '"' && c - 1 > head) {
+        q.setSelectionRange(c - 1, c - 1);
+        lastQueryCaret = c - 1;
+        paint(v);
+        lensSync(true);
+        return true;
+      }
+      if (quoted && c === head + 1 && v[c] === '"') {
+        q.value = v.slice(0, head) + v.slice(head + 2);
+        q.setSelectionRange(head, head);
+        lastQueryCaret = head;
+        render();
+        return true;
+      }
+      if (c === head && c === tb) {
+        let a = ta, b = tb;
+        if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
+        q.value = v.slice(0, a) + v.slice(b);
+        q.setSelectionRange(a, a);
+        lastQueryCaret = a;
+        lensClose();
+        render();
+        return true;
+      }
+      const entry = head < tb && quoted ? head + 1 : head;
+      if (c > ta && c <= entry) {
+        q.setSelectionRange(entry, entry);
+        lastQueryCaret = entry;
+        return true;
+      }
+      if (c === ta && c >= 2 && v[c - 1] === " " && !/\s/.test(v[c - 2])) {
+        q.setSelectionRange(c - 1, c - 1);
+        lastQueryCaret = c - 1;
+        paint(v);
+        return true;
+      }
     }
-    if (quoted && c === head + 1 && v[c] === '"') {
-      q.value = v.slice(0, head) + v.slice(head + 2);
-      q.setSelectionRange(head, head);
-      render();
-      return true;
-    }
-    if (c === head && c === t.b) {
-      let a = t.a, b = t.b;
-      if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
-      q.value = v.slice(0, a) + v.slice(b);
-      q.setSelectionRange(a, a);
-      lensClose();
-      render();
-      return true;
+    return false;
+  }
+
+  function frameDelete() {
+    const c = q.selectionStart, v = q.value;
+    for (const [ta, tb] of terms(v)) {
+      const head = capHeadOf(v, ta, tb);
+      if (head < 0) continue;
+      if (c === ta) {
+        let a = ta, b = tb;
+        if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
+        q.value = v.slice(0, a) + v.slice(b);
+        q.setSelectionRange(a, a);
+        lastQueryCaret = a;
+        lensClose();
+        render();
+        return true;
+      }
+      if (c > ta && c < head) {
+        const entry = head < tb && v[head] === '"' ? head + 1 : head;
+        q.setSelectionRange(entry, entry);
+        lastQueryCaret = entry;
+        return true;
+      }
+      if (c + 1 === ta && v[c] === " " && c > 0 && !/\s/.test(v[c - 1])) {
+        q.setSelectionRange(ta, ta);
+        lastQueryCaret = ta;
+        paint(v);
+        return true;
+      }
     }
     return false;
   }
@@ -4696,11 +4819,15 @@
       else lensLaunch();
       return;
     }
-    // Backspace does not take a capsule's frame apart: past the closing quote
-    // it steps inside; in empty quotes it takes both; after a bare `field:`
-    // it takes the whole term.
+    // Backspace and Delete do not take a capsule's frame apart.
     if (e.key === "Backspace" && !e.ctrlKey && !e.altKey && !e.metaKey &&
         q.selectionStart === q.selectionEnd && frameBackspace()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (e.key === "Delete" && !e.ctrlKey && !e.altKey && !e.metaKey &&
+        q.selectionStart === q.selectionEnd && frameDelete()) {
       e.preventDefault();
       e.stopImmediatePropagation();
       return;
@@ -7167,11 +7294,31 @@
   document.querySelector("thead").addEventListener("pointercancel", endMove);
   /* The box never edits what is being typed: a caret that moves reads as a
    * fault, and the engine reads both spellings alike. */
+  q.addEventListener("beforeinput", (e) => {
+    if (e.inputType !== "insertText" || !e.data || /\s$/.test(e.data)) return;
+    if (q.selectionStart !== q.selectionEnd) return;
+    const c = q.selectionStart ?? 0, v = q.value;
+    for (const [ta, tb] of terms(v)) {
+      if (c === ta && capHeadOf(v, ta, tb) > ta) {
+        e.preventDefault();
+        q.value = v.slice(0, c) + e.data + " " + v.slice(c);
+        const at = c + e.data.length;
+        q.setSelectionRange(at, at);
+        lastQueryCaret = at;
+        render();
+        return;
+      }
+    }
+  });
   q.addEventListener("input", render);
   // The offer depends on where the caret is, not on what was last typed.
   let lastClick = null;
-  q.addEventListener("mousedown", (e) => { lastClick = { x: e.clientX, y: e.clientY }; });
+  q.addEventListener("mousedown", (e) => { queryPressing = true; lastClick = { x: e.clientX, y: e.clientY }; });
+  document.addEventListener("mouseup", () => { queryPressing = false; });
   q.addEventListener("click", () => {
+    queryPressing = true;
+    clampQuerySelection();
+    queryPressing = false;
     paint(q.value);
     showHints();
     /* A press past the end of the text leaves the term there. */
@@ -7182,10 +7329,28 @@
     const t = lensTerm(q.value, q.selectionStart);
     lensSync(!!(t && t.named && lensKindOf(t)));
   });
-  q.addEventListener("focus", () => paint(q.value));
+  q.addEventListener("dblclick", () => {
+    const v = q.value, a = q.selectionStart ?? 0;
+    for (const [ta, tb] of terms(v)) {
+      if (a < ta || a > tb) continue;
+      const head = capHeadOf(v, ta, tb);
+      if (head > ta && a >= head) {
+        const s = head < tb && v[head] === '"' ? head + 1 : head;
+        const e = tb > s && v[tb - 1] === '"' ? tb - 1 : tb;
+        q.setSelectionRange(s, e);
+        lastQueryCaret = e;
+        paint(v);
+      }
+      return;
+    }
+  });
+  q.addEventListener("focus", () => { clampQuerySelection(); paint(q.value); });
   q.addEventListener("blur", () => paint(q.value));
   document.addEventListener("selectionchange", () => {
-    if (document.activeElement === q) paint(q.value);
+    if (document.activeElement === q) {
+      clampQuerySelection();
+      paint(q.value);
+    }
   });
   q.addEventListener("keyup", (e) => {
     if (e.key.startsWith("Arrow") && hintBox.hidden && !LENS) showHints();

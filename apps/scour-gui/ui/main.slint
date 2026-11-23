@@ -296,6 +296,8 @@ export struct Cap {
     line: int,
     at: int,
     len: int,
+    // Characters of the locked `field:` header on this line.
+    head: int,
     // 0 a filter · 1 `content:`, which reads files · 2 excluded
     tone: int,
     // The pointer is on it.
@@ -969,11 +971,15 @@ component DiskRow inherits Rectangle {
 component PairButton inherits Rectangle {
     in property <string> label;
     in property <bool> on;
+    in property <int> kind: 0;
+    out property <bool> hovered <=> hit.has-hover;
     callback pressed();
     width: 16px;
     height: 16px;
     border-radius: 8px;
-    background: on ? Theme.q-key : hit.has-hover ? Theme.ink-3 : Theme.line-soft;
+    background: on ? Theme.q-key
+        : hit.has-hover ? (root.kind == 2 ? Theme.q-bad : root.kind == 1 ? Theme.q-not : Theme.ink-3)
+        : Theme.line-soft;
     Text {
         text: root.label;
         color: root.on || hit.has-hover ? Theme.panel : Theme.ink-2;
@@ -1356,8 +1362,8 @@ export component MainWindow inherits Window {
     callback q-caret(int, int);
     // A shown line and a column to a byte offset of the query.
     pure callback q-hit(int, int) -> int;
-    // The term around a byte offset, for a double press.
-    pure callback q-word(int) -> Reach;
+    // The term or value around a line and column, for a double press.
+    pure callback q-word(int, int) -> Reach;
     callback q-hover(int, int);
     callback q-pressed(int, int);
     // The term under the pointer, and where its buttons go.
@@ -1368,10 +1374,15 @@ export component MainWindow inherits Window {
     in property <bool> hov-fz;
     in property <bool> hov-fz-on;
     callback term-act(string);
-    // Where Rust wants the caret after it wrote the query.
+    // Where Rust wants the selection/caret after it wrote or clamped the query.
+    in property <int> anchor-to: -1;
     in property <int> caret-to;
     in property <int> caret-ask;
-    changed caret-ask => { input.set-selection-offsets(root.caret-to, root.caret-to); }
+    changed caret-ask => {
+        input.set-selection-offsets(
+            root.anchor-to >= 0 ? root.anchor-to : root.caret-to,
+            root.caret-to);
+    }
     // The lens.
     in property <bool> lens-open;
     in property <bool> lens-launching;
@@ -1444,6 +1455,8 @@ export component MainWindow inherits Window {
     callback lens-exit() -> bool;
     callback lens-escape();
     callback q-backspace() -> bool;
+    callback q-delete() -> bool;
+    callback q-before-char(string) -> bool;
     callback lens-right() -> bool;
     callback lens-toggle();
     callback lens-launch();
@@ -2495,6 +2508,21 @@ export component MainWindow inherits Window {
                     // middle of the box as it always did.
                     property <length> top: (field.height - root.q-shown * 22px) / 2;
                     property <bool> caret-lit: true;
+                    property <bool> pair-keep: false;
+                    property <bool> pair-active: root.hov-on || pair.over;
+                    changed pair-active => {
+                        if (self.pair-active) {
+                            field.pair-keep = true;
+                        }
+                    }
+                    pair-linger := Timer {
+                        interval: 220ms;
+                        running: !field.pair-active && field.pair-keep;
+                        triggered => {
+                            field.pair-keep = false;
+                            if (!pair.over) { root.q-hover(-1, -1); }
+                        }
+                    }
 
                     // This window draws its own caret: on Linux Slint's takes
                     // its colour from `TextInput::color`, which is transparent
@@ -2526,6 +2554,7 @@ export component MainWindow inherits Window {
                         visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         border-radius: 5px;
                         border-width: 1px;
+                        clip: true;
                         // Tone 3 is an empty `content:`, left out of the search:
                         // a faint ring and no tint, as a control switched off.
                         background: c.tone == 1 ? Theme.cap-read : c.tone == 2 ? Theme.cap-neg
@@ -2533,6 +2562,26 @@ export component MainWindow inherits Window {
                         border-color: c.hov ? Theme.ink-3
                             : c.tone == 1 ? Theme.cap-read-ring : c.tone == 2 ? Theme.cap-neg-ring
                             : c.tone == 3 ? Theme.line : Theme.cap-ring;
+
+                        if c.head > 0: Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: field.advance * c.head + 2px;
+                            height: parent.height;
+                            opacity: 0.42;
+                            background: c.tone == 1 ? Theme.cap-read-ring
+                                : c.tone == 2 ? Theme.cap-neg-ring
+                                : c.tone == 3 ? Theme.line : Theme.cap-ring;
+                        }
+                        if c.head > 0: Rectangle {
+                            x: field.advance * c.head + 2px;
+                            y: 0px;
+                            width: 1px;
+                            height: parent.height;
+                            background: c.tone == 1 ? Theme.cap-read-ring
+                                : c.tone == 2 ? Theme.cap-neg-ring
+                                : c.tone == 3 ? Theme.line : Theme.cap-ring;
+                        }
                     }
 
                     // The selection, a line at a time.
@@ -2621,6 +2670,7 @@ export component MainWindow inherits Window {
                     selection-foreground-color: transparent;
 
                     edited => {
+                        field.pair-keep = false;
                         root.query-changed(self.text);
                     }
                     function paste-here() {
@@ -2640,9 +2690,19 @@ export component MainWindow inherits Window {
                     key-pressed(e) => {
                         // While the lens is open the arrows, Tab, Enter and
                         // Escape are its own.
-                        // Backspace does not take a capsule's frame apart.
+                        // Backspace and Delete do not take a capsule's frame apart.
                         if (e.text == Key.Backspace && !e.modifiers.control && !e.modifiers.alt
                                 && root.q-backspace()) {
+                            return accept;
+                        }
+                        if (e.text == Key.Delete && !e.modifiers.control && !e.modifiers.alt
+                                && root.q-delete()) {
+                            return accept;
+                        }
+                        if (!e.modifiers.control && !e.modifiers.alt && e.text != ""
+                                && e.text != Key.Return && e.text != Key.Tab && e.text != Key.Escape
+                                && self.anchor-position-byte-offset == self.cursor-position-byte-offset
+                                && root.q-before-char(e.text)) {
                             return accept;
                         }
                         // Tab leaves the term, lens or not: the caret goes outside it.
@@ -2851,7 +2911,7 @@ export component MainWindow inherits Window {
                         if (self.pressed) {
                             input.set-selection-offsets(self.anchor,
                                 root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x)));
-                        } else if (self.has-hover) {
+                        } else if (self.has-hover && !pair.over) {
                             root.q-hover(self.line-at(self.mouse-y),
                                 Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
                         }
@@ -2859,7 +2919,7 @@ export component MainWindow inherits Window {
                     changed mouse-x => { self.track(); }
                     changed mouse-y => { self.track(); }
                     changed has-hover => {
-                        if (!self.has-hover) { root.q-hover(-1, -1); }
+                        if (!self.has-hover && !pair.over) { root.q-hover(-1, -1); }
                     }
                     pointer-event(e) => {
                         if (e.kind != PointerEventKind.down) { return; }
@@ -2882,7 +2942,7 @@ export component MainWindow inherits Window {
                             Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
                     }
                     double-clicked => {
-                        let w = root.q-word(root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x)));
+                        let w = root.q-word(self.line-at(self.mouse-y), self.col-at(self.mouse-x));
                         input.set-selection-offsets(w.from, w.to);
                     }
                 }
@@ -2931,10 +2991,15 @@ export component MainWindow inherits Window {
                     // Over the right end of the term the pointer is on: take
                     // it out, exclude it, or read a word a letter off.
                     pair := Rectangle {
-                        visible: root.hov-on || pair-touch.has-hover;
+                        property <bool> fz-hov: false;
+                        property <bool> over: pair-bridge.has-hover
+                            || (root.hov-fz && self.fz-hov)
+                            || pair-neg.hovered
+                            || pair-drop.hovered;
+                        visible: root.hov-on || self.over || field.pair-keep;
                         x: clamp(field.pad + field.advance * root.hov-col - self.width + 5px,
                             0px, field.width - self.width);
-                        y: field.top + root.hov-line * 22px - 18px;
+                        y: field.top + root.hov-line * 22px - 16px;
                         width: pair-row.preferred-width + 4px;
                         height: 20px;
                         border-radius: 10px;
@@ -2944,22 +3009,33 @@ export component MainWindow inherits Window {
                         drop-shadow-blur: 4px;
                         drop-shadow-color: #00000030;
                         drop-shadow-offset-y: 1px;
-                        pair-touch := TouchArea { }
+                        pair-bridge := TouchArea {
+                            x: -8px;
+                            y: -4px;
+                            width: parent.width + 16px;
+                            height: parent.height + 16px;
+                        }
                         pair-row := HorizontalLayout {
                             padding: 2px;
                             spacing: 2px;
                             if root.hov-fz: PairButton {
                                 label: "≈";
                                 on: root.hov-fz-on;
+                                changed hovered => { pair.fz-hov = self.hovered; }
                                 pressed => { root.term-act("fz"); }
                             }
-                            PairButton {
+                            pair-neg := PairButton {
                                 label: root.hov-not ? "+" : "!";
+                                kind: 1;
                                 pressed => { root.term-act("neg"); }
                             }
-                            PairButton {
+                            pair-drop := PairButton {
                                 label: "✕";
-                                pressed => { root.term-act("drop"); }
+                                kind: 2;
+                                pressed => {
+                                    field.pair-keep = false;
+                                    root.term-act("drop");
+                                }
                             }
                         }
                     }
