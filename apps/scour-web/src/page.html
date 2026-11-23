@@ -514,6 +514,7 @@
     padding: calc(var(--u) * 1);
     z-index: 30;
   }
+  .hints.past { left: auto; right: 0; width: min(320px, 100%); max-height: 168px; }
   .hints[hidden] { display: none; }
   .hints button {
     display: flex;
@@ -3854,11 +3855,13 @@
     hintBox.innerHTML = hints.map((h, i) =>
       '<button role="option" data-i="' + i + '" aria-selected="' + (i === hintSel) + '">' +
       "<code>" + escape_(h.label) + "</code><span>" + escape_(h.about) + "</span></button>").join("");
+    hintBox.classList.remove("past");
     hintBox.hidden = false;
     q.setAttribute("aria-expanded", "true");
   }
   function hideHints() {
     hintBox.hidden = true;
+    hintBox.classList.remove("past");
     hints = [];
     hintSel = 0;
     q.setAttribute("aria-expanded", "false");
@@ -3878,6 +3881,7 @@
     hintBox.innerHTML = hints.map((h, i) =>
       '<button role="option" data-i="' + i + '" aria-selected="' + (i === hintSel) + '">' +
       "<code>" + escape_(h.label) + "</code><span></span></button>").join("");
+    hintBox.classList.add("past");
     hintBox.hidden = false;
     q.setAttribute("aria-expanded", "true");
   }

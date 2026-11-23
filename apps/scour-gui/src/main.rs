@@ -2647,6 +2647,7 @@ fn main() -> Result<()> {
                 w.set_past_open(false);
                 return;
             }
+            w.set_lens_open(false);
             let lines = past_matching(&state.borrow().past, &state.borrow().query);
             w.set_past_picked(0);
             w.set_past(ModelRc::new(VecModel::from(lines.clone())));

@@ -5846,6 +5846,8 @@ export component MainWindow inherits Window {
         // field's own left edge, since the mark beside it has no fixed width.
         // This area puts it away; behind the list, so a press on a line lands.
         if root.past-open: TouchArea {
+            width: parent.width;
+            height: parent.height;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
                     root.past-open = false;
@@ -5854,42 +5856,59 @@ export component MainWindow inherits Window {
         }
 
         if root.past-open && root.past.length > 0: Rectangle {
-            x: 20px + mark.width + 12px;
-            y: 55px;
-            width: min(520px, parent.width - self.x - 20px);
-            // Sized to what is in it: a layout gives its parent a minimum
-            // height, so a shorter box would be overflowed by its own rows.
-            height: root.past.length * 26px + 8px;
+            width: min(320px, max(220px, field.width * 0.55));
+            x: clamp(field.absolute-position.x + field.width - self.width,
+                8px, parent.width - self.width - 8px);
+            y: field.absolute-position.y + field.height + 4px;
+            height: min(root.past.length * 24px + 8px, 152px);
             background: Theme.panel-2;
             border-width: Theme.hair;
             border-color: Theme.line;
-            border-radius: 4px;
-            drop-shadow-blur: 12px;
+            border-radius: 8px;
+            clip: true;
+            drop-shadow-blur: 14px;
             drop-shadow-color: #00000055;
             drop-shadow-offset-y: 4px;
 
-            VerticalLayout {
-                padding: 4px;
-                spacing: 0px;
-                for line[i] in root.past: Rectangle {
-                    height: 26px;
-                    background: i == root.past-picked ? Theme.selection
-                              : row-touch.has-hover ? Theme.hover : transparent;
-                    border-radius: 3px;
-                    Text {
-                        x: 8px;
-                        width: parent.width - 16px;
-                        text: line;
-                        color: Theme.ink;
-                        font-family: Fonts.mono;
-                        font-size: 12.5px;
-                        vertical-alignment: center;
-                        overflow: elide;
+            TouchArea {}
+
+            past-scroll := Flickable {
+                width: parent.width;
+                height: parent.height;
+                viewport-height: root.past.length * 24px + 8px;
+                property <int> follow: root.past-picked;
+                changed follow => {
+                    let top = 4px + self.follow * 24px;
+                    if (top + self.viewport-y < 0px) {
+                        self.viewport-y = -top;
+                    } else if (top + 24px + self.viewport-y > self.height) {
+                        self.viewport-y = self.height - top - 24px;
                     }
-                    row-touch := TouchArea {
-                        pointer-event(e) => {
-                            if (e.kind == PointerEventKind.down) {
-                                root.past-taken(line);
+                }
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 0px;
+                    for line[i] in root.past: Rectangle {
+                        height: 24px;
+                        background: i == root.past-picked ? Theme.selection
+                                  : row-touch.has-hover ? Theme.hover : transparent;
+                        border-radius: 4px;
+                        Text {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            text: line;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    root.past-taken(line);
+                                }
                             }
                         }
                     }
