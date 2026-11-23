@@ -20,6 +20,7 @@ fn same_row(a: &Row, b: &Row) -> bool {
         && a.fresh == b.fresh
         && a.ktoken == b.ktoken
         && a.tint == b.tint
+        && a.ext == b.ext
         && a.is_dir == b.is_dir
         && a.age == b.age
         && a.picked == b.picked
@@ -309,6 +310,11 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         fresh,
         ktoken: h.kind.token().into(),
         tint: tint_of(h.kind.token()),
+        ext: if h.is_dir {
+            slint::SharedString::new()
+        } else {
+            badge_of(h.name()).into()
+        },
         is_dir: h.is_dir,
         age: band(shape.now, h.meta.mtime),
         picked: false,
@@ -318,6 +324,22 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         sys_icon,
         has_sys_icon,
         runs: !h.is_dir && scour_core::runs_when_opened(h.name(), h.meta.mode),
+    }
+}
+
+/// The extension as the file icon spells it: up to five letters or digits, in
+/// capitals. Empty for a name with none — `.bashrc` is a name, not a type — and
+/// for one too long to read at that size.
+pub fn badge_of(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty()
+                && (1..=5).contains(&ext.chars().count())
+                && ext.chars().all(char::is_alphanumeric) =>
+        {
+            ext.to_uppercase()
+        }
+        _ => String::new(),
     }
 }
 
@@ -1316,6 +1338,17 @@ impl slint::Model for Lines {
 mod model_tests {
     use super::*;
     use slint::Model;
+
+    #[test]
+    fn the_icon_spells_the_extension_and_only_one_that_fits() {
+        assert_eq!(super::badge_of("tahliye.pdf"), "PDF");
+        assert_eq!(super::badge_of("main.slint"), "SLINT");
+        assert_eq!(super::badge_of("yedek.tar.gz"), "GZ");
+        assert_eq!(super::badge_of(".bashrc"), "");
+        assert_eq!(super::badge_of("Makefile"), "");
+        assert_eq!(super::badge_of("notes.markdown"), "");
+        assert_eq!(super::badge_of("a.b c"), "");
+    }
 
     fn page(n: usize) -> Vec<Row> {
         (0..n).map(|_| Row::default()).collect()

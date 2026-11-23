@@ -78,6 +78,8 @@ export struct GrepItem {
     cells: [Cell],
     ktoken: string,
     tint: brush,
+    // The extension as the icon spells it, `PDF`; empty when it has none.
+    ext: string,
     name: string,
     dir: string,
     count: string,
@@ -105,6 +107,9 @@ export struct Row {
     // picks the icon and its colour.
     ktoken: string,
     tint: brush,
+    // The extension as the icon spells it, `PDF`, or empty: a folder, a name
+    // with none, or one too long to fit on the icon.
+    ext: string,
     is-dir: bool,
     // Which age band the row falls in, 0 (minutes) to 5 (older).
     age: int,
@@ -1057,7 +1062,7 @@ component Head inherits Rectangle {
             text: root.sorted-by != root.sort ? root.text
                 : root.sorted-down ? root.text + " ▾" : root.text + " ▴";
             color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: 500;
             horizontal-alignment: root.align-right ? right : left;
             vertical-alignment: center;
@@ -1066,13 +1071,17 @@ component Head inherits Rectangle {
     }
 }
 
-// A name with the match picked out. Monospace: a file name is read character
-// by character, an `l` against a `1`.
+// A name, or a line out of a file, with the match picked out.
 component Marked inherits Rectangle {
     in property <string> pre;
     in property <string> hit;
     in property <string> post;
     in property <brush> colour: Theme.ink;
+    // A name is drawn in the face's own type; a line out of a file in the
+    // monospace it was written in.
+    in property <bool> mono: true;
+    in property <length> size: 13px;
+    in property <int> weight: 400;
     // What the whole name would take, for the tooltip's "does it fit".
     preferred-width: before.preferred-width + label.preferred-width + after.preferred-width;
     // **Placed by hand and clipped**: in a layout the marked part kept its
@@ -1089,8 +1098,9 @@ component Marked inherits Rectangle {
         height: root.height;
         text: root.pre;
         color: root.colour;
-        font-family: Fonts.mono;
-        font-size: 13px;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -1109,8 +1119,9 @@ component Marked inherits Rectangle {
             width: parent.width;
             text: root.hit;
             color: Theme.mark-ink;
-            font-family: Fonts.mono;
-            font-size: 13px;
+            font-family: root.mono ? Fonts.mono : "";
+            font-size: root.size;
+            font-weight: root.weight;
             overflow: elide;
             vertical-alignment: center;
         }
@@ -1122,8 +1133,9 @@ component Marked inherits Rectangle {
         height: root.height;
         text: root.post;
         color: root.colour;
-        font-family: Fonts.mono;
-        font-size: 13px;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -1157,6 +1169,64 @@ component MenuIcon inherits Image {
         : root.name == "stack" ? @image-url("../../../crates/scour-ui/icons/menu/stack.svg")
         : root.name == "chevron" ? @image-url("../../../crates/scour-ui/icons/menu/chevron.svg")
         : @image-url("");
+}
+
+// A kind's drawing, by its `scour_ui` token. `@image-url` is resolved at
+// build time, so every token is spelled out.
+component KindIcon inherits Image {
+    in property <string> ktoken;
+    source: root.ktoken == "folder" ? @image-url("icons/folder.svg")
+        : root.ktoken == "doc" ? @image-url("icons/doc.svg")
+        : root.ktoken == "code" ? @image-url("icons/code.svg")
+        : root.ktoken == "image" ? @image-url("icons/image.svg")
+        : root.ktoken == "video" ? @image-url("icons/video.svg")
+        : root.ktoken == "media" ? @image-url("icons/media.svg")
+        : root.ktoken == "audio" ? @image-url("icons/audio.svg")
+        : root.ktoken == "archive" ? @image-url("icons/archive.svg")
+        : root.ktoken == "exec" ? @image-url("icons/exec.svg")
+        : root.ktoken == "data" ? @image-url("icons/data.svg")
+        : root.ktoken == "config" ? @image-url("icons/config.svg")
+        : root.ktoken == "font" ? @image-url("icons/font.svg")
+        : root.ktoken == "build" ? @image-url("icons/build.svg")
+        : @image-url("icons/file.svg");
+}
+
+// A file's icon is its extension, written in the kind's colour on a tag:
+// `PDF` and `DOCX` are told apart at a glance, and the type needs no column.
+// A folder, or a name with no extension, keeps the kind's drawing.
+component FileBadge inherits Rectangle {
+    in property <string> ktoken;
+    in property <brush> tint;
+    in property <string> ext;
+    width: 34px;
+    height: 18px;
+
+    if root.ext == "": KindIcon {
+        x: 9px;
+        y: 1px;
+        width: 16px;
+        height: 16px;
+        ktoken: root.ktoken;
+        colorize: root.tint;
+    }
+    if root.ext != "": Rectangle {
+        width: min(root.width, max(24px, label.preferred-width + 8px));
+        x: 0px;
+        border-radius: 4px;
+        background: root.tint.with-alpha(Theme.dark ? 0.16 : 0.10);
+        border-width: Theme.hair;
+        border-color: root.tint.with-alpha(0.45);
+        label := Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.ext;
+            color: root.tint;
+            font-size: root.ext.character-count > 4 ? 9px : 10px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
 }
 
 // One section in the settings' side list.
@@ -2432,7 +2502,7 @@ export component MainWindow inherits Window {
             // Taller when the query is read back — see `reading`.
             // The bar, a line taller for each line the query wraps onto, and
             // the narrowing line under it, which is always there.
-            height: (root.q-shown - 1) * 22px + 86px;
+            height: (root.q-shown - 1) * 22px + 92px;
             background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
@@ -2452,7 +2522,7 @@ export component MainWindow inherits Window {
 
             HorizontalLayout {
                 // The box's own height, so the line under it moves nothing.
-                height: 32px + (root.q-shown - 1) * 22px;
+                height: 38px + (root.q-shown - 1) * 22px;
                 spacing: 10px;
 
                 // The mark: the desktop's icon, then letter-spaced small capitals.
@@ -3046,7 +3116,7 @@ export component MainWindow inherits Window {
                 Rectangle {
                     visible: root.grep-open;
                     width: root.grep-open ? min(410px, max(230px, root.width * 0.34)) : 0px;
-                    height: 34px;
+                    height: 38px;
                     background: Theme.panel;
                     border-radius: 8px;
                     border-width: 1px;
@@ -3204,8 +3274,8 @@ export component MainWindow inherits Window {
                         { id: "grep", icon: @image-url("icons/tools/lens-content.svg"), label: root.word-grep, on: root.grep-open, warn: true, more: false },
                         { id: "filter", icon: @image-url("icons/tools/filter.svg"), label: root.word-filter-button, on: false, warn: false, more: true },
                     ]: Rectangle {
-                        height: 34px;
-                        width: root.width >= 960px ? (trow.preferred-width + 22px) : 34px;
+                        height: 38px;
+                        width: root.width >= 960px ? (trow.preferred-width + 24px) : 38px;
                         border-radius: 8px;
                         border-width: Theme.hair;
                         border-color: trig.on ? (trig.warn ? Theme.cap-read-ring : Theme.cap-ring)
@@ -4326,8 +4396,8 @@ export component MainWindow inherits Window {
                 // Column headings, each of them a sort. Which columns and how
                 // wide are `heads` and `cw`, both handed in from `scour-ui`.
                 Rectangle {
-                    // Taller than a row: a fixed edge the eye returns to.
-                    height: 31px;
+                    // Shorter than a row and quieter: a ruler, not a row.
+                    height: 28px;
                     background: Theme.panel;
 
                     Rectangle {
@@ -4514,7 +4584,7 @@ export component MainWindow inherits Window {
                             // Shown, not built, so a slot is never rebuilt.
                             Rectangle {
                                 visible: root.tall && here.found.length > 0;
-                                x: 12px + (root.iconed ? 24px : 0px);
+                                x: 12px + (root.iconed ? 42px : 0px);
                                 y: root.base-row - 4px;
                                 width: max(0px, parent.width - self.x - 12px);
                                 height: Theme.row-height - root.base-row;
@@ -4554,32 +4624,18 @@ export component MainWindow inherits Window {
                                 // width, which would still take the row's spacing.
                                 if root.iconed: VerticalLayout {
                                     alignment: center;
-                                    width: 16px;
+                                    width: 34px;
                                     if root.system-icons && here.has-sys-icon: Image {
+                                        x: 9px;
                                         width: 16px;
                                         height: 16px;
                                         source: here.sys-icon;
                                         image-fit: contain;
                                     }
-                                    if !(root.system-icons && here.has-sys-icon): Image {
-                                        width: 15px;
-                                        height: 15px;
-                                        source: here.ktoken == "folder" ? @image-url("icons/folder.svg")
-                                            : here.ktoken == "doc" ? @image-url("icons/doc.svg")
-                                            : here.ktoken == "code" ? @image-url("icons/code.svg")
-                                            : here.ktoken == "image" ? @image-url("icons/image.svg")
-                                            : here.ktoken == "video" ? @image-url("icons/video.svg")
-                                            : here.ktoken == "media" ? @image-url("icons/media.svg")
-                                            : here.ktoken == "audio" ? @image-url("icons/audio.svg")
-                                            : here.ktoken == "archive" ? @image-url("icons/archive.svg")
-                                            : here.ktoken == "exec" ? @image-url("icons/exec.svg")
-                                            : here.ktoken == "data" ? @image-url("icons/data.svg")
-                                            : here.ktoken == "config" ? @image-url("icons/config.svg")
-                                            : here.ktoken == "font" ? @image-url("icons/font.svg")
-                                            : here.ktoken == "build" ? @image-url("icons/build.svg")
-                                            : here.ktoken == "file" ? @image-url("icons/file.svg")
-                                            : @image-url("");
-                                        colorize: here.tint;
+                                    if !(root.system-icons && here.has-sys-icon): FileBadge {
+                                        ktoken: here.ktoken;
+                                        tint: here.tint;
+                                        ext: here.ext;
                                     }
                                 }
 
@@ -4593,13 +4649,16 @@ export component MainWindow inherits Window {
                                     property <Cell> c: here.cells[ci];
                                     // As wide as its heading, icon included: taking
                                     // the icon off twice shifts every later column.
-                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 24px : 0px));
+                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 42px : 0px));
 
                                     if h.id == "name": Marked {
                                         pre: c.pre;
                                         hit: c.hit;
                                         post: c.post;
                                         colour: Theme.ink;
+                                        mono: false;
+                                        size: 14px;
+                                        weight: 500;
                                         width: parent.width;
                                         property <bool> under: rowtouch.has-hover
                                             && rowtouch.mouse-x >= root.cx[ci]
@@ -4659,11 +4718,13 @@ export component MainWindow inherits Window {
                                             width: parent.width;
                                             height: parent.height;
                                             text: c.text;
+                                            // Only the folder is monospace: a path is read
+                                            // a character at a time, a date or a size at a glance.
                                             color: parent.is-path && parent.under ? Theme.q-key
                                                  : c.dim ? Theme.ink-3
-                                                 : c.right ? Theme.ink-2 : Theme.ink-3;
-                                            font-family: c.mono ? Fonts.mono : "";
-                                            font-size: c.mono ? 11.5px : Fonts.small;
+                                                 : c.mono ? Theme.ink-2 : Theme.ink-3;
+                                            font-family: parent.is-path ? Fonts.mono : "";
+                                            font-size: parent.is-path ? 12px : c.mono ? 12.5px : Fonts.small;
                                             horizontal-alignment: c.right ? right : left;
                                             vertical-alignment: center;
                                             overflow: elide;
@@ -4883,30 +4944,16 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 if root.iconed: VerticalLayout {
                                     alignment: center;
-                                    width: 16px;
-                                    Image {
-                                        width: 15px;
-                                        height: 15px;
-                                        source: gitem.ktoken == "folder" ? @image-url("icons/folder.svg")
-                                            : gitem.ktoken == "doc" ? @image-url("icons/doc.svg")
-                                            : gitem.ktoken == "code" ? @image-url("icons/code.svg")
-                                            : gitem.ktoken == "image" ? @image-url("icons/image.svg")
-                                            : gitem.ktoken == "video" ? @image-url("icons/video.svg")
-                                            : gitem.ktoken == "media" ? @image-url("icons/media.svg")
-                                            : gitem.ktoken == "audio" ? @image-url("icons/audio.svg")
-                                            : gitem.ktoken == "archive" ? @image-url("icons/archive.svg")
-                                            : gitem.ktoken == "exec" ? @image-url("icons/exec.svg")
-                                            : gitem.ktoken == "data" ? @image-url("icons/data.svg")
-                                            : gitem.ktoken == "config" ? @image-url("icons/config.svg")
-                                            : gitem.ktoken == "font" ? @image-url("icons/font.svg")
-                                            : gitem.ktoken == "build" ? @image-url("icons/build.svg")
-                                            : @image-url("icons/file.svg");
-                                        colorize: gitem.tint;
+                                    width: 34px;
+                                    FileBadge {
+                                        ktoken: gitem.ktoken;
+                                        tint: gitem.tint;
+                                        ext: gitem.ext;
                                     }
                                 }
                                 for h[ci] in root.heads: HorizontalLayout {
                                     property <Cell> gc: ci < gitem.cells.length ? gitem.cells[ci] : { text: "" };
-                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 24px : 0px));
+                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 42px : 0px));
                                     if h.id == "name": Text {
                                         width: parent.width;
                                         text: gc.pre + gc.hit + gc.post + "  (" + gitem.count + ")";

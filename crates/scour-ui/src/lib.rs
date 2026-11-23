@@ -293,9 +293,9 @@ pub struct Metrics {
 
 pub const METRICS: Metrics = Metrics {
     unit: 4.0,
-    row: 30.0,
+    row: 32.0,
     radius: 6.0,
-    size: 13.0,
+    size: 14.0,
 };
 
 /// Words people write as operators that this language does not read as ones:
