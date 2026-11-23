@@ -294,6 +294,11 @@ export struct Span {
     at: int,
     // Which drawn line of the query it is on, counted from the first.
     line: int,
+    // Where it is drawn, from the field's padding: columns are not all one
+    // width, a filter's header is narrower. Rust places it.
+    x: length,
+    // Part of a header: drawn small and close.
+    small: bool,
 }
 
 // A capsule behind a filter in the query, one per line it is drawn on.
@@ -311,6 +316,10 @@ export struct Cap {
     fuzzy: bool,
     // Its header drawn as what it does, ≈: a fuzzy term the caret is not in.
     icon: bool,
+    // Where it starts, how wide, and how wide its header, from the padding.
+    x: length,
+    w: length,
+    hw: length,
 }
 
 // Part of the query's selection, on one line.
@@ -318,6 +327,8 @@ export struct Sel {
     line: int,
     at: int,
     len: int,
+    x: length,
+    w: length,
 }
 
 // Byte offsets into the query, from and to.
@@ -1011,16 +1022,17 @@ component PairButton inherits Rectangle {
     in property <int> kind: 0;
     out property <bool> hovered <=> hit.has-hover;
     callback pressed();
-    width: 16px;
-    height: 16px;
-    border-radius: 8px;
+    // Big enough to hit without aiming: a miss lands in the text and selects it.
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
     background: on ? Theme.q-key
         : hit.has-hover ? (root.kind == 2 ? Theme.q-bad : root.kind == 1 ? Theme.q-not : Theme.ink-3)
         : Theme.line-soft;
     Text {
         text: root.label;
         color: root.on || hit.has-hover ? Theme.panel : Theme.ink-2;
-        font-size: 10px;
+        font-size: 12px;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -1459,6 +1471,15 @@ export component MainWindow inherits Window {
     in property <int> q-first: 0;
     in property <int> caret-line;
     in property <int> caret-col;
+    in property <length> caret-x;
+    in property <length> hov-x;
+    in property <length> lens-x;
+    /// One line of the query: tall enough that a capsule is easy to hit.
+    out property <length> q-pitch: 30px;
+    /// One character of the query's face, for Rust to place things with.
+    out property <length> q-advance: ruler.preferred-width / 40;
+    /// The column under a point of a shown line; `round` for the gap nearest.
+    pure callback q-col(int, length, bool) -> int;
     // Characters a line holds, measured here and wrapped by there.
     callback q-cols(int);
     callback q-caret(int, int);
@@ -2547,7 +2568,7 @@ export component MainWindow inherits Window {
             // Taller when the query is read back — see `reading`.
             // The bar, a line taller for each line the query wraps onto, and
             // the narrowing line under it, which is always there.
-            height: (root.q-shown - 1) * 22px + 92px;
+            height: (root.q-shown - 1) * root.q-pitch + 96px;
             background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
@@ -2563,7 +2584,7 @@ export component MainWindow inherits Window {
 
             HorizontalLayout {
                 // The box's own height, so the line under it moves nothing.
-                height: 58px + (root.q-shown - 1) * 22px;
+                height: 62px + (root.q-shown - 1) * root.q-pitch;
                 padding-left: 16px;
                 padding-right: 12px;
                 padding-top: 10px;
@@ -2621,7 +2642,7 @@ export component MainWindow inherits Window {
                     init => { root.q-cols(self.cols); }
                     // The lines start this far down, so one line sits in the
                     // middle of the box as it always did.
-                    property <length> top: (field.height - root.q-shown * 22px) / 2;
+                    property <length> top: (field.height - root.q-shown * root.q-pitch) / 2;
                     property <bool> caret-lit: true;
                     property <bool> pair-keep: false;
                     property <bool> pair-active: root.hov-on || pair.over;
@@ -2662,12 +2683,12 @@ export component MainWindow inherits Window {
                     // A filter is a capsule: a tint and a hairline ring, both
                     // outside the letters, so nothing moves when one appears.
                     for c in root.caps: Rectangle {
-                        x: field.pad + field.advance * c.at - 3px;
-                        y: field.top + (c.line - root.q-first) * 22px + 1px;
-                        width: field.advance * c.len + 6px;
-                        height: 20px;
+                        x: field.pad + c.x - 3px;
+                        y: field.top + (c.line - root.q-first) * root.q-pitch + 2px;
+                        width: c.w + 6px;
+                        height: root.q-pitch - 4px;
                         visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
-                        border-radius: 5px;
+                        border-radius: 6px;
                         // A fuzzy capsule holds its word: a firmer ring round both.
                         border-width: c.fuzzy ? 1.5px : 1px;
                         clip: true;
@@ -2682,7 +2703,7 @@ export component MainWindow inherits Window {
                         if c.head > 0: Rectangle {
                             x: 0px;
                             y: 0px;
-                            width: field.advance * c.head + 2px;
+                            width: c.hw + 3px;
                             height: parent.height;
                             opacity: 0.42;
                             background: c.tone == 1 ? Theme.cap-read-ring
@@ -2690,7 +2711,7 @@ export component MainWindow inherits Window {
                                 : c.tone == 3 ? Theme.line : Theme.cap-ring;
                         }
                         if c.head > 0: Rectangle {
-                            x: field.advance * c.head + 2px;
+                            x: c.hw + 3px;
                             y: 0px;
                             width: 1px;
                             height: parent.height;
@@ -2702,22 +2723,25 @@ export component MainWindow inherits Window {
 
                     // The selection, a line at a time.
                     for s in root.sels: Rectangle {
-                        x: field.pad + field.advance * s.at;
-                        y: field.top + (s.line - root.q-first) * 22px + 1px;
-                        width: field.advance * s.len;
-                        height: 20px;
+                        x: field.pad + s.x;
+                        y: field.top + (s.line - root.q-first) * root.q-pitch + 3px;
+                        width: s.w;
+                        height: root.q-pitch - 6px;
                         visible: s.line >= root.q-first && s.line < root.q-first + root.q-shown;
                         background: Theme.selection;
                     }
 
                     for sp[i] in root.spans: Text {
-                            x: field.pad + field.advance * sp.at;
-                            y: field.top + (sp.line - root.q-first) * 22px;
-                            height: 22px;
+                            x: field.pad + sp.x;
+                            y: field.top + (sp.line - root.q-first) * root.q-pitch;
+                            height: root.q-pitch;
                             visible: sp.line >= root.q-first && sp.line < root.q-first + root.q-shown;
                             text: sp.text;
                             font-family: Fonts.mono;
-                            font-size: 16px;
+                            // A header small and close: the capsule's room is
+                            // for what it holds. Rust measures it the same way.
+                            font-size: sp.small ? 12.5px : 16px;
+                            letter-spacing: sp.small ? -0.5px : 0px;
                             // Operators are heavier: one character that changes
                             // what a whole term means.
                             font-weight: sp.role == 1 || sp.role == 4 || sp.role == 8 ? 600 : 500;
@@ -2742,11 +2766,11 @@ export component MainWindow inherits Window {
                     // beside it. The caret going in brings the letters back.
                     for c in root.caps: Rectangle {
                         visible: c.icon && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
-                        x: field.pad + field.advance * c.at - 2px;
-                        y: field.top + (c.line - root.q-first) * 22px + 2px;
-                        width: field.advance * c.head + 1px;
-                        height: 18px;
-                        border-radius: 4px;
+                        x: field.pad + c.x - 2px;
+                        y: field.top + (c.line - root.q-first) * root.q-pitch + 3.5px;
+                        width: c.hw + 2px;
+                        height: root.q-pitch - 7px;
+                        border-radius: 5px;
                         background: Theme.cap-ring;
                         property <bool> over: self.visible && q-press.has-hover
                             && q-press.mouse-x >= self.x && q-press.mouse-x < self.x + self.width
@@ -2793,7 +2817,7 @@ export component MainWindow inherits Window {
                     x: field.pad;
                     y: field.top;
                     width: max(field.room, self.preferred-width);
-                    height: 22px;
+                    height: root.q-pitch;
                     text <=> root.query;
                     // Where the caret and the selection are, for Rust to draw.
                     cursor-position-changed(p) => {
@@ -3059,10 +3083,10 @@ export component MainWindow inherits Window {
                     mouse-cursor: text;
                     property <int> anchor: 0;
                     function line-at(y: length) -> int {
-                        return clamp(Math.floor((y - field.top) / 22px), 0, root.q-shown - 1);
+                        return clamp(Math.floor((y - field.top) / root.q-pitch), 0, root.q-shown - 1);
                     }
                     function col-at(x: length) -> int {
-                        return max(0, Math.round((x - field.pad) / max(1px, field.advance)));
+                        return root.q-col(self.line-at(self.mouse-y), x - field.pad, true);
                     }
                     function track() {
                         if (self.pressed) {
@@ -3070,7 +3094,7 @@ export component MainWindow inherits Window {
                                 root.q-hit(self.line-at(self.mouse-y), self.col-at(self.mouse-x)));
                         } else if (self.has-hover && !pair.over) {
                             root.q-hover(self.line-at(self.mouse-y),
-                                Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
+                                root.q-col(self.line-at(self.mouse-y), self.mouse-x - field.pad, false));
                         }
                     }
                     changed mouse-x => { self.track(); }
@@ -3097,7 +3121,7 @@ export component MainWindow inherits Window {
                         root.plus-asked = true;
                         // A filter opens its lens when it is pressed.
                         root.q-pressed(self.line-at(self.mouse-y),
-                            Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
+                            root.q-col(self.line-at(self.mouse-y), self.mouse-x - field.pad, false));
                     }
                     double-clicked => {
                         let w = root.q-word(self.line-at(self.mouse-y), self.col-at(self.mouse-x));
@@ -3137,10 +3161,10 @@ export component MainWindow inherits Window {
 
                     // Painted last, so a letter cannot cover it.
                     Rectangle {
-                        x: field.pad + field.advance * root.caret-col - 1px;
-                        y: field.top + (root.caret-line - root.q-first) * 22px + 1.5px;
+                        x: field.pad + root.caret-x - 1px;
+                        y: field.top + (root.caret-line - root.q-first) * root.q-pitch + 5px;
                         width: 2px;
-                        height: 19px;
+                        height: root.q-pitch - 10px;
                         background: Theme.q-key;
                         visible: input.has-focus && field.caret-lit && root.sels.length == 0
                             && root.caret-line >= root.q-first && root.caret-line < root.q-first + root.q-shown;
@@ -3149,8 +3173,8 @@ export component MainWindow inherits Window {
                     // Over the caret after a press: a filter, here, in one more.
                     if root.plus-asked && input.has-focus && root.sels.length == 0 && !root.lens-open
                         && root.caret-line >= root.q-first && root.caret-line < root.q-first + root.q-shown: Rectangle {
-                        x: clamp(field.pad + field.advance * root.caret-col - 11px, 0px, field.width - 22px);
-                        y: field.top + (root.caret-line - root.q-first) * 22px - 23px;
+                        x: clamp(field.pad + root.caret-x - 11px, 0px, field.width - 22px);
+                        y: field.top + (root.caret-line - root.q-first) * root.q-pitch - 22px;
                         width: 22px;
                         height: 20px;
                         border-radius: 10px;
@@ -3201,12 +3225,12 @@ export component MainWindow inherits Window {
                             || pair-neg.hovered
                             || pair-drop.hovered;
                         visible: root.hov-on || self.over || field.pair-keep;
-                        x: clamp(field.pad + field.advance * root.hov-col - self.width + 5px,
+                        x: clamp(field.pad + root.hov-x - self.width + 5px,
                             0px, field.width - self.width);
-                        y: field.top + root.hov-line * 22px - 16px;
+                        y: field.top + root.hov-line * root.q-pitch - 24px;
                         width: pair-row.preferred-width + 4px;
-                        height: 20px;
-                        border-radius: 10px;
+                        height: 26px;
+                        border-radius: 13px;
                         background: Theme.panel;
                         border-width: 1px;
                         border-color: Theme.line;
@@ -6086,9 +6110,9 @@ export component MainWindow inherits Window {
         // The lens: under the term the caret is on, expanding to a 2-column
         // Miller place explorer or interactive sparkline histogram when needed.
         if root.lens-open && (root.lens-kind == "place" || root.lens-rows.length > 0): Rectangle {
-            x: clamp(field.absolute-position.x + field.pad + field.advance * root.lens-col - 12px,
+            x: clamp(field.absolute-position.x + field.pad + root.lens-x - 12px,
                 8px, root.width - self.width - 8px);
-            y: field.absolute-position.y + field.top + (root.lens-line + 1) * 22px + 6px;
+            y: field.absolute-position.y + field.top + (root.lens-line + 1) * root.q-pitch + 4px;
             width: root.lens-kind == "place" ? min(680px, root.width - 20px)
                 : (root.lens-kind == "time" || root.lens-kind == "size") ? min(470px, root.width - 20px)
                 : min(430px, root.width - 20px);

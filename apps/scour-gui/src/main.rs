@@ -4505,6 +4505,7 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
             role,
             not,
             line: 0,
+            ..Span::default()
         });
         *chars += slice.chars().count() as i32;
     };

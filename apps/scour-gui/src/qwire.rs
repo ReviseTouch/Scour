@@ -140,8 +140,12 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     for c in &mut caps {
         c.icon = c.fuzzy && c.head > 0 && !(c.line == line && col > c.at && col < c.at + c.head);
     }
-    // And its letters are not drawn under the ≈.
-    for c in caps.iter().filter(|c| c.icon) {
+    // Where every column is drawn, now the headers are known.
+    qb.field.advance = w.get_q_advance();
+    qb.field.measure(&caps);
+    // A header's letters are drawn small, and not at all under an ≈: runs
+    // are cut where a header starts and ends.
+    for c in caps.iter().filter(|c| c.head > 0) {
         let (from, to) = (c.at, c.at + c.head);
         runs = runs
             .into_iter()
@@ -151,26 +155,46 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
                     return vec![r];
                 }
                 let chars: Vec<char> = r.text.chars().collect();
+                let piece = |a: i32, b: i32, small: bool| crate::Span {
+                    text: chars[(a - r.at) as usize..(b - r.at) as usize]
+                        .iter()
+                        .collect::<String>()
+                        .into(),
+                    at: a,
+                    small,
+                    ..r.clone()
+                };
                 let mut kept = Vec::new();
                 if r.at < from {
-                    let n = (from - r.at) as usize;
-                    kept.push(crate::Span {
-                        text: chars[..n].iter().collect::<String>().into(),
-                        ..r.clone()
-                    });
+                    kept.push(piece(r.at, from, r.small));
+                }
+                if !c.icon {
+                    kept.push(piece(r.at.max(from), (r.at + len).min(to), true));
                 }
                 if r.at + len > to {
-                    let n = (to - r.at) as usize;
-                    kept.push(crate::Span {
-                        text: chars[n..].iter().collect::<String>().into(),
-                        at: to,
-                        ..r.clone()
-                    });
+                    kept.push(piece(to, r.at + len, r.small));
                 }
                 kept
             })
             .collect();
     }
+    let field = &qb.field;
+    for r in &mut runs {
+        r.x = field.x(r.line as usize, r.at);
+    }
+    for c in &mut caps {
+        let l = c.line as usize;
+        c.x = field.x(l, c.at);
+        c.w = field.x(l, c.at + c.len) - c.x;
+        c.hw = field.x(l, c.at + c.head) - c.x;
+    }
+    let mut sels = sels;
+    for sl in &mut sels {
+        let l = sl.line as usize;
+        sl.x = field.x(l, sl.at);
+        sl.w = field.x(l, sl.at + sl.len) - sl.x;
+    }
+    w.set_caret_x(field.x(line.max(0) as usize, col));
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));
@@ -267,6 +291,7 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     let end_line = qb.field.start_of(&text, o.b.max(1) - 1).0;
     w.set_lens_line(end_line.max(line));
     w.set_lens_col(col);
+    w.set_lens_x(qb.field.x(qb.field.first + line.max(0) as usize, col));
     w.set_lens_launching(o.kind == lens::Lens::Launch);
     w.set_lens_open(true);
 }
@@ -927,6 +952,10 @@ pub fn wire(
     };
     {
         let (state, redraw) = (Rc::clone(state), redraw.clone());
+        let state2 = Rc::clone(&state);
+        window.on_q_col(move |line, x, round| {
+            state2.borrow().qb.field.col_at(line, x, round)
+        });
         window.on_q_cols(move |n| {
             state.borrow_mut().qb.field.cols = n.max(8) as usize;
             redraw(Lensing::Keep);
@@ -1017,6 +1046,11 @@ pub fn wire(
                     && body.chars().count() >= 3);
             w.set_hov_line(eline);
             w.set_hov_col(ecol);
+            {
+                let s = state.borrow();
+                let f = &s.qb.field;
+                w.set_hov_x(f.x(f.first + eline.max(0) as usize, ecol));
+            }
             w.set_hov_not(t.not);
             w.set_hov_fz(fz);
             w.set_hov_fz_on(fz_on);

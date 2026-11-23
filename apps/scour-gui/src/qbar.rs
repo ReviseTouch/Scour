@@ -11,6 +11,14 @@ use crate::{Cap, Sel, Span};
 /// Lines shown before the field scrolls inside itself.
 pub const VISIBLE: usize = 3;
 
+/// A filter's `field:` header is drawn small and close, so a capsule spends its
+/// width on what it holds: the header's face over the query's, 12.5 over 16px.
+pub const HEAD_SCALE: f32 = 12.5 / 16.0;
+/// And this much closer, letter to letter: the `letter-spacing` it is drawn with.
+pub const HEAD_TIGHT: f32 = 0.5;
+/// A fuzzy header drawn as ≈ is this wide, whatever its letters were.
+pub const ICON_W: f32 = 24.0;
+
 #[derive(Default)]
 pub struct Field {
     /// Characters a line holds; zero until the window has measured.
@@ -18,6 +26,12 @@ pub struct Field {
     /// The first line shown, once there are more than [`VISIBLE`].
     pub first: usize,
     pub lines: Vec<wrap::Line>,
+    /// One character of the query's face, as the window measured it.
+    pub advance: f32,
+    /// Where every column of every line is drawn, from the field's padding:
+    /// one more than the line's characters. Headers are narrower than letters,
+    /// so a column is not `advance` times itself.
+    pub xs: Vec<Vec<f32>>,
 }
 
 /// A byte offset into `s` as a character offset.
@@ -62,6 +76,7 @@ impl Field {
                     not: r.not,
                     at: col as i32,
                     line: line as i32,
+                    ..Span::default()
                 });
                 i += take;
                 at += take;
@@ -112,7 +127,7 @@ impl Field {
                         tone,
                         hov: false,
                         fuzzy: t.field == Some("fuzzy"),
-                        icon: false,
+                        ..Cap::default()
                     });
                 }
             }
@@ -141,9 +156,80 @@ impl Field {
         }
         let mut sels = Vec::new();
         self.each_line(a.min(c), a.max(c), |line, at, len| {
-            sels.push(Sel { line, at, len })
+            sels.push(Sel {
+                line,
+                at,
+                len,
+                ..Sel::default()
+            })
         });
         (line as i32, col as i32, sels)
+    }
+
+    /// Where each column is drawn, given the capsules: a header's letters are
+    /// small, an ≈ header one icon wide, everything else a letter of the face.
+    pub fn measure(&mut self, caps: &[Cap]) {
+        let adv = if self.advance > 0.0 { self.advance } else { 9.6 };
+        self.xs = self
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let n = l.end.saturating_sub(l.start);
+                let mut w = vec![adv; n];
+                for c in caps.iter().filter(|c| c.line == i as i32 && c.head > 0) {
+                    let (a, h) = (c.at.max(0) as usize, c.head as usize);
+                    let each = if c.icon {
+                        ICON_W / h as f32
+                    } else {
+                        adv * HEAD_SCALE - HEAD_TIGHT
+                    };
+                    for x in w.iter_mut().skip(a).take(h) {
+                        *x = each;
+                    }
+                }
+                let mut xs = Vec::with_capacity(n + 1);
+                let mut at = 0.0;
+                xs.push(at);
+                for x in w {
+                    at += x;
+                    xs.push(at);
+                }
+                xs
+            })
+            .collect();
+    }
+
+    /// Where a column of a line (counted from the first line, not the first
+    /// shown) is drawn. Past the end, a letter of the face per column.
+    pub fn x(&self, line: usize, col: i32) -> f32 {
+        let adv = if self.advance > 0.0 { self.advance } else { 9.6 };
+        let col = col.max(0) as usize;
+        match self.xs.get(line) {
+            Some(xs) if col < xs.len() => xs[col],
+            Some(xs) => xs.last().copied().unwrap_or(0.0) + (col + 1 - xs.len()) as f32 * adv,
+            None => col as f32 * adv,
+        }
+    }
+
+    /// The column a point on a shown line is at: the nearest gap between two
+    /// characters when `round`, else the character the point is over.
+    pub fn col_at(&self, shown_line: i32, x: f32, round: bool) -> i32 {
+        let line = self.first + shown_line.max(0) as usize;
+        let Some(xs) = self.xs.get(line) else {
+            return 0;
+        };
+        let x = x.max(0.0);
+        let mut col = 0;
+        for (i, pair) in xs.windows(2).enumerate() {
+            let mid = if round { (pair[0] + pair[1]) / 2.0 } else { pair[1] };
+            if x >= mid {
+                col = i + 1;
+            } else {
+                break;
+            }
+        }
+        col as i32
     }
 
     /// The byte offset a press at a shown line and a column lands on.
@@ -185,6 +271,34 @@ impl Field {
 mod tests {
     use super::*;
 
+    /// A header drawn narrow moves what follows it, and a press is read back
+    /// through the same columns: no column is lost or doubled on the way.
+    #[test]
+    fn a_narrow_header_is_pressed_where_it_is_drawn() {
+        let mut f = field("ext:pdf rapor", 80);
+        f.advance = 10.0;
+        let cap = Cap {
+            line: 0,
+            at: 0,
+            len: 7,
+            head: 4,
+            ..Cap::default()
+        };
+        f.measure(&[cap.clone()]);
+        let narrow = 10.0 * HEAD_SCALE - HEAD_TIGHT;
+        assert!((f.x(0, 4) - 4.0 * narrow).abs() < 0.01);
+        assert!((f.x(0, 5) - (4.0 * narrow + 10.0)).abs() < 0.01);
+        for col in 0..=13 {
+            let x = f.x(0, col);
+            assert_eq!(f.col_at(0, x, true), col, "a gap at column {col}");
+            if col < 13 {
+                assert_eq!(f.col_at(0, x + 0.5, false), col, "a character at {col}");
+            }
+        }
+        f.measure(&[Cap { icon: true, ..cap }]);
+        assert!((f.x(0, 4) - ICON_W).abs() < 0.01);
+    }
+
     fn field(q: &str, cols: usize) -> Field {
         let mut f = Field {
             cols,
@@ -204,6 +318,7 @@ mod tests {
             not: false,
             at: 0,
             line: 0,
+            ..Span::default()
         }];
         let placed: Vec<(String, i32, i32)> = f
             .place(runs)
