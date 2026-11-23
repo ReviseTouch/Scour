@@ -111,6 +111,8 @@ impl Field {
                         head: (head_ch.clamp(s, e) - s) as i32,
                         tone,
                         hov: false,
+                        fuzzy: t.field == Some("fuzzy"),
+                        icon: false,
                     });
                 }
             }

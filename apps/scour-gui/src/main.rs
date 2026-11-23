@@ -6003,6 +6003,15 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_word_filter_button(t(cat, "Filter").into());
     w.set_word_peek(t(cat, "Preview").into());
     w.set_word_tab(t(cat, "Tab").into());
+    w.set_word_fuzzy_tip(
+        format!(
+            "{} — {}",
+            t(cat, "Similar spelling"),
+            t(cat, "one letter off still matches")
+        )
+        .into(),
+    );
+    w.set_word_add_filter(t(cat, "Add a filter").into());
     w.set_word_filter_key(t(cat, "filter"));
     w.set_word_tab_key(t(cat, "tab"));
     w.set_set_rail(t(cat, "Sidebar"));

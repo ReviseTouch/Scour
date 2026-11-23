@@ -121,7 +121,7 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     let text = w.get_query().to_string();
     let qb = &mut s.qb;
     qb.field.relayout(&text);
-    let runs = qb.field.place(crate::painted(&text, &s.spans));
+    let mut runs = qb.field.place(crate::painted(&text, &s.spans));
     let mut caps = qb.field.caps(&text, &s.spans);
     if let Some(h) = &qb.hover {
         let (a, b) = (
@@ -135,6 +135,42 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         }
     }
     let (line, col, sels) = qb.field.caret(&text, qb.anchor, qb.cursor);
+    // A fuzzy header the caret is not in is drawn as ≈; one being edited
+    // keeps its letters.
+    for c in &mut caps {
+        c.icon = c.fuzzy && c.head > 0 && !(c.line == line && col > c.at && col < c.at + c.head);
+    }
+    // And its letters are not drawn under the ≈.
+    for c in caps.iter().filter(|c| c.icon) {
+        let (from, to) = (c.at, c.at + c.head);
+        runs = runs
+            .into_iter()
+            .flat_map(|r| {
+                let len = r.text.chars().count() as i32;
+                if r.line != c.line || r.at + len <= from || r.at >= to {
+                    return vec![r];
+                }
+                let chars: Vec<char> = r.text.chars().collect();
+                let mut kept = Vec::new();
+                if r.at < from {
+                    let n = (from - r.at) as usize;
+                    kept.push(crate::Span {
+                        text: chars[..n].iter().collect::<String>().into(),
+                        ..r.clone()
+                    });
+                }
+                if r.at + len > to {
+                    let n = (to - r.at) as usize;
+                    kept.push(crate::Span {
+                        text: chars[n..].iter().collect::<String>().into(),
+                        at: to,
+                        ..r.clone()
+                    });
+                }
+                kept
+            })
+            .collect();
+    }
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));
@@ -1180,7 +1216,15 @@ pub fn wire(
                     redraw(Lensing::Asked);
                     return;
                 }
-                let c = state.borrow().qb.cursor.min(text.len());
+                let mut c = state.borrow().qb.cursor.min(text.len());
+                // Inside a term, the new one goes after it rather than
+                // splitting it in two.
+                if let Some(t) = lens::term_at(&text, c)
+                    && t.start < c
+                    && c < t.end
+                {
+                    c = t.end;
+                }
                 let lead = if c > 0 && !text[..c].ends_with(char::is_whitespace) {
                     " "
                 } else {

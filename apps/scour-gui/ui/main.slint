@@ -307,6 +307,10 @@ export struct Cap {
     tone: int,
     // The pointer is on it.
     hov: bool,
+    // A `fuzzy:` term's capsule.
+    fuzzy: bool,
+    // Its header drawn as what it does, ≈: a fuzzy term the caret is not in.
+    icon: bool,
 }
 
 // Part of the query's selection, on one line.
@@ -1466,6 +1470,11 @@ export component MainWindow inherits Window {
     callback q-pressed(int, int);
     // The term under the pointer, and where its buttons go.
     in property <bool> hov-on;
+    /// What the ≈ of a fuzzy term says under the pointer.
+    in property <string> word-fuzzy-tip: "Similar spelling";
+    in property <string> word-add-filter: "Add a filter";
+    /// A press in the query asks for the + above the caret; typing puts it away.
+    property <bool> plus-asked: false;
     in property <int> hov-line;
     in property <int> hov-col;
     in property <bool> hov-not;
@@ -2387,10 +2396,10 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // The search tabs, once there are two. A strip that appeared only with
-        // a second tab was never found (17 November); the line under the query
-        // has a "+ Tab" of its own now, which is how the second one is made.
-        if root.tabs-on && root.tab-labels.length > 1 && root.tab != "report": Rectangle {
+        // The search tabs, always: a strip that appears only with a second tab
+        // was never found (17 November). One tab has no ×. On its right what
+        // the list is and how it is shown, and the window's own two buttons.
+        Rectangle {
             height: 36px;
             background: Theme.ground;
 
@@ -2407,7 +2416,7 @@ export component MainWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 2px;
-                HorizontalLayout {
+                if root.tabs-on && root.tab != "report": HorizontalLayout {
                 spacing: 2px;
                 for label[i] in root.tab-labels: VerticalLayout {
                     alignment: center;
@@ -2420,15 +2429,113 @@ export component MainWindow inherits Window {
                     }
                 }
                 }
-                VerticalLayout {
-                    alignment: center;
-                    Tool {
-                        icon: @image-url("icons/tools/plus.svg");
-                        has-icon: true;
-                        clicked => { root.tab-new(); }
+                Rectangle { horizontal-stretch: 1; }
+                HorizontalLayout {
+                    // Its own width, whatever the chips leave.
+                    horizontal-stretch: 0;
+                    padding-left: 10px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        Choice {
+                            height: 24px;
+                            horizontal-stretch: 0;
+                            labels: [root.tab-search, root.tab-report];
+                            values: ["search", "report"];
+                            value: root.tab == "report" ? "report" : "search";
+                            picked(v) => {
+                                root.tab = v;
+                                // Asked for when looked at: weighing a folder is a walk.
+                                if (v == "report") {
+                                    root.report-open("");
+                                }
+                            }
+                        }
+                    }
+                    if root.tab == "report" && root.report-web-ready: VerticalLayout {
+                        alignment: center;
+                        TextTool {
+                            label: root.report-web;
+                            clicked => { root.report-in-browser(); }
+                        }
+                    }
+                    if root.tab != "report": VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 24px;
+                            width: views.preferred-width;
+                            border-radius: 6px;
+                            border-width: Theme.hair;
+                            border-color: Theme.line;
+                            views := HorizontalLayout {
+                                padding: 1px;
+                                spacing: 1px;
+                                Tool {
+                                    width: 26px;
+                                    height: 20px;
+                                    icon: @image-url("icons/tools/detail.svg");
+                                    has-icon: true;
+                                    on: root.view-mode == "detail";
+                                    clicked => { root.view-clicked("detail"); }
+                                }
+                                Tool {
+                                    width: 26px;
+                                    height: 20px;
+                                    icon: @image-url("icons/tools/icons.svg");
+                                    has-icon: true;
+                                    on: root.view-mode == "icons";
+                                    clicked => { root.view-clicked("icons"); }
+                                }
+                                Tool {
+                                    width: 26px;
+                                    height: 20px;
+                                    icon: @image-url("icons/tools/large.svg");
+                                    has-icon: true;
+                                    on: root.view-mode == "large";
+                                    clicked => { root.view-clicked("large"); }
+                                }
+                            }
+                        }
+                    }
+                    if root.tab != "report": VerticalLayout {
+                        alignment: center;
+                        TextTool {
+                            label: root.word-peek;
+                            on: root.peeking;
+                            clicked => { root.peek-toggled(); }
+                        }
+                    }
+                    if root.tabs-on && root.tab != "report": VerticalLayout {
+                        alignment: center;
+                        TextTool {
+                            label: "+ " + root.word-tab;
+                            clicked => { root.tab-new(); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Tool {
+                            width: 24px;
+                            height: 24px;
+                            icon: @image-url("icons/tools/export.svg");
+                            has-icon: true;
+                            clicked => { root.tool-clicked("export"); }
+                        }
+                    }
+                    // Faces, language, disks, skips and the keys: one page.
+                    VerticalLayout {
+                        alignment: center;
+                        Tool {
+                            width: 24px;
+                            height: 24px;
+                            icon: @image-url("icons/tools/settings.svg");
+                            has-icon: true;
+                            on: root.disk-question != "";
+                            clicked => { root.tool-clicked("settings"); }
+                        }
                     }
                 }
-                Rectangle { horizontal-stretch: 1; }
             }
         }
 
@@ -2561,7 +2668,8 @@ export component MainWindow inherits Window {
                         height: 20px;
                         visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         border-radius: 5px;
-                        border-width: 1px;
+                        // A fuzzy capsule holds its word: a firmer ring round both.
+                        border-width: c.fuzzy ? 1.5px : 1px;
                         clip: true;
                         // Tone 3 is an empty `content:`, left out of the search:
                         // a faint ring and no tint, as a control switched off.
@@ -2629,6 +2737,43 @@ export component MainWindow inherits Window {
                                  : Theme.ink;
                     }
 
+                    // A fuzzy term's header, once written, is drawn as what it
+                    // does: ≈ on the capsule's own tint, the word it holds
+                    // beside it. The caret going in brings the letters back.
+                    for c in root.caps: Rectangle {
+                        visible: c.icon && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
+                        x: field.pad + field.advance * c.at - 2px;
+                        y: field.top + (c.line - root.q-first) * 22px + 2px;
+                        width: field.advance * c.head + 1px;
+                        height: 18px;
+                        border-radius: 4px;
+                        background: Theme.cap-ring;
+                        property <bool> over: self.visible && q-press.has-hover
+                            && q-press.mouse-x >= self.x && q-press.mouse-x < self.x + self.width
+                            && q-press.mouse-y >= self.y && q-press.mouse-y < self.y + self.height;
+                        changed over => {
+                            if (self.over) {
+                                root.tip-owner = -2;
+                                root.tip-mono = false;
+                                root.tip-pending = root.word-fuzzy-tip;
+                                root.tip-x = self.absolute-position.x;
+                                root.tip-y = self.absolute-position.y + self.height + 8px;
+                            } else if (root.tip-owner == -2) {
+                                root.tip-owner = -1;
+                                root.tip-pending = "";
+                                root.tip-text = "";
+                            }
+                        }
+                        Image {
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            source: @image-url("icons/tools/lens-fuzzy.svg");
+                            colorize: Theme.q-key;
+                        }
+                    }
+
                     if root.spans.length == 0 && root.query == "": Text {
                         x: field.pad;
                         width: field.room;
@@ -2664,7 +2809,10 @@ export component MainWindow inherits Window {
                         blink.restart();
                     }
                     changed has-focus => {
-                        if (!self.has-focus) { root.lens-close(); }
+                        if (!self.has-focus) {
+                            root.lens-close();
+                            root.plus-asked = false;
+                        }
                     }
                     color: transparent;
                     font-size: 16px;
@@ -2679,6 +2827,7 @@ export component MainWindow inherits Window {
 
                     edited => {
                         field.pair-keep = false;
+                        root.plus-asked = false;
                         root.query-changed(self.text);
                     }
                     function paste-here() {
@@ -2945,6 +3094,7 @@ export component MainWindow inherits Window {
                         }
                         self.anchor = o;
                         input.set-selection-offsets(o, o);
+                        root.plus-asked = true;
                         // A filter opens its lens when it is pressed.
                         root.q-pressed(self.line-at(self.mouse-y),
                             Math.floor((self.mouse-x - field.pad) / max(1px, field.advance)));
@@ -2994,6 +3144,52 @@ export component MainWindow inherits Window {
                         background: Theme.q-key;
                         visible: input.has-focus && field.caret-lit && root.sels.length == 0
                             && root.caret-line >= root.q-first && root.caret-line < root.q-first + root.q-shown;
+                    }
+
+                    // Over the caret after a press: a filter, here, in one more.
+                    if root.plus-asked && input.has-focus && root.sels.length == 0 && !root.lens-open
+                        && root.caret-line >= root.q-first && root.caret-line < root.q-first + root.q-shown: Rectangle {
+                        x: clamp(field.pad + field.advance * root.caret-col - 11px, 0px, field.width - 22px);
+                        y: field.top + (root.caret-line - root.q-first) * 22px - 23px;
+                        width: 22px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: plus-hit.has-hover ? Theme.cap : Theme.panel;
+                        border-width: 1px;
+                        border-color: plus-hit.has-hover ? Theme.cap-ring : Theme.line;
+                        drop-shadow-blur: 4px;
+                        drop-shadow-color: #00000030;
+                        drop-shadow-offset-y: 1px;
+                        Text {
+                            text: "+";
+                            color: plus-hit.has-hover ? Theme.q-key : Theme.ink-2;
+                            font-size: 15px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        plus-hit := TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                    root.plus-asked = false;
+                                    root.lens-launch();
+                                }
+                            }
+                            changed has-hover => {
+                                if (self.has-hover) {
+                                    root.tip-owner = -3;
+                                    root.tip-mono = false;
+                                    root.tip-pending = root.word-add-filter;
+                                    root.tip-x = self.absolute-position.x;
+                                    root.tip-y = self.absolute-position.y - 30px;
+                                } else if (root.tip-owner == -3) {
+                                    root.tip-owner = -1;
+                                    root.tip-pending = "";
+                                    root.tip-text = "";
+                                }
+                            }
+                        }
                     }
 
                     // Over the right end of the term the pointer is on: take
@@ -3333,116 +3529,6 @@ export component MainWindow inherits Window {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
-                        }
-                        Rectangle {
-                            width: 1px;
-                            background: Theme.line;
-                        }
-                        HorizontalLayout {
-                            // Its own width, whatever the chips leave.
-                            horizontal-stretch: 0;
-                            padding-left: 10px;
-                            padding-right: 12px;
-                            spacing: 8px;
-                            VerticalLayout {
-                                alignment: center;
-                                Choice {
-                                    height: 24px;
-                                    horizontal-stretch: 0;
-                                    labels: [root.tab-search, root.tab-report];
-                                    values: ["search", "report"];
-                                    value: root.tab == "report" ? "report" : "search";
-                                    picked(v) => {
-                                        root.tab = v;
-                                        // Asked for when looked at: weighing a folder is a walk.
-                                        if (v == "report") {
-                                            root.report-open("");
-                                        }
-                                    }
-                                }
-                            }
-                            if root.tab == "report" && root.report-web-ready: VerticalLayout {
-                                alignment: center;
-                                TextTool {
-                                    label: root.report-web;
-                                    clicked => { root.report-in-browser(); }
-                                }
-                            }
-                            if root.tab != "report": VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    height: 24px;
-                                    width: views.preferred-width;
-                                    border-radius: 6px;
-                                    border-width: Theme.hair;
-                                    border-color: Theme.line;
-                                    views := HorizontalLayout {
-                                        padding: 1px;
-                                        spacing: 1px;
-                                        Tool {
-                                            width: 26px;
-                                            height: 20px;
-                                            icon: @image-url("icons/tools/detail.svg");
-                                            has-icon: true;
-                                            on: root.view-mode == "detail";
-                                            clicked => { root.view-clicked("detail"); }
-                                        }
-                                        Tool {
-                                            width: 26px;
-                                            height: 20px;
-                                            icon: @image-url("icons/tools/icons.svg");
-                                            has-icon: true;
-                                            on: root.view-mode == "icons";
-                                            clicked => { root.view-clicked("icons"); }
-                                        }
-                                        Tool {
-                                            width: 26px;
-                                            height: 20px;
-                                            icon: @image-url("icons/tools/large.svg");
-                                            has-icon: true;
-                                            on: root.view-mode == "large";
-                                            clicked => { root.view-clicked("large"); }
-                                        }
-                                    }
-                                }
-                            }
-                            if root.tab != "report": VerticalLayout {
-                                alignment: center;
-                                TextTool {
-                                    label: root.word-peek;
-                                    on: root.peeking;
-                                    clicked => { root.peek-toggled(); }
-                                }
-                            }
-                            if root.tabs-on && root.tab != "report": VerticalLayout {
-                                alignment: center;
-                                TextTool {
-                                    label: "+ " + root.word-tab;
-                                    clicked => { root.tab-new(); }
-                                }
-                            }
-                            VerticalLayout {
-                                alignment: center;
-                                Tool {
-                                    width: 24px;
-                                    height: 24px;
-                                    icon: @image-url("icons/tools/export.svg");
-                                    has-icon: true;
-                                    clicked => { root.tool-clicked("export"); }
-                                }
-                            }
-                            // Faces, language, disks, skips and the keys: one page.
-                            VerticalLayout {
-                                alignment: center;
-                                Tool {
-                                    width: 24px;
-                                    height: 24px;
-                                    icon: @image-url("icons/tools/settings.svg");
-                                    has-icon: true;
-                                    on: root.disk-question != "";
-                                    clicked => { root.tool-clicked("settings"); }
-                                }
-                            }
                         }
                     }
                 }
