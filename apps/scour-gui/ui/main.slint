@@ -2709,7 +2709,9 @@ export component MainWindow inherits Window {
                         if c.head > 0: Rectangle {
                             x: 0px;
                             y: 0px;
-                            width: c.hw + 3px;
+                            // The header's own letters, and not the room after
+                            // them (`HEAD_GAP`): that is on the value's side.
+                            width: c.icon ? c.hw + 3px : c.hw - 1px;
                             height: parent.height;
                             opacity: 0.42;
                             background: c.tone == 1 ? Theme.cap-read-ring
@@ -2717,7 +2719,7 @@ export component MainWindow inherits Window {
                                 : c.tone == 3 ? Theme.line : Theme.cap-ring;
                         }
                         if c.head > 0: Rectangle {
-                            x: c.hw + 3px;
+                            x: c.icon ? c.hw + 3px : c.hw - 1px;
                             y: 0px;
                             width: 1px;
                             height: parent.height;
@@ -2774,7 +2776,8 @@ export component MainWindow inherits Window {
                         visible: c.icon && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         x: field.pad + c.x - 2px;
                         y: field.top + (c.line - root.q-first) * root.q-pitch + 3.5px;
-                        width: c.hw + 2px;
+                        // Short of the word by the same room a header leaves.
+                        width: c.hw - 2px;
                         height: root.q-pitch - 7px;
                         border-radius: 5px;
                         background: Theme.cap-ring;

@@ -19,8 +19,11 @@ pub const HEAD_TIGHT: f32 = 0.5;
 /// Room between a header and what it holds, past the header's last letter:
 /// drawn small and close, `kind:` ran into its `doc`.
 pub const HEAD_GAP: f32 = 4.0;
+/// Room inside a capsule after what it holds, so the last letter does not
+/// touch its ring.
+pub const CAP_TAIL: f32 = 3.0;
 /// A fuzzy header drawn as ≈ is this wide, whatever its letters were.
-pub const ICON_W: f32 = 24.0;
+pub const ICON_W: f32 = 27.0;
 
 #[derive(Default)]
 pub struct Field {
@@ -184,6 +187,11 @@ impl Field {
             .map(|(i, l)| {
                 let n = l.end.saturating_sub(l.start);
                 let mut w = vec![adv; n];
+                for c in caps.iter().filter(|c| c.line == i as i32 && c.len > 0) {
+                    if let Some(x) = w.get_mut((c.at + c.len - 1).max(0) as usize) {
+                        *x += CAP_TAIL;
+                    }
+                }
                 for c in caps.iter().filter(|c| c.line == i as i32 && c.head > 0) {
                     let (a, h) = (c.at.max(0) as usize, c.head as usize);
                     let each = if c.icon {
@@ -306,6 +314,7 @@ mod tests {
         let narrow = 10.0 * HEAD_SCALE - HEAD_TIGHT;
         assert!((f.x(0, 4) - (4.0 * narrow + HEAD_GAP)).abs() < 0.01);
         assert!((f.x(0, 5) - (4.0 * narrow + HEAD_GAP + 10.0)).abs() < 0.01);
+        assert!((f.x(0, 7) - (4.0 * narrow + HEAD_GAP + 30.0 + CAP_TAIL)).abs() < 0.01);
         for col in 0..=13 {
             let x = f.x(0, col);
             assert_eq!(f.col_at(0, x, true), col, "a gap at column {col}");
