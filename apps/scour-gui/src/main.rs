@@ -6000,7 +6000,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     ));
     w.set_set_typos(t(cat, "Typing mistakes"));
     w.set_word_narrow(t(cat, "Narrow:"));
-    w.set_word_filter_button(format!("{} ▾", t(cat, "Filter")).into());
+    w.set_word_filter_button(t(cat, "Filter").into());
     w.set_word_filter_key(t(cat, "filter"));
     w.set_word_tab_key(t(cat, "tab"));
     w.set_set_rail(t(cat, "Sidebar"));

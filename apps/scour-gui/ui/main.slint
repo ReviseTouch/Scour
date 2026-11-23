@@ -3198,13 +3198,14 @@ export component MainWindow inherits Window {
                     spacing: 4px;
                     alignment: start;
                     for trig in [
-                        { id: "loc", g: "⛁", label: root.word-loc, on: root.loc-on, warn: false },
-                        { id: "time", g: "◷", label: root.word-time, on: root.time-on, warn: false },
-                        { id: "fuzzy", g: "≈", label: root.word-fuzzy, on: root.fuzzy-on, warn: false },
-                        { id: "grep", g: "≣", label: root.word-grep, on: root.grep-open, warn: true },
+                        { id: "loc", icon: @image-url("icons/tools/folder.svg"), label: root.word-loc, on: root.loc-on, warn: false, more: false },
+                        { id: "time", icon: @image-url("icons/tools/lens-time.svg"), label: root.word-time, on: root.time-on, warn: false, more: false },
+                        { id: "fuzzy", icon: @image-url("icons/tools/lens-fuzzy.svg"), label: root.word-fuzzy, on: root.fuzzy-on, warn: false, more: false },
+                        { id: "grep", icon: @image-url("icons/tools/lens-content.svg"), label: root.word-grep, on: root.grep-open, warn: true, more: false },
+                        { id: "filter", icon: @image-url("icons/tools/filter.svg"), label: root.word-filter-button, on: false, warn: false, more: true },
                     ]: Rectangle {
                         height: 34px;
-                        width: root.width >= 960px ? (trow.preferred-width + 18px) : 32px;
+                        width: root.width >= 960px ? (trow.preferred-width + 22px) : 34px;
                         border-radius: 8px;
                         border-width: Theme.hair;
                         border-color: trig.on ? (trig.warn ? Theme.cap-read-ring : Theme.cap-ring)
@@ -3213,14 +3214,16 @@ export component MainWindow inherits Window {
                             : thit.has-hover ? Theme.hover : Theme.panel;
                         trow := HorizontalLayout {
                             alignment: center;
-                            spacing: 4px;
-                            Text {
-                                text: trig.g;
-                                color: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key) : Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 12.5px;
-                                font-weight: 600;
-                                vertical-alignment: center;
+                            spacing: 6px;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 15px;
+                                    height: 15px;
+                                    source: trig.icon;
+                                    colorize: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key)
+                                        : thit.has-hover ? Theme.ink : Theme.ink-2;
+                                }
                             }
                             if root.width >= 960px: Text {
                                 text: trig.label;
@@ -3229,6 +3232,15 @@ export component MainWindow inherits Window {
                                 font-size: 12.5px;
                                 font-weight: 500;
                                 vertical-alignment: center;
+                            }
+                            if trig.more && root.width >= 960px: VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 12px;
+                                    height: 12px;
+                                    source: @image-url("icons/tools/chevron.svg");
+                                    colorize: thit.has-hover ? Theme.ink : Theme.ink-3;
+                                }
                             }
                         }
                         thit := TouchArea {
@@ -3243,20 +3255,15 @@ export component MainWindow inherits Window {
                                     } else if (trig.id == "loc") {
                                         input.focus();
                                         root.lens-field("under");
+                                    } else if (trig.id == "filter") {
+                                        input.focus();
+                                        root.lens-launch();
                                     } else {
                                         input.focus();
                                         root.lens-field("dm");
                                     }
                                 }
                             }
-                        }
-                    }
-                    Push {
-                        height: 34px;
-                        label: root.word-filter-button;
-                        clicked => {
-                            input.focus();
-                            root.lens-launch();
                         }
                     }
                 }
