@@ -358,12 +358,14 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
     if let Some((field, value)) = split_field(rest) {
         let raw = unquote(value);
         let folded = DefaultFolder::of(&raw);
-        // **An empty `content:` is a filter not written yet**, and is left
-        // out rather than searched for as text: the bar offers it as
-        // `content:""` with the caret inside, and the list has to go on
-        // answering for the rest of the query until something is typed there.
+        // **A filter with nothing after its colon is not written yet**, and
+        // is left out rather than searched for as text: the bar writes `dm:`
+        // or `content:""` and opens a lens under it, and the list has to go on
+        // answering for the rest of the query until a value is chosen there.
+        // `file:` and `folder:` take nothing and are complete as written.
         if folded.trim().is_empty()
-            && crate::fields::lookup(&field).map(|f| f.name) == Some("content")
+            && crate::fields::lookup(&field)
+                .is_some_and(|f| f.takes != crate::fields::Takes::Nothing)
         {
             return None;
         }
@@ -830,6 +832,31 @@ mod tests {
         assert!(!parse_at(":a:b", 0).groups.is_empty());
     }
 
+    /// A filter whose value is not chosen yet is left out, whichever field it
+    /// is: the list goes on answering for the rest of the query under the lens.
+    #[test]
+    fn a_filter_without_a_value_is_left_out() {
+        for q in [
+            "kind:doc dm:",
+            "kind:doc ext:",
+            "kind:doc size:",
+            "kind:doc under:",
+            "kind:doc kind:",
+            "kind:doc !dm:",
+            "kind:doc dm:\"\"",
+        ] {
+            assert_eq!(parse_at(q, 0).groups, parse_at("kind:doc", 0).groups, "{q}");
+        }
+        assert!(parse_at("dm:", 0).groups.is_empty());
+        // The fields that take nothing are complete as written.
+        assert!(matches!(
+            parse_at("folder:", 0).groups[0].alts[0].1,
+            Match::IsDir(true)
+        ));
+        // A value that cannot be read is still a search for its text.
+        assert!(!parse_at("dm:zzz", 0).groups.is_empty());
+    }
+
     /// An empty `content:` is a filter not written yet: the rest of the query
     /// answers as if it were not there, not as a search for its text.
     #[test]
@@ -947,10 +974,7 @@ mod tests {
             m("!harfler:abc"),
             vec![(true, Match::NameLetters("abc".into()))]
         );
-        assert_eq!(
-            m("letters:"),
-            vec![(false, Match::NameContains("letters:".into()))]
-        );
+        assert_eq!(m("letters:"), vec![]);
     }
 
     #[test]
@@ -1076,11 +1100,8 @@ mod tests {
             vec![(false, Match::ParentIs("/etc".into()))]
         );
         assert_eq!(m("under:/"), vec![(false, Match::Under("/".into()))]);
-        // Empty is not a scope; it falls back to text like any unusable value.
-        assert_eq!(
-            m("under:"),
-            vec![(false, Match::NameContains("under:".into()))]
-        );
+        // Empty is not a scope, and not text either: it is left out.
+        assert_eq!(m("under:"), vec![]);
     }
 
     #[test]
