@@ -168,7 +168,12 @@ pub enum Request {
         /// Read what is not text as well, looking for UTF-16 in it too.
         #[serde(default)]
         binary: bool,
-        /// Files of the query, newest first, already read by an earlier call.
+        /// Order in which candidate files are drawn from the index.
+        #[serde(default)]
+        sort: SortKey,
+        #[serde(default = "yes")]
+        descending: bool,
+        /// Files of the query already read by an earlier call.
         #[serde(default)]
         offset: u32,
         /// Stop at this many files with a find.
@@ -379,10 +384,21 @@ pub struct GrepResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrepFile {
     pub path: String,
+    #[serde(default = "default_meta")]
+    pub meta: scour_core::Meta,
+    #[serde(default = "default_kind")]
+    pub kind: scour_core::Kind,
     pub hits: Vec<GrepHit>,
     /// There are finds past the ones shown.
     #[serde(default)]
     pub more: bool,
+}
+
+fn default_meta() -> scour_core::Meta {
+    scour_core::Meta::UNKNOWN
+}
+fn default_kind() -> scour_core::Kind {
+    scour_core::Kind::File
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,6 +876,8 @@ mod tests {
                 mode: GrepMode::Regex,
                 exact_case: true,
                 binary: false,
+                sort: SortKey::Size,
+                descending: true,
                 offset: 64,
                 top: 5,
                 hits: 1,
@@ -951,6 +969,8 @@ mod tests {
             Response::Grep(GrepResponse {
                 files: vec![GrepFile {
                     path: "/a/b.rs".into(),
+                    meta: scour_core::Meta::UNKNOWN,
+                    kind: scour_core::Kind::Code,
                     hits: vec![GrepHit {
                         line: Some(3),
                         offset: 40,

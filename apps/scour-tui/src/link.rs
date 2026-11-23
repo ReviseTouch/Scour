@@ -118,6 +118,8 @@ pub enum Ask {
         mode: scour_proto::GrepMode,
         exact_case: bool,
         binary: bool,
+        sort: SortKey,
+        descending: bool,
         offset: u32,
     },
     /// Stop: the terminal is closing.
@@ -580,6 +582,8 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 mode,
                 exact_case,
                 binary,
+                sort,
+                descending,
                 offset,
                 ..
             } => Request::Grep {
@@ -588,6 +592,8 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 mode,
                 exact_case,
                 binary,
+                sort,
+                descending,
                 offset,
                 top: 50,
                 hits: 4,

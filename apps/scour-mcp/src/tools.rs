@@ -284,6 +284,8 @@ impl Scour {
             },
             exact_case: a.exact_case,
             binary: a.binary,
+            sort: scour_core::SortKey::Modified,
+            descending: true,
             offset: a.from.unwrap_or(0),
             top: a.top.unwrap_or(20).min(200),
             hits: 3,

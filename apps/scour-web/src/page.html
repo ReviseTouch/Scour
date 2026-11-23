@@ -899,12 +899,16 @@
   }
   .similar .sim-acts button.pri { border-color: var(--q-key); color: var(--q-key); background: var(--cap); font-weight: 600; }
   .similar .sim-acts button:hover { color: var(--ink); border-color: var(--ink-3); text-decoration: none; }
-  /* Grep results stream view */
-  .grep-view { flex: 1; overflow-y: auto; padding: 12px 18px 24px; background: var(--panel); min-height: 0; }
+  /* Grep results stream view with sticky sortable column headers */
+  .grep-view { flex: 1; overflow-y: auto; padding: 0 16px 24px; background: var(--panel); min-height: 0; }
   .grep-view[hidden] { display: none; }
+  .grep-top {
+    position: sticky; top: 0; z-index: 6; background: var(--panel);
+    padding-top: 10px; margin-bottom: 8px;
+  }
   .grep-sum {
     display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
-    padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px;
     background: var(--ground); font: 500 12px/1.3 var(--mono); color: var(--ink-2);
   }
   .grep-sum .gs-skip { color: var(--ink-3); }
@@ -913,18 +917,43 @@
     color: var(--q-key); font: 600 12px/1.2 var(--sans); padding: 4px 11px; cursor: pointer;
   }
   .grep-sum .gs-more:hover { background: var(--hover); }
+  .grep-cols {
+    display: grid;
+    grid-template-columns: 24px minmax(180px, 2.2fr) minmax(180px, 2.6fr) 96px 142px 92px 44px;
+    align-items: center; gap: 10px; padding: 0 12px;
+  }
+  @media (max-width: 960px) {
+    .grep-cols { grid-template-columns: 22px minmax(140px, 2fr) minmax(120px, 2fr) 118px 82px 40px; }
+    .grep-cols .gc-kind { display: none; }
+  }
+  .grep-thead {
+    height: 30px; background: var(--panel); border-bottom: 1px solid var(--line);
+    font: 600 11.5px/1 var(--sans); color: var(--ink-3); user-select: none;
+  }
+  .grep-thead button {
+    border: 0; background: none; padding: 4px 0; font: inherit; color: inherit;
+    text-align: left; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .grep-thead button.num { justify-content: flex-end; width: 100%; text-align: right; }
+  .grep-thead button:hover, .grep-thead button.on { color: var(--ink); }
+  .grep-thead button .arrow { color: var(--q-key); }
   .grep-card {
-    border: 1px solid var(--line-soft); border-radius: 8px; margin-bottom: 8px;
+    border: 1px solid var(--line-soft); border-radius: 8px; margin-bottom: 7px;
     background: var(--ground); overflow: hidden;
   }
   .grep-card .gc-head {
-    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    min-height: 32px; padding-top: 5px; padding-bottom: 5px;
     border-bottom: 1px solid var(--line-soft); cursor: pointer;
   }
   .grep-card .gc-head:hover { background: var(--hover); }
-  .grep-card .gc-nm { font: 600 12.5px var(--mono); color: var(--ink); }
-  .grep-card .gc-dir { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-  .grep-card .gc-cnt { font: 600 11px var(--mono); color: var(--q-bad); background: var(--cap-read); padding: 1px 6px; border-radius: 10px; flex: none; }
+  .grep-card .gc-ico { width: 16px; height: 16px; display: block; margin: 0 auto; background-color: var(--k, var(--ink-3)); -webkit-mask: var(--g) center / 16px 16px no-repeat; mask: var(--g) center / 16px 16px no-repeat; }
+  .grep-card .gc-nm { font: 600 12.5px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-dir { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-dir:hover { color: var(--q-key); text-decoration: underline; }
+  .grep-card .gc-kind { font: 400 11.5px var(--sans); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-when { font: 400 11.5px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .grep-card .gc-sz { font: 400 11.5px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .grep-card .gc-cnt { justify-self: end; font: 600 11px var(--mono); color: var(--q-bad); background: var(--cap-read); padding: 1px 6px; border-radius: 10px; }
   .grep-line {
     display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px;
     padding: 4px 12px; font: 400 12px/1.55 var(--mono); color: var(--ink-2); cursor: pointer;
@@ -2094,7 +2123,7 @@
       <div class="grep-bar" id="grep-bar" hidden>
         <span class="gp" aria-hidden="true">≣</span>
         <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
-               data-t-ph="Search inside matching files…" data-t-aria="Search inside matching files…">
+               data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
         <div class="grep-seg" role="group">
           <button type="button" data-gmode="text" aria-pressed="true" data-t="Text"></button>
           <button type="button" data-gmode="regex" aria-pressed="false" data-t="Regex"></button>
@@ -5174,6 +5203,8 @@
       mode: GREP.mode,
       exact: GREP.exact ? "1" : "0",
       binary: GREP.binary ? "1" : "0",
+      sort: sortKey,
+      desc: sortDesc ? "1" : "0",
       offset,
       top: 50,
       hits: 5,
@@ -5190,34 +5221,59 @@
   }
 
   function drawGrep(res) {
+    GREP.lastRes = res || GREP.lastRes || {};
+    res = GREP.lastRes;
     grepView.hidden = false;
     scrollEl.hidden = true;
     const skips = [];
     if (res.binary) skips.push(T("{n} binary skipped", { n: fmt(res.binary) }));
     if (res.too_big) skips.push(T("{n} too large", { n: fmt(res.too_big) }));
     if (res.unreadable) skips.push(fmt(res.unreadable) + " " + T("unreadable"));
-    const head = '<div class="grep-sum">' +
+    const sortBtn = (key, msgid, num) => {
+      const on = sortKey === key;
+      const arr = on ? ' <span class="arrow">' + (sortDesc ? "▾" : "▴") + "</span>" : "";
+      return '<button type="button" class="' + (num ? "num " : "") + (on ? "on" : "") +
+        '" data-gsort="' + key + '">' + escape_(T(msgid)) + arr + "</button>";
+    };
+    const head = '<div class="grep-top"><div class="grep-sum">' +
       "<span>" + escape_(T("{f} files · {s} scanned · {b} read", {
         f: fmt(GREP.files.length), s: fmt(res.scanned || 0), b: bytes(res.read || 0),
       })) + " · " + MS.format((res.took_us || 0) / 1000) + " ms</span>" +
       (skips.length ? '<span class="gs-skip">' + escape_(skips.join(" · ")) + "</span>" : "") +
       (GREP.next != null ? '<button type="button" class="gs-more" id="grep-more">' + escape_(T("Read more")) + " →</button>" : "") +
-      "</div>";
+      "</div>" +
+      '<div class="grep-cols grep-thead">' +
+      '<span></span>' +
+      sortBtn("name", "Name", false) +
+      sortBtn("path", "Location", false) +
+      '<span class="gc-kind">' + sortBtn("kind", "Type", false) + "</span>" +
+      sortBtn("modified", "Modified", false) +
+      sortBtn("size", "Size", true) +
+      '<span style="text-align:right">#</span>' +
+      "</div></div>";
     const cards = !GREP.files.length
       ? '<div class="empty">' + escape_(T("No files held that pattern in the scanned batch.")) + "</div>"
       : GREP.files.map((gf, fi) => {
           const slash = gf.path.lastIndexOf("/");
           const nm = slash >= 0 ? gf.path.slice(slash + 1) : gf.path;
           const dir = slash > 0 ? gf.path.slice(0, slash) : "/";
+          const ktok = GLYPHS.has(gf.kind) ? gf.kind : "file";
+          const kword = KIND_KEY[gf.kind] || T("File");
+          const whenStr = gf.mtime ? stamp(gf.mtime) : "—";
+          const szStr = gf.size >= 0 ? bytes(gf.size) : "—";
           const lines = (gf.hits || []).map((h) =>
             '<div class="grep-line" data-gfi="' + fi + '">' +
             '<span class="gl-no">' + (h.line != null ? h.line : "@" + h.offset) + "</span>" +
             '<span class="gl-txt">' + escape_((h.pre || "").slice(-48)) + "<mark>" + escape_(h.hit || "") + "</mark>" + escape_(h.post || "") + "</span></div>"
           ).join("");
-          return '<div class="grep-card">' +
-            '<div class="gc-head" data-gfi="' + fi + '" data-open="1">' +
-            '<span class="gc-nm">' + escape_(nm) + "</span>" +
-            '<span class="gc-dir">' + escape_(homeForm(dir)) + "</span>" +
+          return '<div class="grep-card" data-gfi="' + fi + '">' +
+            '<div class="grep-cols gc-head" data-gfi="' + fi + '" data-open="1">' +
+            '<span class="gc-ico k-' + ktok + '"></span>' +
+            '<span class="gc-nm" title="' + escape_(nm) + '">' + escape_(nm) + "</span>" +
+            '<span class="gc-dir" data-greveal="' + fi + '" title="' + escape_(dir) + '">' + escape_(homeForm(dir)) + "</span>" +
+            '<span class="gc-kind">' + escape_(kword) + "</span>" +
+            '<span class="gc-when">' + escape_(whenStr) + "</span>" +
+            '<span class="gc-sz">' + escape_(szStr) + "</span>" +
             '<span class="gc-cnt">' + fmt((gf.hits || []).length) + (gf.more ? "+" : "") + "</span></div>" +
             lines +
             (gf.more ? '<div class="grep-more-note">' + escape_(T("More matches in file…")) + "</div>" : "") +
@@ -5226,8 +5282,24 @@
     grepView.innerHTML = head + cards;
   }
 
+  function applySortChoice(nextKey) {
+    if (sortKey === nextKey) sortDesc = !sortDesc;
+    else { sortKey = nextKey; sortDesc = ["modified", "created", "accessed", "size", "disk"].includes(sortKey); }
+    keep({ sort: sortKey, descending: sortDesc });
+    render();
+    if (!grepBar.hidden && grepInput.value) runGrep(false);
+  }
+
   grepView.addEventListener("click", (e) => {
+    const sb = e.target.closest("[data-gsort]");
+    if (sb) { applySortChoice(sb.dataset.gsort); return; }
     if (e.target.closest("#grep-more")) { grepSoon(true); return; }
+    const rev = e.target.closest("[data-greveal]");
+    if (rev) {
+      const gf = GREP.files[+rev.dataset.greveal];
+      if (gf) launch(gf.path, "folder");
+      return;
+    }
     const row = e.target.closest("[data-gfi]");
     const gf = row && GREP.files[+row.dataset.gfi];
     if (!gf) return;
@@ -5235,7 +5307,22 @@
     const dir = slash > 0 ? gf.path.slice(0, slash) : "/";
     const nm = slash >= 0 ? gf.path.slice(slash + 1) : gf.path;
     setPeek(true, false);
-    drawPeek({ path: dir, name: nm, is_dir: false, size: 0, mtime: now, kind: "", found: gf.hits });
+    drawPeek({
+      path: dir,
+      name: nm,
+      is_dir: false,
+      size: gf.size || 0,
+      mtime: gf.mtime || now,
+      kind: KIND_KEY[gf.kind] || "",
+      ktoken: gf.kind || "file",
+      found: gf.hits,
+    });
+  });
+  grepView.addEventListener("contextmenu", (e) => {
+    const row = e.target.closest("[data-gfi]");
+    const gf = row && GREP.files[+row.dataset.gfi];
+    if (!gf) return;
+    rowMenu(e, gf.path, { is_dir: false, size: gf.size || 0 }, () => runGrep(false));
   });
   grepView.addEventListener("dblclick", (e) => {
     const row = e.target.closest("[data-gfi]");
@@ -6995,11 +7082,7 @@
     if (!th) return;
     // A heading just carried is not one clicked, or a reorder also sorts.
     if (justMoved) return;
-    if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
-    // SortKey::starts_descending: a date or a size newest or largest first, a word from A.
-    else { sortKey = th.dataset.sort; sortDesc = ["modified", "created", "accessed", "size", "disk"].includes(sortKey); }
-    keep({ sort: sortKey, descending: sortDesc });
-    render();
+    applySortChoice(th.dataset.sort);
   });
 
   /* One pointer, three things, told apart by where and how far: the last nine

@@ -161,6 +161,8 @@ fn run(
             mode,
             exact_case,
             binary,
+            sort,
+            descending,
             offset,
             top,
             hits,
@@ -185,6 +187,8 @@ fn run(
                 exact_case,
                 // Bytes are looked for where bytes are.
                 binary: binary || mode == scour_proto::GrepMode::Hex,
+                sort,
+                descending,
                 offset,
                 top,
                 hits,
@@ -201,6 +205,8 @@ fn run(
                     .into_iter()
                     .map(|f| scour_proto::GrepFile {
                         path: f.path,
+                        meta: f.meta,
+                        kind: f.kind,
                         more: f.more,
                         hits: f
                             .hits

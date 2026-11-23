@@ -12,7 +12,7 @@ use scour_core::{
     Ast, Error, FoundLine, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest,
     SearchResponse, SortKey,
 };
-use scour_grep::{Budget, Enter, Ground, Needle, Options, Outcome, Pattern, Scanner};
+use scour_grep::{Budget, Enter, Expr, Ground, Options, Outcome};
 
 /// How long a page waits for its rows before answering with what there is.
 const WAIT: Duration = Duration::from_millis(300);
@@ -33,18 +33,20 @@ const FIRST: u32 = 64;
 const WIDEST: u32 = 65_536;
 const BATCH: usize = 2048;
 
-/// The texts files must hold, and the query that is left without them.
+/// The texts files must hold (or must not hold), and the query left without them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Plan {
-    needles: Vec<String>,
+    must: Vec<Vec<String>>,
+    forbid: Vec<String>,
     rest: Ast,
 }
 
-/// None unless the query has a `content:` term and each one stands alone:
-/// `!content:x` and `a | content:x` would mean reading every file there is.
+/// None unless the query has at least one `content:` clause and is not an
+/// unscoped lone `!content:x` or mixed `name | content:x`.
 pub(crate) fn plan(ast: &Ast) -> Option<Plan> {
     let mut plan = Plan {
-        needles: Vec::new(),
+        must: Vec::new(),
+        forbid: Vec::new(),
         rest: Ast {
             groups: Vec::new(),
             exact_accents: ast.exact_accents,
@@ -52,7 +54,28 @@ pub(crate) fn plan(ast: &Ast) -> Option<Plan> {
     };
     for group in &ast.groups {
         match group.alts.as_slice() {
-            [(false, Match::ContentContains(text))] => plan.needles.push(text.clone()),
+            [(true, Match::ContentContains(text))] => {
+                for piece in text.split([';', '|']).map(str::trim).filter(|s| !s.is_empty()) {
+                    plan.forbid.push(piece.to_owned());
+                }
+            }
+            alts if alts
+                .iter()
+                .all(|(neg, m)| !*neg && matches!(m, Match::ContentContains(_)))
+                && !alts.is_empty() =>
+            {
+                let mut clause = Vec::new();
+                for (_, m) in alts {
+                    if let Match::ContentContains(text) = m {
+                        for piece in text.split([';', '|']).map(str::trim).filter(|s| !s.is_empty()) {
+                            clause.push(piece.to_owned());
+                        }
+                    }
+                }
+                if !clause.is_empty() {
+                    plan.must.push(clause);
+                }
+            }
             alts if alts
                 .iter()
                 .any(|(_, m)| matches!(m, Match::ContentContains(_))) =>
@@ -62,7 +85,9 @@ pub(crate) fn plan(ast: &Ast) -> Option<Plan> {
             _ => plan.rest.groups.push(group.clone()),
         }
     }
-    (!plan.needles.is_empty()).then_some(plan)
+    let has_content = !plan.must.is_empty() || !plan.forbid.is_empty();
+    let bounded = !plan.must.is_empty() || !plan.rest.groups.is_empty();
+    (has_content && bounded).then_some(plan)
 }
 
 /// The query without its `content:` terms, for a question the reading does
@@ -274,27 +299,16 @@ impl Contents {
     /// `Ok(true)` when every candidate was read.
     fn read_on(&self, reading: &Reading, lent: &Lent) -> Result<bool> {
         let ground = Ground::probe(lent.roots.iter().map(|r| scour_core::path::to_path(r)));
-        let scanners = reading
-            .plan
-            .needles
-            .iter()
-            .map(|text| {
-                let pattern = Pattern::new(&Needle::Text(text.clone()), false).map_err(|e| {
-                    Error::QuerySyntax {
-                        at: 0,
-                        expected: e.to_string(),
-                    }
-                })?;
-                // Where, too, for the first few: a list shows the line under
-                // the file and a preview the places. A file that holds the
-                // text is read until it has given that many.
-                let options = Options {
-                    hits_per_file: FOUND_PER_FILE,
-                    ..Options::default()
-                };
-                Ok(Scanner::new(pattern, options, ground.clone()).entering(lent.enter.clone()))
-            })
-            .collect::<Result<Vec<Scanner>>>()?;
+        let expr = Expr::from_clauses(&reading.plan.must, &reading.plan.forbid, false).map_err(
+            |e| Error::QuerySyntax {
+                at: 0,
+                expected: e.to_string(),
+            },
+        )?;
+        let options = Options {
+            hits_per_file: FOUND_PER_FILE,
+            ..Options::default()
+        };
         let (mut width, mut told) = (FIRST, Instant::now());
         loop {
             let at = reading.state.lock().at;
@@ -312,7 +326,8 @@ impl Contents {
                 if !self.wanted(reading) {
                     return Ok(false);
                 }
-                let (read, holding) = holding(&scanners, &reading.budget, batch);
+                let (read, holding) =
+                    holding(&expr, &options, &ground, lent.enter.clone(), &reading.budget, batch);
                 let mut state = reading.state.lock();
                 state.at = state.at.saturating_add(read as u32);
                 state.scanned += read as u64;
@@ -354,47 +369,38 @@ impl Contents {
 /// The rows of `batch` whose files hold every needle, in order, each with
 /// where it holds them, and how many rows from the front were settled — all of
 /// them unless the reading stopped.
+#[allow(clippy::too_many_arguments)]
 fn holding(
-    scanners: &[Scanner],
+    expr: &Expr,
+    options: &Options,
+    ground: &Ground,
+    enter: Option<Enter>,
     budget: &Budget,
     batch: &[Hit],
 ) -> (usize, Vec<(usize, Vec<FoundLine>)>) {
     let (places, files) = crate::grep::files_of(batch);
     let mut settled = batch.len();
-    // Each needle reads only what held the ones before it.
-    let mut left: Vec<(usize, Vec<FoundLine>)> =
-        (0..files.len()).map(|k| (k, Vec::new())).collect();
-    for scanner in scanners {
-        let asked: Vec<_> = left.iter().map(|(k, _)| files[*k].clone()).collect();
-        let outcomes = scanner.scan(&asked, budget);
-        let mut kept = Vec::with_capacity(left.len());
-        for ((k, mut found), outcome) in left.into_iter().zip(outcomes) {
-            match outcome {
-                Outcome::Found { hits, .. } => {
-                    found.extend(hits.into_iter().map(|h| FoundLine {
+    let outcomes = expr.scan(options, ground, enter, &files, budget);
+    let mut rows = Vec::new();
+    for (k, outcome) in outcomes.into_iter().enumerate() {
+        match outcome {
+            Outcome::Found { hits, .. } => {
+                let mut found: Vec<FoundLine> = hits
+                    .into_iter()
+                    .map(|h| FoundLine {
                         line: h.line,
                         text: h.text,
                         at: h.at,
-                    }));
-                    kept.push((k, found));
-                }
-                Outcome::NotReached => settled = settled.min(places[k] as usize),
-                _ => {}
+                    })
+                    .collect();
+                found.truncate(FOUND_PER_FILE);
+                rows.push((places[k] as usize, found));
             }
+            Outcome::NotReached => settled = settled.min(places[k] as usize),
+            _ => {}
         }
-        left = kept;
     }
-    let rows = left
-        .into_iter()
-        .map(|(k, mut found)| {
-            // Two needles may find the same line: shown once, in file order.
-            found.sort_by_key(|f| (f.line, f.at));
-            found.dedup_by(|a, b| a.line.is_some() && a.line == b.line);
-            found.truncate(FOUND_PER_FILE);
-            (places[k] as usize, found)
-        })
-        .filter(|(row, _)| *row < settled)
-        .collect();
+    rows.retain(|(row, _)| *row < settled);
     (settled, rows)
 }
 
@@ -420,8 +426,12 @@ mod tests {
             exact_accents: false,
         };
         let both = plan(&ast(vec![name.clone(), group(vec![content(false)])])).expect("a plan");
-        assert_eq!(both.needles, ["x"]);
+        assert_eq!(both.must, vec![vec!["x".to_string()]]);
+        assert!(both.forbid.is_empty());
         assert_eq!(both.rest, ast(vec![name.clone()]));
+        let scoped_not = plan(&ast(vec![name.clone(), group(vec![content(true)])])).expect("scoped !content");
+        assert!(scoped_not.must.is_empty());
+        assert_eq!(scoped_not.forbid, ["x"]);
         assert_eq!(plan(&ast(vec![name.clone()])), None);
         assert_eq!(plan(&ast(vec![group(vec![content(true)])])), None);
         let either = group(vec![

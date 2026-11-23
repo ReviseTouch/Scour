@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use scour_core::Catalog;
+use scour_core::{Catalog, EntryId, Hit, SortKey, SourceId};
 use scour_i18n::Catalogue;
 use scour_proto::{GrepFile, GrepMode, GrepResponse, Request, Response};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::link::{Ask, Link};
 use crate::ui::GrepItem;
@@ -72,6 +72,8 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
             mode: s.grep.mode,
             exact_case: s.grep.exact_case,
             binary: s.grep.binary,
+            sort: SortKey::named(&s.sort).unwrap_or_default(),
+            descending: s.descending,
             offset,
             top: 50,
             hits: 5,
@@ -134,14 +136,51 @@ pub fn answered(
     w.set_grep_summary(summary.into());
     w.set_grep_more_on(next.is_some());
 
+    let heads = w.get_heads();
+    let cols: Vec<&'static scour_ui::Column> = (0..heads.row_count())
+        .filter_map(|i| scour_ui::column(heads.row_data(i)?.id.as_str()))
+        .collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let frozen_note = cat
+        .get("this volume does not record reads (mounted noatime)")
+        .into_owned();
+
     let mut items = Vec::new();
     for (fi, gf) in s.grep.files.iter().enumerate() {
         let name = scour_ui::path::leaf(&gf.path).to_owned();
         let dir = home_form(scour_ui::path::folder(&gf.path));
         let count = format!("{}{}", gf.hits.len(), if gf.more { "+" } else { "" });
+        let hit = Hit {
+            id: EntryId::path_hash(SourceId(0), &gf.path),
+            path: gf.path.clone(),
+            is_dir: false,
+            kind: gf.kind,
+            meta: gf.meta,
+            under: None,
+            found: Vec::new(),
+        };
+        let kind_word = cat.get(gf.kind.msgid());
+        let row = crate::rows::row_of(
+            &hit,
+            &[],
+            &crate::rows::Shape {
+                columns: &cols,
+                mounts: &s.mounts,
+                kind: &kind_word,
+                frozen_note: &frozen_note,
+                now,
+                system_icons: false,
+            },
+            false,
+        );
         items.push(GrepItem {
             header: true,
             file_idx: fi as i32,
+            cells: row.cells,
+            ktoken: row.ktoken,
+            tint: row.tint,
             name: name.into(),
             dir: dir.into(),
             count: count.into(),
@@ -156,6 +195,9 @@ pub fn answered(
             items.push(GrepItem {
                 header: false,
                 file_idx: fi as i32,
+                cells: ModelRc::default(),
+                ktoken: slint::SharedString::new(),
+                tint: slint::Brush::default(),
                 name: slint::SharedString::new(),
                 dir: slint::SharedString::new(),
                 count: slint::SharedString::new(),

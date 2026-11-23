@@ -2228,6 +2228,11 @@ fn main() -> Result<()> {
                 None => 60,
             };
             dispatch(&state, &link, &model, rows);
+            if let Some(w) = weak.upgrade()
+                && state.borrow().grep.open
+            {
+                grep_ui::trigger(&w, &mut state.borrow_mut(), &link, &cat.borrow(), false);
+            }
         });
     }
 
@@ -6020,7 +6025,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_word_time(t(cat, "Modified"));
     w.set_word_fuzzy(t(cat, "Fuzzy"));
     w.set_word_grep(t(cat, "Grep"));
-    w.set_word_grep_ph(t(cat, "Search inside matching files…"));
+    w.set_word_grep_ph(t(cat, "Search inside matching files… (a;b  !c)"));
     w.set_word_text(t(cat, "Text"));
     w.set_word_regex(t(cat, "Regex"));
     w.set_word_hex(t(cat, "Hex"));

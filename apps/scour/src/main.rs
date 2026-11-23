@@ -598,6 +598,8 @@ fn build(args: &Args) -> Result<Request> {
             },
             exact_case: *case,
             binary: *binary,
+            sort: SortKey::Modified,
+            descending: true,
             offset: *from,
             top: *top,
             hits: *lines,

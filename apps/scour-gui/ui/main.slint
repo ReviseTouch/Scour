@@ -75,6 +75,9 @@ export struct PlaceDir {
 export struct GrepItem {
     header: bool,
     file-idx: int,
+    cells: [Cell],
+    ktoken: string,
+    tint: brush,
     name: string,
     dir: string,
     count: string,
@@ -4792,42 +4795,54 @@ export component MainWindow inherits Window {
                                 background: Theme.line-soft;
                             }
                             if gitem.header: HorizontalLayout {
-                                padding-left: 14px;
-                                padding-right: 14px;
+                                padding-left: 12px;
+                                padding-right: 12px;
                                 spacing: 8px;
-                                Text {
-                                    text: gitem.name;
-                                    color: Theme.ink;
-                                    font-family: Fonts.mono;
-                                    font-size: 12.5px;
-                                    font-weight: 650;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: gitem.dir;
-                                    color: Theme.ink-3;
-                                    font-family: Fonts.mono;
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
-                                }
-                                VerticalLayout {
+                                if root.iconed: VerticalLayout {
                                     alignment: center;
-                                    Rectangle {
-                                        height: 18px;
-                                        width: gcnt.preferred-width + 12px;
-                                        border-radius: 9px;
-                                        background: Theme.cap-read;
-                                        gcnt := Text {
-                                            text: gitem.count;
-                                            color: Theme.q-bad;
-                                            font-family: Fonts.mono;
-                                            font-size: 11px;
-                                            font-weight: 600;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                    width: 16px;
+                                    Image {
+                                        width: 15px;
+                                        height: 15px;
+                                        source: gitem.ktoken == "folder" ? @image-url("icons/folder.svg")
+                                            : gitem.ktoken == "doc" ? @image-url("icons/doc.svg")
+                                            : gitem.ktoken == "code" ? @image-url("icons/code.svg")
+                                            : gitem.ktoken == "image" ? @image-url("icons/image.svg")
+                                            : gitem.ktoken == "video" ? @image-url("icons/video.svg")
+                                            : gitem.ktoken == "media" ? @image-url("icons/media.svg")
+                                            : gitem.ktoken == "audio" ? @image-url("icons/audio.svg")
+                                            : gitem.ktoken == "archive" ? @image-url("icons/archive.svg")
+                                            : gitem.ktoken == "exec" ? @image-url("icons/exec.svg")
+                                            : gitem.ktoken == "data" ? @image-url("icons/data.svg")
+                                            : gitem.ktoken == "config" ? @image-url("icons/config.svg")
+                                            : gitem.ktoken == "font" ? @image-url("icons/font.svg")
+                                            : gitem.ktoken == "build" ? @image-url("icons/build.svg")
+                                            : @image-url("icons/file.svg");
+                                        colorize: gitem.tint;
+                                    }
+                                }
+                                for h[ci] in root.heads: HorizontalLayout {
+                                    property <Cell> gc: ci < gitem.cells.length ? gitem.cells[ci] : { text: "" };
+                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 24px : 0px));
+                                    if h.id == "name": Text {
+                                        width: parent.width;
+                                        text: gc.pre + gc.hit + gc.post + "  (" + gitem.count + ")";
+                                        color: Theme.ink;
+                                        font-family: Fonts.mono;
+                                        font-size: 12.5px;
+                                        font-weight: 650;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    if h.id != "name": Text {
+                                        width: parent.width;
+                                        text: gc.text;
+                                        color: h.id == "path" ? Theme.ink-3 : Theme.ink-2;
+                                        font-family: gc.mono ? Fonts.mono : "";
+                                        font-size: gc.mono ? 11.5px : Fonts.small;
+                                        horizontal-alignment: gc.right ? right : left;
+                                        vertical-alignment: center;
+                                        overflow: elide;
                                     }
                                 }
                             }

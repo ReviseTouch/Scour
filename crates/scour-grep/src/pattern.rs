@@ -89,20 +89,7 @@ impl Pattern {
             Needle::Text(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Regex(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Bytes(bytes) if bytes.is_empty() => Err(BadPattern::Empty),
-            Needle::Text(text) => {
-                let utf8 = spelled(text, Encoding::Utf8, exact_case);
-                let le = spelled(text, Encoding::Utf16Le, exact_case);
-                let be = spelled(text, Encoding::Utf16Be, exact_case);
-                Ok(Pattern {
-                    narrow: raw(&utf8)?,
-                    wide: Some(Wide {
-                        any: raw(&format!("(?:{utf8})|(?:{le})|(?:{be})"))?,
-                        le: raw(&le)?,
-                        be: raw(&be)?,
-                    }),
-                    raw_bytes: false,
-                })
-            }
+            Needle::Text(text) => Self::any_text(std::slice::from_ref(text), exact_case),
             Needle::Bytes(bytes) => Ok(Pattern {
                 narrow: raw(&escaped(bytes))?,
                 wide: None,
@@ -119,6 +106,36 @@ impl Pattern {
                 })
                 .map_err(|e| BadPattern::Regex(e.to_string())),
         }
+    }
+
+    /// One compiled DFA matching any of `alts` (`a;b` / `a|b`) in a single pass.
+    pub fn any_text(alts: &[String], exact_case: bool) -> Result<Pattern, BadPattern> {
+        let non_empty: Vec<&str> = alts.iter().map(String::as_str).filter(|s| !s.is_empty()).collect();
+        if non_empty.is_empty() {
+            return Err(BadPattern::Empty);
+        }
+        let join_enc = |enc: Encoding| -> String {
+            if let [only] = non_empty[..] {
+                return spelled(only, enc, exact_case);
+            }
+            non_empty
+                .iter()
+                .map(|t| format!("(?:{})", spelled(t, enc, exact_case)))
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        let utf8 = join_enc(Encoding::Utf8);
+        let le = join_enc(Encoding::Utf16Le);
+        let be = join_enc(Encoding::Utf16Be);
+        Ok(Pattern {
+            narrow: raw(&utf8)?,
+            wide: Some(Wide {
+                any: raw(&format!("(?:{utf8})|(?:{le})|(?:{be})"))?,
+                le: raw(&le)?,
+                be: raw(&be)?,
+            }),
+            raw_bytes: false,
+        })
     }
 
     pub(crate) fn is_raw_bytes(&self) -> bool {

@@ -5,6 +5,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::sync::Mutex;
 
+use scour_core::SortKey;
 use scour_proto::{GrepMode, Request, Response};
 
 use crate::{Link, call, http};
@@ -34,12 +35,19 @@ pub fn api_grep(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         "hex" => GrepMode::Hex,
         _ => GrepMode::Text,
     };
+    let sort = req
+        .param("sort")
+        .and_then(SortKey::named)
+        .unwrap_or_default();
+    let descending = req.param("desc") != Some("0");
     let request = Request::Grep {
         query: req.param("q").unwrap_or_default().to_owned(),
         pattern,
         mode,
         exact_case: req.param("exact") == Some("1"),
         binary: req.param("binary") == Some("1"),
+        sort,
+        descending,
         offset: req.param("offset").and_then(|s| s.parse().ok()).unwrap_or(0),
         top: req
             .param("top")
@@ -93,6 +101,13 @@ pub fn api_grep(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         .collect();
                     serde_json::json!({
                         "path": f.path,
+                        "size": f.meta.size,
+                        "mtime": f.meta.mtime,
+                        "ctime": f.meta.ctime,
+                        "atime": f.meta.atime,
+                        "disk": f.meta.disk,
+                        "mode": f.meta.mode,
+                        "kind": f.kind.token(),
                         "hits": hits,
                         "more": f.more,
                     })

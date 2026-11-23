@@ -72,7 +72,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `usage` | | `path`, `top` → what a subtree weighs; hard links charged `disk / links` per name |
 | `explain` | | `query`, `cursor` → the sentence, the coloured spans, completions — without running it |
 | `duplicates` | | `under`, `min_size`, `read_budget`, `top` → same-size groups and how many were **read** and proved identical |
-| `grep` | | `query`, `pattern`, `mode` (`text`/`regex`/`hex`), `exact_case`, `binary`, `offset`, `top`, `hits`, `read_budget`, `max_size`, `timeout_ms` → the files of the query that hold the pattern, newest first, each with the lines it is on; what was left unread and why (`binary`, `too_big`, `unreadable`); `next`, the `offset` to go on from when it stopped short |
+| `grep` | | `query`, `pattern` (in `text` mode supports `;`/`\|` OR, space AND, `!term` NOT, `"phrase"`), `mode` (`text`/`regex`/`hex`), `exact_case`, `binary`, `sort`, `descending`, `offset`, `top`, `hits`, `read_budget`, `max_size`, `timeout_ms` → the files of the query that hold the pattern, in `sort` order, each with `meta`, `kind` and the lines it is on; what was left unread and why (`binary`, `too_big`, `unreadable`); `next`, the `offset` to go on from when it stopped short |
 | `sources`, `status`, `stats`, `syntax`, `places`, `rules` | | facts, never sentences; `status.asking` counts the disks waiting to be asked about |
 | `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual` |
 | `choose` | ✓ | `volume`, `index` → a yes or a lasting no; kept in the settings as `volumes_on` / `volumes_off` |

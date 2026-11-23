@@ -2788,3 +2788,7 @@ msgstr "klasör gezgini · filtre ve esnek eşleşme merceği"
 msgid "search inside matching files (grep)"
 msgstr "eşleşen dosyaların içinde ara (grep)"
 
+msgid "Search inside matching files… (a;b  !c)"
+msgstr "Eşleşen dosyaların içinde ara… (a;b  !c)"
+
+

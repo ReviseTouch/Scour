@@ -4,10 +4,8 @@
 
 use std::time::{Duration, Instant};
 
-use scour_core::{Ast, Error, Index, Page, Result, SearchRequest, SortKey, Span};
-use scour_grep::{
-    Budget, Enter, File, Ground, Hit, Needle, Options, Outcome, Pattern, Scanner, Skip,
-};
+use scour_core::{Ast, Error, Index, Kind, Meta, Page, Result, SearchRequest, SortKey, Span};
+use scour_grep::{Budget, Enter, Expr, File, Ground, Hit, Needle, Options, Outcome, Skip};
 
 /// The first page is small, so a find among the newest files answers at once.
 const FIRST: u32 = 64;
@@ -23,6 +21,8 @@ pub struct GrepAsk {
     pub needle: Needle,
     pub exact_case: bool,
     pub binary: bool,
+    pub sort: SortKey,
+    pub descending: bool,
     /// Files of the query already read by an earlier call.
     pub offset: u32,
     /// Stop at this many files with a find.
@@ -52,6 +52,8 @@ pub struct Grepped {
 #[derive(Debug)]
 pub struct GreppedFile {
     pub path: String,
+    pub meta: Meta,
+    pub kind: Kind,
     pub hits: Vec<Hit>,
     pub more: bool,
 }
@@ -65,7 +67,7 @@ pub(crate) fn run(
     enter: Option<Enter>,
 ) -> Result<Grepped> {
     let began = Instant::now();
-    let pattern = Pattern::new(&ask.needle, ask.exact_case).map_err(|e| Error::QuerySyntax {
+    let expr = Expr::new(&ask.needle, ask.exact_case).map_err(|e| Error::QuerySyntax {
         at: 0,
         expected: e.to_string(),
     })?;
@@ -76,7 +78,6 @@ pub(crate) fn run(
         ..Options::default()
     };
     let ground = Ground::probe(roots.iter().map(|root| scour_core::path::to_path(root)));
-    let scanner = Scanner::new(pattern, options, ground).entering(enter);
     let budget = Budget::new(ask.read_budget, Some(began + ask.timeout));
     let mut out = Grepped::default();
     // No wider than the finds wanted need: every file of a batch is read.
@@ -84,8 +85,8 @@ pub(crate) fn run(
     'pages: loop {
         let found = index.search(&SearchRequest {
             query: query.clone(),
-            sort: SortKey::Modified,
-            descending: true,
+            sort: ask.sort,
+            descending: ask.descending,
             page: Page {
                 offset: at,
                 limit: width,
@@ -103,7 +104,16 @@ pub(crate) fn run(
                 out.next = Some(start);
                 break 'pages;
             }
-            if let Some(next) = read(&scanner, &budget, batch, ask.top, &mut out) {
+            if let Some(next) = read(
+                &expr,
+                &options,
+                &ground,
+                enter.clone(),
+                &budget,
+                batch,
+                ask.top,
+                &mut out,
+            ) {
                 out.next = Some(start.saturating_add(next));
                 break 'pages;
             }
@@ -125,15 +135,19 @@ pub(crate) fn run(
 
 /// Read one batch of rows into `out`. Returns the row to go on from when the
 /// reading stopped inside the batch: enough was found, or the budget ran out.
+#[allow(clippy::too_many_arguments)]
 fn read(
-    scanner: &Scanner,
+    expr: &Expr,
+    options: &Options,
+    ground: &Ground,
+    enter: Option<Enter>,
     budget: &Budget,
     rows: &[scour_core::Hit],
     top: u32,
     out: &mut Grepped,
 ) -> Option<u32> {
     let (places, files) = files_of(rows);
-    for (k, outcome) in scanner.scan(&files, budget).into_iter().enumerate() {
+    for (k, outcome) in expr.scan(options, ground, enter, &files, budget).into_iter().enumerate() {
         match outcome {
             Outcome::NotReached => return Some(places[k]),
             Outcome::Clean => out.scanned += 1,
@@ -143,8 +157,11 @@ fn read(
             Outcome::Unreadable(_) => out.unreadable += 1,
             Outcome::Found { hits, more } => {
                 out.scanned += 1;
+                let row = &rows[places[k] as usize];
                 out.files.push(GreppedFile {
-                    path: rows[places[k] as usize].path.clone(),
+                    path: row.path.clone(),
+                    meta: row.meta,
+                    kind: row.kind,
                     hits,
                     more,
                 });

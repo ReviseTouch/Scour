@@ -4,6 +4,7 @@
 
 mod budget;
 mod excerpt;
+mod expr;
 mod ground;
 mod pattern;
 mod read;
@@ -13,6 +14,7 @@ mod zip;
 
 pub use budget::Budget;
 pub use excerpt::Hit;
+pub use expr::Expr;
 pub use ground::{Ground, readers};
 pub use pattern::{BadPattern, Needle, Pattern};
 pub use scan::{Enter, File, Options, Outcome, Scanner, Skip};

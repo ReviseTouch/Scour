@@ -1,7 +1,7 @@
 //! Terminal lenses (Place/Tree explorer, Sparkline & Fuzzy choices) and the
 //! on-demand inline Grep capsule.
 
-use scour_core::{EntryId, FoundLine, Hit, Meta, SourceId, kind_of};
+use scour_core::{EntryId, FoundLine, Hit, SourceId};
 use scour_proto::{GrepFile, GrepMode, GrepResponse};
 use scour_ui::lens::{self, Lens};
 
@@ -280,11 +280,13 @@ impl App {
         Want::Grep {
             generation: self.v2.grep_gen,
             append,
-            query: self.query.clone(),
+            query: self.asking(),
             pattern: self.v2.grep_pattern.clone(),
             mode: self.v2.grep_mode,
             exact_case: self.v2.grep_exact,
             binary: self.v2.grep_binary,
+            sort: self.sort,
+            descending: self.descending,
             offset,
         }
     }
@@ -315,25 +317,22 @@ impl App {
             .v2
             .grep_files
             .iter()
-            .map(|gf| {
-                let leaf = scour_ui::path::leaf(&gf.path);
-                Hit {
-                    id: EntryId::path_hash(SourceId(0), &gf.path),
-                    path: gf.path.clone(),
-                    is_dir: false,
-                    kind: kind_of(false, leaf, 0),
-                    meta: Meta::UNKNOWN,
-                    under: None,
-                    found: gf
-                        .hits
-                        .iter()
-                        .map(|h| FoundLine {
-                            line: h.line,
-                            text: h.text.clone(),
-                            at: h.at,
-                        })
-                        .collect(),
-                }
+            .map(|gf| Hit {
+                id: EntryId::path_hash(SourceId(0), &gf.path),
+                path: gf.path.clone(),
+                is_dir: false,
+                kind: gf.kind,
+                meta: gf.meta,
+                under: None,
+                found: gf
+                    .hits
+                    .iter()
+                    .map(|h| FoundLine {
+                        line: h.line,
+                        text: h.text.clone(),
+                        at: h.at,
+                    })
+                    .collect(),
             })
             .collect();
         let n = hits.len();

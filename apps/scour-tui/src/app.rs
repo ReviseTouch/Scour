@@ -233,6 +233,8 @@ pub enum Want {
         mode: scour_proto::GrepMode,
         exact_case: bool,
         binary: bool,
+        sort: SortKey,
+        descending: bool,
         offset: u32,
     },
     /// Close the terminal.
@@ -663,6 +665,9 @@ impl App {
         self.cursor = 0;
         self.top = 0;
         self.dirty = true;
+        if self.v2.grep_open && !self.v2.grep_pattern.is_empty() {
+            return self.dispatch_grep(false);
+        }
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
     }
 

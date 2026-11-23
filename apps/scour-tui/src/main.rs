@@ -715,6 +715,8 @@ fn act(want: Want, link: &Link) {
             mode,
             exact_case,
             binary,
+            sort,
+            descending,
             offset,
         } => link.later(Ask::Grep {
             generation,
@@ -724,6 +726,8 @@ fn act(want: Want, link: &Link) {
             mode,
             exact_case,
             binary,
+            sort,
+            descending,
             offset,
         }),
     }
