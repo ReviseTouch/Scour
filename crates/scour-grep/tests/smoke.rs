@@ -301,3 +301,138 @@ fn a_line_with_two_finds_is_shown_once() {
     let lines: Vec<_> = hits.iter().map(|hit| hit.line).collect();
     assert_eq!((lines, *more), (vec![Some(1), Some(3)], false));
 }
+
+fn make_zip(entries: &[(&str, u16, &[u8])]) -> Vec<u8> {
+    use flate2::{Compress, Compression, FlushCompress};
+    let mut out = Vec::new();
+    let mut cd = Vec::new();
+    for &(name, method, raw) in entries {
+        let data = if method == 8 {
+            let mut c = Compress::new(Compression::fast(), false);
+            let mut dst = Vec::with_capacity(raw.len() + 64);
+            c.compress_vec(raw, &mut dst, FlushCompress::Finish).unwrap();
+            dst
+        } else {
+            raw.to_vec()
+        };
+        let local_off = out.len() as u32;
+        let nb = name.as_bytes();
+        // Local file header
+        out.extend_from_slice(&[0x50, 0x4B, 0x03, 0x04, 20, 0, 0, 0]);
+        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&[0; 8]); // mtime/mdate/crc
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(nb);
+        out.extend_from_slice(&data);
+
+        // Central directory header
+        cd.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02, 20, 0, 20, 0, 0, 0]);
+        cd.extend_from_slice(&method.to_le_bytes());
+        cd.extend_from_slice(&[0; 8]);
+        cd.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        cd.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        cd.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+        cd.extend_from_slice(&[0; 12]);
+        cd.extend_from_slice(&local_off.to_le_bytes());
+        cd.extend_from_slice(nb);
+    }
+    let cd_off = out.len() as u32;
+    let cd_len = cd.len() as u32;
+    out.extend_from_slice(&cd);
+    out.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0]);
+    let cnt = entries.len() as u16;
+    out.extend_from_slice(&cnt.to_le_bytes());
+    out.extend_from_slice(&cnt.to_le_bytes());
+    out.extend_from_slice(&cd_len.to_le_bytes());
+    out.extend_from_slice(&cd_off.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+#[test]
+fn udf_docx_xlsx_and_nested_zip_documents_are_searched_in_memory() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let udf_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<template format_id=\"1.8\"><content><![CDATA[ADANA 13. ASLİYE TİCARET MAHKEMESİ\nDAVA KONUSU: İş Kazası Tazminatı]]></content><properties><font name=\"Calibri\"/></properties></template>";
+    let udf_bytes = make_zip(&[("content.xml", 8, udf_xml.as_bytes())]);
+
+    let docx_xml = "<w:document><w:body><w:p><w:r><w:t>İş </w:t></w:r><w:r><w:t>Kazası </w:t></w:r><w:r><w:t>Raporu</w:t></w:r></w:p></w:body></w:document>";
+    let styles_xml = "<w:styles><w:docDefaults><w:rFonts w:ascii=\"CalibriBoilerplate\"/></w:docDefaults></w:styles>";
+    let docx_bytes = make_zip(&[
+        ("word/styles.xml", 8, styles_xml.as_bytes()),
+        ("word/document.xml", 8, docx_xml.as_bytes()),
+    ]);
+
+    // A normal `.zip` holding both a Stored `.docx`, a Deflated `.udf`, a plain `.txt`, and a binary `.png`.
+    let bundle_bytes = make_zip(&[
+        ("img/photo.png", 0, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
+        ("ekler/rapor.docx", 0, &docx_bytes),
+        ("ekler/dilekce.udf", 8, &udf_bytes),
+        ("notlar.txt", 8, "Özet: iş kazası dosyası\n".as_bytes()),
+    ]);
+
+    let bin_only_zip = make_zip(&[("logo.png", 0, b"\x89PNG\r\n\x1a\n\0\0\0")]);
+
+    let files = [
+        put(dir.path(), "dava.udf", &udf_bytes),
+        put(dir.path(), "sozlesme.docx", &docx_bytes),
+        put(dir.path(), "arsiv.zip", &bundle_bytes),
+        put(dir.path(), "resimler.zip", &bin_only_zip),
+    ];
+
+    let got = scanner(text("iş kazası"), Options::default(), dir.path())
+        .scan(&files, &Budget::unlimited());
+
+    // 1. UDF matched inside CDATA with Turkish case folding, on line 2!
+    let Outcome::Found { hits: udf_hits, .. } = &got[0] else {
+        panic!("udf: {:?}", got[0]);
+    };
+    assert_eq!(udf_hits[0].line, Some(2));
+    assert!(udf_hits[0].text.contains("İş Kazası Tazminatı"));
+
+    // 2. DOCX matched across split `<w:r><w:t>` runs!
+    let Outcome::Found { hits: docx_hits, .. } = &got[1] else {
+        panic!("docx: {:?}", got[1]);
+    };
+    assert_eq!(docx_hits[0].text, "İş Kazası Raporu");
+
+    // 3. Normal `.zip` found matches inside nested `.docx`, nested `.udf`, and `.txt`, with exact `at` span!
+    let Outcome::Found { hits: zip_hits, .. } = &got[2] else {
+        panic!("zip: {:?}", got[2]);
+    };
+    assert_eq!(zip_hits.len(), 3);
+    assert!(zip_hits[0].text.starts_with("[ekler/rapor.docx] "));
+    let (s, l) = (zip_hits[0].at.0 as usize, zip_hits[0].at.1 as usize);
+    assert_eq!(&zip_hits[0].text[s..s + l], "İş Kazası");
+    assert!(zip_hits[1].text.starts_with("[ekler/dilekce.udf] "));
+    assert!(zip_hits[2].text.starts_with("[notlar.txt] "));
+
+    // 4. Binary-only `.zip` reports `Skip::Binary`.
+    assert_eq!(got[3], Outcome::Skipped(Skip::Binary));
+
+    // 5. Boilerplate `word/styles.xml` is never searched as document content.
+    let boiler = scanner(text("CalibriBoilerplate"), Options::default(), dir.path())
+        .scan(&files[1..2], &Budget::unlimited());
+    assert_eq!(boiler[0], Outcome::Clean);
+}
+
+#[test]
+fn large_zip_skips_heavy_media_and_reads_only_document_xml() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = vec![0xABu8; 1_500_000]; // > 1 MiB so `eof == false` on first read
+    let doc = "<w:document><w:body><w:p><w:r><w:t>Büyük belgede gizli cümle</w:t></w:r></w:p></w:body></w:document>";
+    let big_docx = make_zip(&[
+        ("word/media/huge.png", 0, &media),
+        ("word/document.xml", 8, doc.as_bytes()),
+    ]);
+    let files = [put(dir.path(), "huge.docx", &big_docx)];
+    let got = scanner(text("gizli cümle"), Options::default(), dir.path())
+        .scan(&files, &Budget::unlimited());
+    let Outcome::Found { hits, .. } = &got[0] else {
+        panic!("huge docx: {:?}", got[0]);
+    };
+    assert_eq!(hits[0].text, "Büyük belgede gizli cümle");
+}

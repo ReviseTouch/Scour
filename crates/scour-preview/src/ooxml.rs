@@ -9,10 +9,10 @@ const MAX_ARCHIVE: u64 = 64 * 1024 * 1024;
 const MAX_ENTRY: usize = 8 * 1024 * 1024;
 const TEXT_BUDGET: usize = 128 * 1024;
 
-/// Extract readable plain text from `.docx`, `.odt`, `.pptx`, or `.xlsx`.
+/// Extract readable plain text from `.docx`, `.odt`, `.pptx`, `.xlsx`, or `.udf`.
 pub fn extract_text(path: &Path) -> Option<(String, bool)> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    if !matches!(ext.as_str(), "docx" | "odt" | "pptx" | "xlsx") {
+    if !matches!(ext.as_str(), "docx" | "odt" | "pptx" | "xlsx" | "udf") {
         return None;
     }
     let mut file = crate::open_file(path).ok()?;
@@ -47,6 +47,26 @@ pub fn extract_text(path: &Path) -> Option<(String, bool)> {
                 &mut out,
                 &mut cut,
             );
+        }
+        "udf" => {
+            let xml = read_entry(&mut file, entries.iter().find(|e| e.name == "content.xml")?)?;
+            if let Some(start) = xml.find("<![CDATA[")
+                && let Some(end) = xml[start + 9..].rfind("]]>")
+            {
+                let body = &xml[start + 9..start + 9 + end];
+                if body.len() > TEXT_BUDGET {
+                    let mut at = TEXT_BUDGET;
+                    while !body.is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    out.push_str(&body[..at]);
+                    cut = true;
+                } else {
+                    out.push_str(body);
+                }
+            } else {
+                append_xml_text(&xml, &["p", "content"], &[], &mut out, &mut cut);
+            }
         }
         "pptx" => {
             let mut slides: Vec<&ZipEntry> = entries

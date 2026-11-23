@@ -9,6 +9,7 @@ use memchr::{memchr_iter, memrchr};
 use crate::excerpt::{Hit, Kind, around};
 use crate::pattern::Pattern;
 use crate::scan::{Options, Outcome, Skip};
+use crate::zip::ZipScratch;
 
 /// Read at once. A megabyte holds 98% of this machine's files whole.
 const CHUNK: usize = 1 << 20;
@@ -16,9 +17,21 @@ const CHUNK: usize = 1 << 20;
 const KEEP: usize = 64 << 10;
 
 /// One thread's buffer, kept between files.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Reader {
     buf: Vec<u8>,
+    zip: ZipScratch,
+    zip_on: bool,
+}
+
+impl Default for Reader {
+    fn default() -> Self {
+        Self {
+            buf: Vec::new(),
+            zip: ZipScratch::default(),
+            zip_on: std::env::var_os("SCOUR_NO_ZIP").is_none(),
+        }
+    }
 }
 
 impl Reader {
@@ -29,8 +42,8 @@ impl Reader {
         pattern: &Pattern,
         opts: &Options,
     ) -> (Outcome, u64) {
-        let mut file = match open(path, opts.max_size) {
-            Ok(file) => file,
+        let (mut file, file_len) = match open(path, opts.max_size) {
+            Ok(pair) => pair,
             Err(Refused::Skip(skip)) => return (Outcome::Skipped(skip), 0),
             Err(Refused::Io(kind)) => return (Outcome::Unreadable(kind), 0),
         };
@@ -47,12 +60,25 @@ impl Reader {
                     Ok(n) => {
                         filled += n;
                         total += n as u64;
+                        if file_len > 0 && total >= file_len {
+                            eof = true;
+                        }
                     }
                     Err(e) if e.kind() == ErrorKind::Interrupted => {}
                     Err(e) => return (Outcome::Unreadable(e.kind()), total),
                 }
             }
             let hay = &buf[..filled];
+            if base == 0
+                && self.zip_on
+                && !pattern.is_raw_bytes()
+                && hay.len() >= 4
+                && hay[..4] == [0x50, 0x4B, 0x03, 0x04]
+            {
+                let (outcome, extra) =
+                    self.zip.search_file(&mut file, file_len, hay, eof, pattern, opts);
+                return (outcome, total + extra);
+            }
             let kind = *kind.get_or_insert_with(|| Kind::sniff(hay));
             if kind == Kind::Binary && !opts.binary {
                 return (Outcome::Skipped(Skip::Binary), total);
@@ -165,16 +191,17 @@ enum Refused {
 
 /// Open to read, without being held by what is not a file — a pipe opened
 /// plainly waits for a writer for ever — and without touching its read time.
-fn open(path: &Path, max_size: u64) -> Result<File, Refused> {
+fn open(path: &Path, max_size: u64) -> Result<(File, u64), Refused> {
     let file = open_quietly(path).map_err(|e| Refused::Io(e.kind()))?;
     let meta = file.metadata().map_err(|e| Refused::Io(e.kind()))?;
     if !meta.is_file() {
         return Err(Refused::Skip(Skip::NotAFile));
     }
-    if max_size != 0 && meta.len() > max_size {
+    let len = meta.len();
+    if max_size != 0 && len > max_size {
         return Err(Refused::Skip(Skip::TooBig));
     }
-    Ok(file)
+    Ok((file, len))
 }
 
 #[cfg(unix)]

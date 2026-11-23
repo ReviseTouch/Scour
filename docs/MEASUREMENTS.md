@@ -774,6 +774,31 @@ table is built again after every release, 300 ms; the opening walk peaks at
 cargo run --release -p scour-index-native --example windowcost -- /var/tmp/idx/native /home/hasan
 ```
 
+## Streaming SIMD grep inside ZIP, Office and UYAP `.udf` documents (2026-11-23)
+
+`scour-grep` inspects `PK\x03\x04` containers in memory when they fit the
+1 MiB read buffer (zero extra syscalls, reusable per-thread `zlib-rs` SIMD
+inflater), extracts UYAP `.udf` `<![CDATA[...]]>` slices zero-copy, strips
+Office/ODF XML runs with `memchr` while skipping embedded media and style
+sheets, and recurses into nested `.docx`/`.udf` entries inside `.zip` archives.
+Alternated on 5,000 `.udf` and 5,000 `.docx` files from this machine's index
+(`mahkemesi`, Turkish `İ`/`ı` case-folded):
+
+| corpus (5,000 files) | `SCOUR_NO_ZIP=1` (before) | SIMD ZIP grep (after) | throughput |
+|---|---:|---:|---:|
+| `.udf` (27.9 MiB compressed) | 4.14 ms · 4,991 skipped, 4 found | **19.66 ms** · 0 skipped, **2,354 found** | **254,370 files/s · 1,419 MiB/s** |
+| `.docx` (84.6 MiB compressed) | 4.97 ms · 4,990 skipped, 0 found | **67.83 ms** · 3 skipped, **195 found** | **73,718 files/s · 1,247 MiB/s** |
+
+Cold-cache first pass on the same 5,000 files across `/home` and `/mnt/depo`:
+19.71 ms (`.udf`) and 69.82 ms (`.docx`).
+
+```sh
+scour export -o /tmp/udf.csv "ext:udf"
+awk -F, 'NR>1 && NR<=5001 {print $2"/"$1}' /tmp/udf.csv > /tmp/udf5k.txt
+SCOUR_NO_ZIP=1 ./target/release/examples/zipcost "mahkemesi" < /tmp/udf5k.txt
+./target/release/examples/zipcost "mahkemesi" < /tmp/udf5k.txt
+```
+
 ## Reproducing
 
 ```sh

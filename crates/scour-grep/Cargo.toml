@@ -16,6 +16,7 @@ workspace = true
 # and `memchr`'s own, and what a disk can bear is `surefoot`'s answer — the
 # same one the walk asks, so the two cannot disagree about a disk.
 [dependencies]
+flate2   = { workspace = true }
 regex    = { workspace = true }
 memchr   = { workspace = true }
 surefoot = { workspace = true }

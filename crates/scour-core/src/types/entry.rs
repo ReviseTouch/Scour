@@ -625,6 +625,7 @@ const EXT_TABLE: &[(&str, Kind)] = &[
     ("ttc", Kind::Font),
     ("ttf", Kind::Font),
     ("txt", Kind::Doc),
+    ("udf", Kind::Doc), // UYAP document
     ("ui", Kind::Code), // Qt Designer / GTK Builder
     ("vb", Kind::Code),
     ("vdi", Kind::Archive),

@@ -64,6 +64,7 @@ impl std::error::Error for BadPattern {}
 pub struct Pattern {
     narrow: Regex,
     wide: Option<Wide>,
+    raw_bytes: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -99,19 +100,29 @@ impl Pattern {
                         le: raw(&le)?,
                         be: raw(&be)?,
                     }),
+                    raw_bytes: false,
                 })
             }
             Needle::Bytes(bytes) => Ok(Pattern {
                 narrow: raw(&escaped(bytes))?,
                 wide: None,
+                raw_bytes: true,
             }),
             Needle::Regex(text) => RegexBuilder::new(text)
                 .case_insensitive(!exact_case)
                 .multi_line(true)
                 .build()
-                .map(|narrow| Pattern { narrow, wide: None })
+                .map(|narrow| Pattern {
+                    narrow,
+                    wide: None,
+                    raw_bytes: false,
+                })
                 .map_err(|e| BadPattern::Regex(e.to_string())),
         }
+    }
+
+    pub(crate) fn is_raw_bytes(&self) -> bool {
+        self.raw_bytes
     }
 
     /// The expression that reads a file of this kind.

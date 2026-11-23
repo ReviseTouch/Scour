@@ -122,6 +122,7 @@ parking_lot = "0.12"
 humansize   = "2"
 memmap2     = "0.9"
 memchr      = "2"
+flate2      = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 
 # For `regex:` terms in a query. Its engine, regex-automata and regex-syntax,
 # is here for this alone since the walker stopped being `ignore`.
