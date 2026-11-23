@@ -532,8 +532,10 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
 /// the service's CPU and 280 MB of its memory, for chips nobody had touched.
 /// Only crossing the two the line needs asks again.
 pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
-    let empty_unpinned = s.query.trim().is_empty() && !s.qb.narrow_pinned;
-    if s.qb.narrow_off || s.qb.narrow_hidden || empty_unpinned {
+    // The empty query too: the line is always there under the bar, and its
+    // two walks are 180 ms and 300 ms once a window opens (MEASUREMENTS,
+    // 2026-11-22), not the second they were.
+    if s.qb.narrow_off || s.qb.narrow_hidden {
         if !s.qb.chips.is_empty() {
             s.qb.chips.clear();
             show_chips(w, &s.qb, cat);

@@ -603,6 +603,34 @@ component Tool inherits Rectangle {
     }
 }
 
+// A small button that says what it does in a word, for the line under the
+// query: framed, and filled while it is on.
+component TextTool inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked();
+    height: 24px;
+    width: tt-label.preferred-width + 18px;
+    border-radius: 6px;
+    border-width: Theme.hair;
+    border-color: tt-touch.has-hover ? Theme.ink-3 : Theme.line;
+    background: root.on ? Theme.panel-2 : tt-touch.has-hover ? Theme.hover : transparent;
+    tt-label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: root.on || tt-touch.has-hover ? Theme.ink : Theme.ink-3;
+        font-size: 12px;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    tt-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 /// One search tab on the strip: its query as its name, a × while it is in
 /// front or under the hand, and the middle button closes it as a browser's does.
 component SearchTabChip inherits Rectangle {
@@ -1654,6 +1682,8 @@ export component MainWindow inherits Window {
     in property <[Facet]> chips;
     in property <string> word-narrow;
     in property <string> word-filter-button;
+    in property <string> word-peek: "Preview";
+    in property <string> word-tab: "Tab";
     callback narrow-taken(string, bool);
     // The status bar's right end.
     in property <string> typos-said;
@@ -2357,10 +2387,10 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // The search tabs, always: a strip that appears only with a second tab
-        // was never found (17 November). One tab has no ×. On its right what
-        // is about the window and the list's shape, so the strip is always there.
-        Rectangle {
+        // The search tabs, once there are two. A strip that appeared only with
+        // a second tab was never found (17 November); the line under the query
+        // has a "+ Tab" of its own now, which is how the second one is made.
+        if root.tabs-on && root.tab-labels.length > 1 && root.tab != "report": Rectangle {
             height: 36px;
             background: Theme.ground;
 
@@ -2377,7 +2407,7 @@ export component MainWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 2px;
-                if root.tabs-on && root.tab != "report": HorizontalLayout {
+                HorizontalLayout {
                 spacing: 2px;
                 for label[i] in root.tab-labels: VerticalLayout {
                     alignment: center;
@@ -2390,7 +2420,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 }
-                if root.tabs-on && root.tab != "report": VerticalLayout {
+                VerticalLayout {
                     alignment: center;
                     Tool {
                         icon: @image-url("icons/tools/plus.svg");
@@ -2399,98 +2429,6 @@ export component MainWindow inherits Window {
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                // Search or report, and what the list looks like: a desktop's
-                // header bar, beside the field rather than in rows of their own.
-                VerticalLayout {
-                    alignment: center;
-                    Choice {
-                        height: 30px;
-                        labels: [root.tab-search, root.tab-report];
-                        values: ["search", "report"];
-                        value: root.tab == "report" ? "report" : "search";
-                        picked(v) => {
-                            root.tab = v;
-                            // Asked for when looked at: weighing a folder is a walk.
-                            if (v == "report") {
-                                root.report-open("");
-                            }
-                        }
-                    }
-                }
-                if root.tab == "report" && root.report-web-ready: VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.report-web;
-                        clicked => {
-                            root.report-in-browser();
-                        }
-                    }
-                }
-                // The window's own controls, then a rule, then the switches for
-                // what is being read rather than what the program is doing.
-                Rectangle { width: 10px; }
-
-                VerticalLayout {
-                    alignment: center;
-                    HorizontalLayout {
-                        spacing: 2px;
-                        // A new search tab, beside what is about the window.
-                        if root.tabs-on: Tool { icon: @image-url("icons/tools/tab-new.svg"); has-icon: true; clicked => { root.tab-new(); } }
-                        Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
-                        // Faces, language, disks, skips and the keys: one page.
-                        Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
-                    }
-                }
-
-                Rectangle { width: 12px; }
-
-                Rectangle {
-                    width: 1px;
-                    background: Theme.line;
-                }
-
-                Rectangle { width: 12px; }
-
-                VerticalLayout {
-                    alignment: center;
-                    HorizontalLayout {
-                        spacing: 2px;
-                        // With the view switch: a preview panel changes what is
-                        // being read, not what the program is doing.
-                        Tool {
-                            icon: @image-url("icons/tools/peek.svg");
-                            has-icon: true;
-                            on: root.peeking;
-                            clicked => {
-                                root.peek-toggled();
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/detail.svg");
-                            has-icon: true;
-                            on: root.view-mode == "detail";
-                            clicked => {
-                                root.view-clicked("detail");
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/icons.svg");
-                            has-icon: true;
-                            on: root.view-mode == "icons";
-                            clicked => {
-                                root.view-clicked("icons");
-                            }
-                        }
-                        Tool {
-                            icon: @image-url("icons/tools/large.svg");
-                            has-icon: true;
-                            on: root.view-mode == "large";
-                            clicked => {
-                                root.view-clicked("large");
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -2514,15 +2452,15 @@ export component MainWindow inherits Window {
             }
 
             VerticalLayout {
-                padding-left: 16px;
-                padding-right: 12px;
-                padding-top: 12px;
-                padding-bottom: 5px;
-                spacing: 6px;
+                spacing: 0px;
 
             HorizontalLayout {
                 // The box's own height, so the line under it moves nothing.
-                height: 38px + (root.q-shown - 1) * 22px;
+                height: 58px + (root.q-shown - 1) * 22px;
+                padding-left: 16px;
+                padding-right: 12px;
+                padding-top: 10px;
+                padding-bottom: 10px;
                 spacing: 10px;
 
                 // The mark: the desktop's icon, then letter-spaced small capitals.
@@ -3263,164 +3201,250 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // Quiet on-demand micro-triggers: unfold rich lenses only when asked.
-                HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
-                    for trig in [
-                        { id: "loc", icon: @image-url("icons/tools/folder.svg"), label: root.word-loc, on: root.loc-on, warn: false, more: false },
-                        { id: "time", icon: @image-url("icons/tools/lens-time.svg"), label: root.word-time, on: root.time-on, warn: false, more: false },
-                        { id: "fuzzy", icon: @image-url("icons/tools/lens-fuzzy.svg"), label: root.word-fuzzy, on: root.fuzzy-on, warn: false, more: false },
-                        { id: "grep", icon: @image-url("icons/tools/lens-content.svg"), label: root.word-grep, on: root.grep-open, warn: true, more: false },
-                        { id: "filter", icon: @image-url("icons/tools/filter.svg"), label: root.word-filter-button, on: false, warn: false, more: true },
-                    ]: Rectangle {
-                        height: 38px;
-                        width: root.width >= 960px ? (trow.preferred-width + 24px) : 38px;
-                        border-radius: 8px;
-                        border-width: Theme.hair;
-                        border-color: trig.on ? (trig.warn ? Theme.cap-read-ring : Theme.cap-ring)
-                            : thit.has-hover ? Theme.ink-3 : Theme.line;
-                        background: trig.on ? (trig.warn ? Theme.cap-read : Theme.cap)
-                            : thit.has-hover ? Theme.hover : Theme.panel;
-                        trow := HorizontalLayout {
+                // One way into the filters, the same list `:` opens: where,
+                // when, what kind, how big, a letter off, inside the file.
+                filter-button := Rectangle {
+                    height: 38px;
+                    width: filter-row.preferred-width + 22px;
+                    border-radius: 8px;
+                    border-width: Theme.hair;
+                    border-color: filter-hit.has-hover ? Theme.ink-3 : Theme.line;
+                    background: filter-hit.has-hover ? Theme.hover : Theme.panel;
+                    filter-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 5px;
+                        Text {
+                            text: root.word-filter-button;
+                            color: filter-hit.has-hover ? Theme.ink : Theme.ink-2;
+                            font-size: 13px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
                             alignment: center;
-                            spacing: 6px;
-                            VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    width: 15px;
-                                    height: 15px;
-                                    source: trig.icon;
-                                    colorize: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key)
-                                        : thit.has-hover ? Theme.ink : Theme.ink-2;
-                                }
-                            }
-                            if root.width >= 960px: Text {
-                                text: trig.label;
-                                color: trig.on ? (trig.warn ? Theme.q-bad : Theme.q-key)
-                                    : thit.has-hover ? Theme.ink : Theme.ink-2;
-                                font-size: 12.5px;
-                                font-weight: 500;
-                                vertical-alignment: center;
-                            }
-                            if trig.more && root.width >= 960px: VerticalLayout {
-                                alignment: center;
-                                Image {
-                                    width: 12px;
-                                    height: 12px;
-                                    source: @image-url("icons/tools/chevron.svg");
-                                    colorize: thit.has-hover ? Theme.ink : Theme.ink-3;
-                                }
+                            Image {
+                                width: 12px;
+                                height: 12px;
+                                source: @image-url("icons/tools/chevron.svg");
+                                colorize: filter-hit.has-hover ? Theme.ink : Theme.ink-3;
                             }
                         }
-                        thit := TouchArea {
-                            mouse-cursor: pointer;
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                    if (trig.id == "grep") {
-                                        root.grep-toggled();
-                                    } else if (trig.id == "fuzzy") {
-                                        input.focus();
-                                        root.lens-fuzzy();
-                                    } else if (trig.id == "loc") {
-                                        input.focus();
-                                        root.lens-field("under");
-                                    } else if (trig.id == "filter") {
-                                        input.focus();
-                                        root.lens-launch();
-                                    } else {
-                                        input.focus();
-                                        root.lens-field("dm");
-                                    }
-                                }
+                    }
+                    filter-hit := TouchArea {
+                        mouse-cursor: pointer;
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                input.focus();
+                                root.lens-launch();
                             }
                         }
                     }
                 }
             }
 
-                // Under the bar: calm and collapsed on an empty query unless opened.
-                if root.narrow-shown || root.fix-said != "" || root.reading-warn || (root.query != "" && root.reading != ""): HorizontalLayout {
-                    height: 30px;
-                    spacing: 8px;
-
-                    // `siz:` is searched for as text; this offers `size:`.
-                    if root.fix-said != "": Rectangle {
-                        width: fix-text.preferred-width + 12px;
-                        height: 18px;
-                        y: 1px;
-                        border-radius: 5px;
-                        border-width: 1px;
-                        border-color: Theme.q-bad;
-                        fix-text := Text {
-                            text: root.fix-said;
-                            color: Theme.q-bad;
-                            font-family: Fonts.mono;
-                            font-size: 11px;
-                            font-weight: 600;
-                            horizontal-alignment: center;
+                // Under the bar, always one line: what would narrow the list on
+                // the left; on the right what is being read and how it is shown.
+                Rectangle {
+                    height: 34px;
+                    Rectangle {
+                        y: 0px;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        HorizontalLayout {
+                            horizontal-stretch: 1;
+                            padding-left: 16px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                        if root.fix-said != "": Rectangle {
+                            width: fix-text.preferred-width + 12px;
+                            height: 18px;
+                            y: 8px;
+                            border-radius: 5px;
+                            border-width: 1px;
+                            border-color: Theme.q-bad;
+                            fix-text := Text {
+                                text: root.fix-said;
+                                color: Theme.q-bad;
+                                font-family: Fonts.mono;
+                                font-size: 11px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.fix-taken(); }
+                            }
+                        }
+                        if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Text {
+                            text: root.word-narrow;
+                            color: Theme.ink-3;
+                            font-size: 12px;
                             vertical-alignment: center;
                         }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.fix-taken(); }
-                        }
-                    }
-                    if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Text {
-                        text: root.word-narrow;
-                        color: Theme.ink-3;
-                        font-size: 12px;
-                        vertical-alignment: center;
-                    }
-                    if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Flickable {
-                        horizontal-stretch: 1;
-                        interactive: false;
-                        viewport-width: chip-row.preferred-width;
-                        chip-row := HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-                            for c in root.chips: Rectangle {
-                                y: 4px;
-                                height: 22px;
-                                width: chip-text.preferred-width + chip-n.preferred-width + 21px;
-                                border-radius: 6px;
-                                border-width: Theme.hair;
-                                border-color: chip-touch.has-hover ? Theme.ink-3 : Theme.line;
-                                chip-text := Text {
-                                    x: 8px;
-                                    text: c.label;
-                                    color: chip-touch.has-hover ? Theme.ink : Theme.ink-2;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                }
-                                chip-n := Text {
-                                    x: 8px + chip-text.preferred-width + 5px;
-                                    text: c.count;
-                                    color: Theme.ink-3;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                }
-                                chip-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    pointer-event(e) => {
-                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                            root.narrow-taken(c.token, e.modifiers.alt);
+                        if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Flickable {
+                            horizontal-stretch: 1;
+                            interactive: false;
+                            viewport-width: chip-row.preferred-width;
+                            chip-row := HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                for c in root.chips: Rectangle {
+                                    y: 6px;
+                                    height: 22px;
+                                    width: chip-text.preferred-width + chip-n.preferred-width + 21px;
+                                    border-radius: 6px;
+                                    border-width: Theme.hair;
+                                    border-color: chip-touch.has-hover ? Theme.ink-3 : Theme.line;
+                                    chip-text := Text {
+                                        x: 8px;
+                                        text: c.label;
+                                        color: chip-touch.has-hover ? Theme.ink : Theme.ink-2;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    chip-n := Text {
+                                        x: 8px + chip-text.preferred-width + 5px;
+                                        text: c.count;
+                                        color: Theme.ink-3;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    chip-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.narrow-taken(c.token, e.modifiers.alt);
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        if root.chips.length == 0 || root.fix-said != "" || root.reading-warn: Text {
+                            text: root.reading;
+                            color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
+                            font-size: 11.5px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        }
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.line;
+                        }
+                        HorizontalLayout {
+                            // Its own width, whatever the chips leave.
+                            horizontal-stretch: 0;
+                            padding-left: 10px;
+                            padding-right: 12px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                Choice {
+                                    height: 24px;
+                                    horizontal-stretch: 0;
+                                    labels: [root.tab-search, root.tab-report];
+                                    values: ["search", "report"];
+                                    value: root.tab == "report" ? "report" : "search";
+                                    picked(v) => {
+                                        root.tab = v;
+                                        // Asked for when looked at: weighing a folder is a walk.
+                                        if (v == "report") {
+                                            root.report-open("");
+                                        }
+                                    }
+                                }
+                            }
+                            if root.tab == "report" && root.report-web-ready: VerticalLayout {
+                                alignment: center;
+                                TextTool {
+                                    label: root.report-web;
+                                    clicked => { root.report-in-browser(); }
+                                }
+                            }
+                            if root.tab != "report": VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    height: 24px;
+                                    width: views.preferred-width;
+                                    border-radius: 6px;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.line;
+                                    views := HorizontalLayout {
+                                        padding: 1px;
+                                        spacing: 1px;
+                                        Tool {
+                                            width: 26px;
+                                            height: 20px;
+                                            icon: @image-url("icons/tools/detail.svg");
+                                            has-icon: true;
+                                            on: root.view-mode == "detail";
+                                            clicked => { root.view-clicked("detail"); }
+                                        }
+                                        Tool {
+                                            width: 26px;
+                                            height: 20px;
+                                            icon: @image-url("icons/tools/icons.svg");
+                                            has-icon: true;
+                                            on: root.view-mode == "icons";
+                                            clicked => { root.view-clicked("icons"); }
+                                        }
+                                        Tool {
+                                            width: 26px;
+                                            height: 20px;
+                                            icon: @image-url("icons/tools/large.svg");
+                                            has-icon: true;
+                                            on: root.view-mode == "large";
+                                            clicked => { root.view-clicked("large"); }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.tab != "report": VerticalLayout {
+                                alignment: center;
+                                TextTool {
+                                    label: root.word-peek;
+                                    on: root.peeking;
+                                    clicked => { root.peek-toggled(); }
+                                }
+                            }
+                            if root.tabs-on && root.tab != "report": VerticalLayout {
+                                alignment: center;
+                                TextTool {
+                                    label: "+ " + root.word-tab;
+                                    clicked => { root.tab-new(); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Tool {
+                                    width: 24px;
+                                    height: 24px;
+                                    icon: @image-url("icons/tools/export.svg");
+                                    has-icon: true;
+                                    clicked => { root.tool-clicked("export"); }
+                                }
+                            }
+                            // Faces, language, disks, skips and the keys: one page.
+                            VerticalLayout {
+                                alignment: center;
+                                Tool {
+                                    width: 24px;
+                                    height: 24px;
+                                    icon: @image-url("icons/tools/settings.svg");
+                                    has-icon: true;
+                                    on: root.disk-question != "";
+                                    clicked => { root.tool-clicked("settings"); }
+                                }
+                            }
+                        }
                     }
-                    if root.chips.length == 0 || root.fix-said != "" || root.reading-warn: Text {
-                        text: root.reading;
-                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
-                        font-size: 11.5px;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-
                 }
             }
         }

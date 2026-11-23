@@ -582,8 +582,9 @@ pub const COLUMNS: &[Column] = &[
 ];
 
 /// What a window shows before anybody has chosen, in the reading order of the
-/// question: what, what kind, where, when, how big.
-pub const DEFAULT_COLUMNS: &[&str] = &["name", "kind", "path", "mtime", "size"];
+/// question: what, where, when, how big. What kind is beside the name already,
+/// as its icon in every face, so it has no column unless one is asked for.
+pub const DEFAULT_COLUMNS: &[&str] = &["name", "path", "mtime", "size"];
 
 /// Look one up by the id the settings file uses.
 pub fn column(id: &str) -> Option<&'static Column> {
@@ -873,13 +874,17 @@ fn take_back(cols: &[&Column], w: &mut [u32], over: u32, from: &[usize]) -> u32 
 
 #[cfg(test)]
 mod column_tests {
+    /// The columns as they were the default until the kind moved beside the
+    /// name: the layout is tested with a fixed column between two that grow.
+    const FIVE: &[&str] = &["name", "kind", "path", "mtime", "size"];
+
     use super::*;
 
     /// Every default is a column that exists: a typo starts a window with four
     /// columns and no complaint.
     #[test]
     fn the_defaults_all_name_real_columns() {
-        for id in DEFAULT_COLUMNS {
+        for id in FIVE {
             assert!(column(id).is_some(), "`{id}` is not a column");
         }
     }
@@ -916,7 +921,7 @@ mod column_tests {
         }
         // Percentages of one row, and they must read as such at both ends.
         for word in ["near", "far"] {
-            let total: u32 = DEFAULT_COLUMNS
+            let total: u32 = FIVE
                 .iter()
                 .filter_map(|id| column(id))
                 .map(|c| u32::from(if word == "near" { c.near } else { c.far }))
@@ -934,7 +939,7 @@ mod column_tests {
     #[test]
     fn the_widths_add_up_to_the_room_at_every_size() {
         for avail in (200..3600).step_by(7) {
-            let w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            let w = lay_out(FIVE, |_| None, avail);
             assert_eq!(
                 w.iter().sum::<u32>(),
                 avail,
@@ -947,18 +952,18 @@ mod column_tests {
     #[test]
     fn a_name_dragged_far_too_wide_does_not_push_the_date_and_size_off() {
         let avail = 900;
-        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(4000), avail);
+        let w = lay_out(FIVE, |id| (id == "name").then_some(4000), avail);
         assert_eq!(w.iter().sum::<u32>(), avail);
         for (c, got) in COLUMNS
             .iter()
-            .filter(|c| DEFAULT_COLUMNS.contains(&c.id))
+            .filter(|c| FIVE.contains(&c.id))
             .zip(&w)
         {
             assert!(*got >= c.min, "`{}` fell to {got}, under its floor", c.id);
         }
         // And the two on the right are still readable rather than a sliver.
-        let mtime = w[DEFAULT_COLUMNS.iter().position(|i| *i == "mtime").unwrap()];
-        let size = w[DEFAULT_COLUMNS.iter().position(|i| *i == "size").unwrap()];
+        let mtime = w[FIVE.iter().position(|i| *i == "mtime").unwrap()];
+        let size = w[FIVE.iter().position(|i| *i == "size").unwrap()];
         assert!(mtime >= column("mtime").unwrap().min);
         assert!(size >= column("size").unwrap().min);
     }
@@ -966,8 +971,8 @@ mod column_tests {
     /// A wide screen is the location's, not the name's.
     #[test]
     fn the_name_stops_at_its_ceiling_and_the_location_takes_the_rest() {
-        let w = lay_out(DEFAULT_COLUMNS, |_| None, 2400);
-        let at = |id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        let w = lay_out(FIVE, |_| None, 2400);
+        let at = |id: &str| w[FIVE.iter().position(|i| *i == id).unwrap()];
         assert_eq!(at("name"), column("name").unwrap().max, "the name ran on");
         assert!(
             at("path") > at("name"),
@@ -985,11 +990,11 @@ mod column_tests {
     /// room, and whatever it is beside. The location pays for it first.
     #[test]
     fn a_dragged_column_is_as_wide_as_it_was_dragged() {
-        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
-        let free = lay_out(DEFAULT_COLUMNS, |_| None, 1100);
+        let at = |w: &[u32], id: &str| w[FIVE.iter().position(|i| *i == id).unwrap()];
+        let free = lay_out(FIVE, |_| None, 1100);
 
         // Wider than its automatic ceiling and than any share it would get.
-        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(640), 1100);
+        let w = lay_out(FIVE, |id| (id == "name").then_some(640), 1100);
         assert_eq!(at(&w, "name"), 640, "the drag was not honoured: {w:?}");
         assert_eq!(w.iter().sum::<u32>(), 1100);
         // The location gave the room; the fixed columns did not move.
@@ -1000,13 +1005,13 @@ mod column_tests {
 
         // Narrower than it would have been is honoured too, and the location
         // takes the room.
-        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(150), 1100);
+        let w = lay_out(FIVE, |id| (id == "name").then_some(150), 1100);
         assert_eq!(at(&w, "name"), 150);
         assert!(at(&w, "path") > at(&free, "path"));
 
         // A fixed column and a stretching one dragged at once: both kept.
         let w = lay_out(
-            DEFAULT_COLUMNS,
+            FIVE,
             |id| match id {
                 "name" => Some(500),
                 "kind" => Some(200),
@@ -1023,15 +1028,15 @@ mod column_tests {
     /// every size.
     #[test]
     fn a_drag_past_the_room_stops_at_the_floors() {
-        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        let at = |w: &[u32], id: &str| w[FIVE.iter().position(|i| *i == id).unwrap()];
         let pinned = |id: &str| (id == "name").then_some(800);
         for avail in (400..3000).step_by(13) {
-            let w = lay_out(DEFAULT_COLUMNS, pinned, avail);
+            let w = lay_out(FIVE, pinned, avail);
             assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
             assert!(at(&w, "name") <= 800, "a drag grew at {avail}px");
             // While the name is short of what was asked, the location is on
             // its floor: the dragged column is the second to give way.
-            if at(&w, "name") < 800 && avail >= floor_width(DEFAULT_COLUMNS) {
+            if at(&w, "name") < 800 && avail >= floor_width(FIVE) {
                 assert_eq!(
                     at(&w, "path"),
                     column("path").unwrap().min,
@@ -1045,7 +1050,7 @@ mod column_tests {
     #[test]
     fn with_every_stretching_column_dragged_the_row_is_still_full() {
         let w = lay_out(
-            DEFAULT_COLUMNS,
+            FIVE,
             |id| match id {
                 "name" => Some(300),
                 "path" => Some(300),
@@ -1060,16 +1065,16 @@ mod column_tests {
     /// the window grows, and they do it without a step.
     #[test]
     fn the_name_leads_in_a_narrow_window_and_the_location_in_a_wide_one() {
-        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        let at = |w: &[u32], id: &str| w[FIVE.iter().position(|i| *i == id).unwrap()];
 
-        let tight = lay_out(DEFAULT_COLUMNS, |_| None, NARROW);
+        let tight = lay_out(FIVE, |_| None, NARROW);
         assert!(
             at(&tight, "name") >= at(&tight, "path"),
             "narrow: name {} is not leading the location {}",
             at(&tight, "name"),
             at(&tight, "path")
         );
-        let roomy = lay_out(DEFAULT_COLUMNS, |_| None, 2400);
+        let roomy = lay_out(FIVE, |_| None, 2400);
         assert!(
             at(&roomy, "path") > at(&roomy, "name") * 2,
             "wide: the location {} has not overtaken the name {}",
@@ -1080,10 +1085,10 @@ mod column_tests {
         // No step anywhere between: one pixel of window is a pixel or two of
         // column. The 4 is integer rounding on a share carried in parts per
         // thousand, not a threshold.
-        let mut last = lay_out(DEFAULT_COLUMNS, |_| None, 500);
+        let mut last = lay_out(FIVE, |_| None, 500);
         for avail in 501..3000 {
-            let now = lay_out(DEFAULT_COLUMNS, |_| None, avail);
-            for (i, id) in DEFAULT_COLUMNS.iter().enumerate() {
+            let now = lay_out(FIVE, |_| None, avail);
+            for (i, id) in FIVE.iter().enumerate() {
                 let step = now[i].abs_diff(last[i]);
                 assert!(step <= 4, "`{id}` jumped {step}px at {avail}px");
             }
@@ -1094,21 +1099,21 @@ mod column_tests {
     /// What a person dragged is kept, and never quietly grown back.
     #[test]
     fn a_dragged_width_is_not_a_hole_to_pour_space_into() {
-        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(160), 2400);
+        let w = lay_out(FIVE, |id| (id == "name").then_some(160), 2400);
         assert_eq!(w[0], 160, "the name was grown past what was chosen");
         assert_eq!(w.iter().sum::<u32>(), 2400);
         // A remembered width from a narrower window is pulled up to the floor.
-        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "size").then_some(3), 1400);
-        let size = w[DEFAULT_COLUMNS.iter().position(|i| *i == "size").unwrap()];
+        let w = lay_out(FIVE, |id| (id == "size").then_some(3), 1400);
+        let size = w[FIVE.iter().position(|i| *i == "size").unwrap()];
         assert_eq!(size, column("size").unwrap().min);
     }
 
     /// Below every floor at once, they all give way together.
     #[test]
     fn too_narrow_for_the_floors_cramps_them_rather_than_losing_any() {
-        let floor = floor_width(DEFAULT_COLUMNS);
+        let floor = floor_width(FIVE);
         for avail in 10..floor {
-            let w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            let w = lay_out(FIVE, |_| None, avail);
             assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
             assert!(w.iter().all(|x| *x > 0), "a column vanished at {avail}px");
             // Still in the same proportions: the location is the widest.
@@ -1124,15 +1129,15 @@ mod column_tests {
     /// the locations, and only as much as they need.
     #[test]
     fn short_names_hand_their_room_to_long_locations() {
-        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
-        let mut w = lay_out(DEFAULT_COLUMNS, |_| None, 1100);
+        let at = |id| FIVE.iter().position(|i| *i == id).unwrap();
+        let mut w = lay_out(FIVE, |_| None, 1100);
         let before = w.clone();
         let need = |id: &str| match id {
             "name" => Some(120),
             "path" => Some(before[at("path")] + 150),
             _ => None,
         };
-        fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+        fit_to(FIVE, |_| None, need, &mut w);
         assert_eq!(w.iter().sum::<u32>(), 1100);
         assert_eq!(
             w[at("path")],
@@ -1147,15 +1152,15 @@ mod column_tests {
     /// The other way round, and never under the name's own floor.
     #[test]
     fn long_names_take_from_short_locations_down_to_the_floor() {
-        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
-        let mut w = lay_out(DEFAULT_COLUMNS, |_| None, 1000);
+        let at = |id| FIVE.iter().position(|i| *i == id).unwrap();
+        let mut w = lay_out(FIVE, |_| None, 1000);
         let before = w.clone();
         let need = |id: &str| match id {
             "name" => Some(5000),
             "path" => Some(10),
             _ => None,
         };
-        fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+        fit_to(FIVE, |_| None, need, &mut w);
         assert_eq!(w.iter().sum::<u32>(), 1000);
         assert!(w[at("path")] >= column("path").unwrap().min);
         assert!(w[at("path")] < before[at("path")], "{before:?} → {w:?}");
@@ -1171,12 +1176,12 @@ mod column_tests {
     /// A drag is kept exactly, whatever the rows hold.
     #[test]
     fn a_dragged_column_neither_gives_nor_takes() {
-        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
+        let at = |id| FIVE.iter().position(|i| *i == id).unwrap();
         let chosen = |id: &str| (id == "name").then_some(600);
-        let mut w = lay_out(DEFAULT_COLUMNS, chosen, 1300);
+        let mut w = lay_out(FIVE, chosen, 1300);
         let before = w.clone();
         fit_to(
-            DEFAULT_COLUMNS,
+            FIVE,
             chosen,
             |id| Some(if id == "path" { 2000 } else { 40 }),
             &mut w,
@@ -1190,13 +1195,13 @@ mod column_tests {
     fn fitting_keeps_the_total_at_every_size() {
         for avail in (200..3000).step_by(37) {
             for (n, p) in [(10, 3000), (3000, 10), (300, 300), (0, 0), (700, 1200)] {
-                let mut w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+                let mut w = lay_out(FIVE, |_| None, avail);
                 let need = |id: &str| match id {
                     "name" => Some(n),
                     "path" => Some(p),
                     _ => None,
                 };
-                fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+                fit_to(FIVE, |_| None, need, &mut w);
                 assert_eq!(w.iter().sum::<u32>(), avail, "{avail}px {n}/{p}: {w:?}");
             }
         }

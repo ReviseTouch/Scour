@@ -2597,6 +2597,9 @@ msgstr "burada bu adda klasör yok"
 msgid "Filter"
 msgstr "Süzgeç"
 
+msgid "Tab"
+msgstr "Sekme"
+
 msgid "Narrow:"
 msgstr "Daralt:"
 
