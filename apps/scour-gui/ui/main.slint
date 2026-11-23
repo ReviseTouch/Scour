@@ -312,10 +312,13 @@ export struct Cap {
     tone: int,
     // The pointer is on it.
     hov: bool,
-    // A `fuzzy:` term's capsule.
-    fuzzy: bool,
-    // Its header drawn as what it does, ≈: a fuzzy term the caret is not in.
+    // The filter's field, by its canonical name: `dm`, `under`, `fuzzy`…
+    field: string,
+    // Its header drawn as what it does — a clock, a folder, ≈ — when the
+    // caret is not in it and the settings ask for drawings.
     icon: bool,
+    // What the drawing stands for, under the pointer.
+    tip: string,
     // Where it starts, how wide, and how wide its header, from the padding.
     x: length,
     w: length,
@@ -338,6 +341,21 @@ export struct Reach {
 }
 
 // One line of the lens under a term.
+// A day of the time lens's calendar, counted from the epoch so two compare.
+export struct CalDay {
+    n: int,
+    label: string,
+    // In the month shown, not the edge of the one before or after.
+    here: bool,
+    today: bool,
+    future: bool,
+}
+
+export struct CalMonth {
+    title: string,
+    days: [CalDay],
+}
+
 export struct LensRow {
     label: string,
     hint: string,
@@ -1445,6 +1463,85 @@ component Field inherits TextInput {
     }
 }
 
+// A month back or forward in the time lens's calendar.
+component CalArrow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: arrow-hit.has-hover ? Theme.hover : transparent;
+    Text {
+        text: root.label;
+        color: arrow-hit.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    arrow-hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A day in the calendar. Lit between the first day picked and the one under
+// the pointer, or the last picked; the two ends filled.
+component CalCell inherits Rectangle {
+    in property <CalDay> day;
+    in property <int> from;
+    in property <int> to;
+    in property <int> hover;
+    callback entered(int);
+    callback left(int);
+    callback picked(int);
+    property <int> other: root.to >= 0 ? root.to : root.hover >= 0 ? root.hover : root.from;
+    property <int> lo: min(root.from, root.other);
+    property <int> hi: max(root.from, root.other);
+    property <bool> picking: root.from >= 0;
+    property <bool> end: root.picking && (root.day.n == root.lo || root.day.n == root.hi);
+    property <bool> inside: root.picking && root.day.n > root.lo && root.day.n < root.hi;
+    width: 28px;
+    height: 26px;
+    // The band between the ends, square so the days join into one stretch.
+    Rectangle {
+        y: 2px;
+        height: parent.height - 4px;
+        background: root.inside ? Theme.cap : transparent;
+    }
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 6px;
+        background: root.end ? Theme.q-key : cell-hit.has-hover ? Theme.hover : transparent;
+        border-width: root.day.today && !root.end ? 1px : 0px;
+        border-color: Theme.q-key;
+        Text {
+            text: root.day.label;
+            color: root.end ? Theme.panel
+                : !root.day.here || root.day.future ? Theme.ink-3
+                : root.day.today ? Theme.q-key : Theme.ink;
+            opacity: root.day.here ? 1 : 0.55;
+            font-size: 11.5px;
+            font-weight: root.day.today || root.end ? 700 : 400;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    cell-hit := TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => {
+            if (self.has-hover) {
+                root.entered(root.day.n);
+            } else {
+                root.left(root.day.n);
+            }
+        }
+        clicked => { root.picked(root.day.n); }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Scour";
     icon: @image-url("../../../assets/scour.svg");
@@ -1491,8 +1588,6 @@ export component MainWindow inherits Window {
     callback q-pressed(int, int);
     // The term under the pointer, and where its buttons go.
     in property <bool> hov-on;
-    /// What the ≈ of a fuzzy term says under the pointer.
-    in property <string> word-fuzzy-tip: "Similar spelling";
     in property <string> word-add-filter: "Add a filter";
     /// A press in the query asks for the + above the caret; typing puts it away.
     property <bool> plus-asked: false;
@@ -1525,6 +1620,26 @@ export component MainWindow inherits Window {
     in property <bool> lens-place-direct;
     in property <int> lens-sel;
     in property <string> lens-title;
+    // The time lens's calendar: two months, a range picked with two presses.
+    in property <[CalMonth]> cal-months;
+    in property <[string]> cal-week;
+    in property <string> word-calendar: "Calendar";
+    in property <string> cal-hint;
+    in-out property <bool> cal-open;
+    in-out property <int> cal-from: -1;
+    in-out property <int> cal-to: -1;
+    in-out property <int> cal-hover: -1;
+    callback cal-opened();
+    callback cal-shift(int);
+    callback lens-cal-range(int, int);
+    changed lens-open => {
+        if (!self.lens-open) {
+            self.cal-open = false;
+            self.cal-from = -1;
+            self.cal-to = -1;
+            self.cal-hover = -1;
+        }
+    }
     in property <string> lens-said;
     in property <string> lens-foot;
     in property <string> lens-reads;
@@ -2045,6 +2160,12 @@ export component MainWindow inherits Window {
     /// Where a mistake is forgiven: from a word's start, or strictly.
     in property <bool> typos-strict;
     in property <string> set-typos-rule;
+    /// A filter's header drawn as a picture (`dm:` a clock) or as its letters.
+    in property <bool> field-words;
+    in property <string> set-field-words;
+    in property <string> set-field-words-note;
+    in property <[string]> field-words-labels;
+    callback field-words-picked(bool);
     in property <string> set-typos-rule-note;
     in property <[string]> typos-rule-labels;
     callback typos-strict-picked(bool);
@@ -2696,7 +2817,7 @@ export component MainWindow inherits Window {
                         visible: c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         border-radius: 6px;
                         // A fuzzy capsule holds its word: a firmer ring round both.
-                        border-width: c.fuzzy ? 1.5px : 1px;
+                        border-width: c.field == "fuzzy" ? 1.5px : 1px;
                         clip: true;
                         // Tone 3 is an empty `content:`, left out of the search:
                         // a faint ring and no tint, as a control switched off.
@@ -2769,10 +2890,11 @@ export component MainWindow inherits Window {
                                  : Theme.ink;
                     }
 
-                    // A fuzzy term's header, once written, is drawn as what it
-                    // does: ≈ on the capsule's own tint, the word it holds
+                    // A filter's header, once written, is drawn as what it
+                    // does — a clock for `dm:`, a folder for `under:`, ≈ for
+                    // `fuzzy:` — on the capsule's own tint, what it holds
                     // beside it. The caret going in brings the letters back.
-                    for c in root.caps: Rectangle {
+                    for c[ci] in root.caps: Rectangle {
                         visible: c.icon && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
                         x: field.pad + c.x - 2px;
                         y: field.top + (c.line - root.q-first) * root.q-pitch + 3.5px;
@@ -2780,30 +2902,50 @@ export component MainWindow inherits Window {
                         width: c.hw - 2px;
                         height: root.q-pitch - 7px;
                         border-radius: 5px;
-                        background: Theme.cap-ring;
+                        background: c.tone == 1 ? Theme.cap-read-ring : c.tone == 2 ? Theme.cap-neg-ring
+                            : c.tone == 3 ? Theme.line : Theme.cap-ring;
                         property <bool> over: self.visible && q-press.has-hover
                             && q-press.mouse-x >= self.x && q-press.mouse-x < self.x + self.width
                             && q-press.mouse-y >= self.y && q-press.mouse-y < self.y + self.height;
                         changed over => {
                             if (self.over) {
-                                root.tip-owner = -2;
+                                root.tip-owner = -100 - ci;
                                 root.tip-mono = false;
-                                root.tip-pending = root.word-fuzzy-tip;
+                                root.tip-pending = c.tip;
                                 root.tip-x = self.absolute-position.x;
                                 root.tip-y = self.absolute-position.y + self.height + 8px;
-                            } else if (root.tip-owner == -2) {
+                            } else if (root.tip-owner == -100 - ci) {
                                 root.tip-owner = -1;
                                 root.tip-pending = "";
                                 root.tip-text = "";
                             }
                         }
-                        Image {
-                            width: 14px;
-                            height: 14px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            source: @image-url("icons/tools/lens-fuzzy.svg");
-                            colorize: Theme.q-key;
+                        // An excluded filter keeps its `!` in front of the drawing.
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            if c.tone == 2: Text {
+                                text: "!";
+                                color: Theme.q-not;
+                                font-size: 13px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: c.field == "fuzzy" ? @image-url("icons/tools/lens-fuzzy.svg")
+                                        : c.field == "under" || c.field == "parent" ? @image-url("icons/tools/folder.svg")
+                                        : c.field == "dm" ? @image-url("icons/tools/lens-time.svg")
+                                        : c.field == "kind" ? @image-url("icons/tools/field-kind.svg")
+                                        : c.field == "ext" ? @image-url("icons/tools/field-ext.svg")
+                                        : c.field == "size" ? @image-url("icons/tools/field-size.svg")
+                                        : @image-url("icons/tools/lens-content.svg");
+                                    colorize: c.tone == 2 ? Theme.q-not : c.tone == 1 ? Theme.q-bad : Theme.q-key;
+                                }
+                            }
                         }
                     }
 
@@ -6483,16 +6625,115 @@ export component MainWindow inherits Window {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
-                        Text {
+                        if !root.cal-open: Text {
                             text: root.lens-said;
                             color: Theme.ink-3;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
+                        if root.lens-kind == "time": HorizontalLayout {
+                            padding-left: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                TextTool {
+                                    height: 20px;
+                                    label: root.word-calendar;
+                                    on: root.cal-open;
+                                    clicked => {
+                                        root.cal-open = !root.cal-open;
+                                        root.cal-from = -1;
+                                        root.cal-to = -1;
+                                        if (root.cal-open) {
+                                            root.cal-opened();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Two months side by side: a press picks the first day, a
+                    // second the last, the days between lit as the pointer moves.
+                    if root.cal-open && root.lens-kind == "time": VerticalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 2px;
+                        padding-bottom: 8px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 20px;
+                            alignment: center;
+                            for mo[mi] in root.cal-months: VerticalLayout {
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    height: 26px;
+                                    if mi == 0: CalArrow {
+                                        label: "‹";
+                                        clicked => { root.cal-shift(-1); }
+                                    }
+                                    if mi != 0: Rectangle { width: 24px; }
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: mo.title;
+                                        color: Theme.ink;
+                                        font-size: 12.5px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    if mi == root.cal-months.length - 1: CalArrow {
+                                        label: "›";
+                                        clicked => { root.cal-shift(1); }
+                                    }
+                                    if mi != root.cal-months.length - 1: Rectangle { width: 24px; }
+                                }
+                                HorizontalLayout {
+                                    for wd in root.cal-week: Text {
+                                        width: 28px;
+                                        height: 18px;
+                                        text: wd;
+                                        color: Theme.ink-3;
+                                        font-size: 10.5px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                for wk in [0, 1, 2, 3, 4, 5]: HorizontalLayout {
+                                    for dd in [0, 1, 2, 3, 4, 5, 6]: CalCell {
+                                        day: mo.days[wk * 7 + dd];
+                                        from: root.cal-from;
+                                        to: root.cal-to;
+                                        hover: root.cal-hover;
+                                        entered(n) => { root.cal-hover = n; }
+                                        left(n) => {
+                                            if (root.cal-hover == n) {
+                                                root.cal-hover = -1;
+                                            }
+                                        }
+                                        picked(n) => {
+                                            if (root.cal-from < 0 || root.cal-to >= 0) {
+                                                root.cal-from = n;
+                                                root.cal-to = -1;
+                                            } else {
+                                                root.cal-to = n;
+                                                root.lens-cal-range(root.cal-from, n);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.cal-hint;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
                     }
 
                     // Interactive Sparkline Scrubber for Time & Size lenses
-                    if (root.lens-kind == "time" || root.lens-kind == "size") && root.lens-rows.length > 0: VerticalLayout {
+                    if !root.cal-open && (root.lens-kind == "time" || root.lens-kind == "size") && root.lens-rows.length > 0: VerticalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
                         padding-bottom: 6px;
@@ -6566,91 +6807,93 @@ export component MainWindow inherits Window {
                         Rectangle { height: 1px; background: Theme.line-soft; }
                     }
 
-                    for row[i] in root.lens-rows: VerticalLayout {
-                        if row.group != "": Rectangle {
-                            height: row.group == " " ? 7px : 20px;
+                    if !(root.cal-open && root.lens-kind == "time"): VerticalLayout {
+                        for row[i] in root.lens-rows: VerticalLayout {
+                            if row.group != "": Rectangle {
+                                height: row.group == " " ? 7px : 20px;
+                                Rectangle {
+                                    visible: row.group == " ";
+                                    y: 3px;
+                                    height: 1px;
+                                    background: Theme.line;
+                                }
+                                Text {
+                                    x: 12px;
+                                    visible: row.group != " ";
+                                    text: row.group;
+                                    color: Theme.ink-3;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    vertical-alignment: bottom;
+                                    height: parent.height - 2px;
+                                }
+                            }
                             Rectangle {
-                                visible: row.group == " ";
-                                y: 3px;
-                                height: 1px;
-                                background: Theme.line;
-                            }
-                            Text {
-                                x: 12px;
-                                visible: row.group != " ";
-                                text: row.group;
-                                color: Theme.ink-3;
-                                font-size: 11px;
-                                font-weight: 600;
-                                vertical-alignment: bottom;
-                                height: parent.height - 2px;
-                            }
-                        }
-                        Rectangle {
-                            height: 26px;
-                            background: i == root.lens-sel ? Theme.selection
-                                      : lens-touch.has-hover ? Theme.hover : transparent;
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                spacing: 8px;
+                                height: 26px;
+                                background: i == root.lens-sel ? Theme.selection
+                                          : lens-touch.has-hover ? Theme.hover : transparent;
                                 HorizontalLayout {
-                                    spacing: 7px;
-                                    horizontal-stretch: 1;
-                                    Text {
-                                        text: row.label;
-                                        color: row.zero || row.wait ? Theme.ink-3 : Theme.ink;
-                                        font-size: 12.5px;
-                                        font-weight: 500;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: row.hint;
-                                        color: Theme.ink-3;
-                                        font-family: Fonts.mono;
-                                        font-size: 11px;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        spacing: 7px;
                                         horizontal-stretch: 1;
-                                    }
-                                }
-                                if row.reads: Text {
-                                    text: root.lens-foot == "" ? "" : root.lens-reads;
-                                    color: Theme.q-bad;
-                                    font-size: 11.5px;
-                                    vertical-alignment: center;
-                                }
-                                if !row.reads: Rectangle {
-                                    width: 56px;
-                                    Rectangle {
-                                        y: (parent.height - 5px) / 2;
-                                        height: 5px;
-                                        border-radius: 3px;
-                                        background: row.n == "" ? transparent : Theme.line-soft;
-                                        Rectangle {
-                                            x: 0;
-                                            width: parent.width * row.bar;
-                                            height: parent.height;
-                                            border-radius: 3px;
-                                            background: Theme.k3;
+                                        Text {
+                                            text: row.label;
+                                            color: row.zero || row.wait ? Theme.ink-3 : Theme.ink;
+                                            font-size: 12.5px;
+                                            font-weight: 500;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.hint;
+                                            color: Theme.ink-3;
+                                            font-family: Fonts.mono;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
                                         }
                                     }
+                                    if row.reads: Text {
+                                        text: root.lens-foot == "" ? "" : root.lens-reads;
+                                        color: Theme.q-bad;
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                    }
+                                    if !row.reads: Rectangle {
+                                        width: 56px;
+                                        Rectangle {
+                                            y: (parent.height - 5px) / 2;
+                                            height: 5px;
+                                            border-radius: 3px;
+                                            background: row.n == "" ? transparent : Theme.line-soft;
+                                            Rectangle {
+                                                x: 0;
+                                                width: parent.width * row.bar;
+                                                height: parent.height;
+                                                border-radius: 3px;
+                                                background: Theme.k3;
+                                            }
+                                        }
+                                    }
+                                    if !row.reads: Text {
+                                        width: 72px;
+                                        text: row.n;
+                                        color: row.zero ? Theme.ink-3 : Theme.ink-2;
+                                        font-family: Fonts.mono;
+                                        font-size: 11.5px;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
                                 }
-                                if !row.reads: Text {
-                                    width: 72px;
-                                    text: row.n;
-                                    color: row.zero ? Theme.ink-3 : Theme.ink-2;
-                                    font-family: Fonts.mono;
-                                    font-size: 11.5px;
-                                    horizontal-alignment: right;
-                                    vertical-alignment: center;
-                                }
-                            }
-                            lens-touch := TouchArea {
-                                pointer-event(e) => {
-                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                        root.lens-pick(i, row.stays);
+                                lens-touch := TouchArea {
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                            root.lens-pick(i, row.stays);
+                                        }
                                     }
                                 }
                             }
@@ -7312,6 +7555,17 @@ export component MainWindow inherits Window {
                                             values: ["word", "strict"];
                                             value: root.typos-strict ? "strict" : "word";
                                             picked(v) => { root.typos-strict-picked(v == "strict"); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-field-words;
+                                        note: root.set-field-words-note;
+                                        Choice {
+                                            labels: root.field-words-labels;
+                                            values: ["icons", "words"];
+                                            value: root.field-words ? "words" : "icons";
+                                            picked(v) => { root.field-words-picked(v == "words"); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }

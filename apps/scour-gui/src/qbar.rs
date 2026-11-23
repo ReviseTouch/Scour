@@ -22,8 +22,18 @@ pub const HEAD_GAP: f32 = 4.0;
 /// Room inside a capsule after what it holds, so the last letter does not
 /// touch its ring.
 pub const CAP_TAIL: f32 = 3.0;
-/// A fuzzy header drawn as ≈ is this wide, whatever its letters were.
+/// A header drawn as a picture is this wide, whatever its letters were; an
+/// excluded one this much wider, for the `!` in front of it.
 pub const ICON_W: f32 = 27.0;
+pub const NOT_W: f32 = 8.0;
+
+/// The fields a header can be drawn as a picture for.
+pub fn has_icon(field: &str) -> bool {
+    matches!(
+        field,
+        "fuzzy" | "under" | "parent" | "dm" | "kind" | "ext" | "size" | "content"
+    )
+}
 
 #[derive(Default)]
 pub struct Field {
@@ -132,7 +142,7 @@ impl Field {
                         head: (head_ch.clamp(s, e) - s) as i32,
                         tone,
                         hov: false,
-                        fuzzy: t.field == Some("fuzzy"),
+                        field: t.field.unwrap_or("").into(),
                         ..Cap::default()
                     });
                 }
@@ -195,14 +205,16 @@ impl Field {
                 for c in caps.iter().filter(|c| c.line == i as i32 && c.head > 0) {
                     let (a, h) = (c.at.max(0) as usize, c.head as usize);
                     let each = if c.icon {
-                        ICON_W / h as f32
+                        (ICON_W + if c.tone == 2 { NOT_W } else { 0.0 }) / h as f32
                     } else {
                         adv * HEAD_SCALE - HEAD_TIGHT
                     };
                     for x in w.iter_mut().skip(a).take(h) {
                         *x = each;
                     }
-                    if !c.icon && let Some(x) = w.get_mut(a + h - 1) {
+                    if !c.icon
+                        && let Some(x) = w.get_mut(a + h - 1)
+                    {
                         *x += HEAD_GAP;
                     }
                 }

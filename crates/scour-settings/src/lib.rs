@@ -171,6 +171,10 @@ pub struct Settings {
     /// mistake is forgiven anywhere in a match that begins at a word.
     #[serde(default)]
     pub typos_strict: bool,
+    /// A filter's header in the query bar written out (`dm:`) rather than drawn
+    /// as a picture (a clock). Pictures by default.
+    #[serde(default)]
+    pub field_words: bool,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -241,6 +245,7 @@ pub struct Change {
     /// `off`, `always`, or `""` to offer. See [`Settings::typos`].
     pub typos: Option<String>,
     pub typos_strict: Option<bool>,
+    pub field_words: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -367,6 +372,9 @@ impl Change {
         }
         if let Some(v) = self.typos_strict {
             to.typos_strict = v;
+        }
+        if let Some(v) = self.field_words {
+            to.field_words = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

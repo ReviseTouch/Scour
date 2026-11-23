@@ -52,8 +52,9 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, Found, HeadInfo, Kid,
-    LensRow, MainWindow, MenuItem, Reach, Row, Rule, Scheme, Seg, Sel, Slice, Slot, Span, Theme,
+    Bar, Big, CalDay, CalMonth, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts,
+    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, Reach, Row, Rule, Scheme, Seg, Sel, Slice,
+    Slot, Span, Theme,
 };
 
 thread_local! {
@@ -716,6 +717,7 @@ fn main() -> Result<()> {
     window.set_accents_ignored(!kept.accents_exact);
     window.set_typos_choice(typos_choice(&kept.typos).into());
     window.set_typos_strict(kept.typos_strict);
+    window.set_field_words(kept.field_words);
     // Said again: the words were put in above, before the choice was known,
     // and said "offer it" whatever had been chosen.
     window.set_typos_said(typos_said(&cat.borrow(), &window.get_typos_choice()).into());
@@ -1300,6 +1302,23 @@ fn main() -> Result<()> {
     }
 
     // --- how words are read ------------------------------------------------
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_field_words_picked(move |words| {
+            if let Some(w) = weak.upgrade() {
+                w.set_field_words(words);
+                // Drawn again, the headers as now chosen.
+                w.invoke_query_changed(w.get_query());
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    field_words: Some(words),
+                    ..Default::default()
+                },
+            });
+        });
+    }
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
@@ -4003,6 +4022,33 @@ fn main() -> Result<()> {
         }
     }
 
+    // For a photograph of the time lens's calendar: the lens opened on the
+    // query's term, the calendar shown, `SCOUR_GUI_CAL` days ago picked first
+    // and three days ago under the pointer.
+    if let Some(back) = std::env::var("SCOUR_GUI_CAL")
+        .ok()
+        .and_then(|d| d.parse::<i32>().ok())
+    {
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(1200),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.invoke_lens_field("dm".into());
+                w.set_cal_open(true);
+                w.invoke_cal_opened();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let today = scour_ui::calendar::today(now).0 as i32;
+                w.set_cal_from(today - back);
+                w.set_cal_hover(today - 3);
+            },
+        );
+    }
+
     // Photograph the window and leave, when asked. See [`snapshot`].
     if let Ok(path) = std::env::var("SCOUR_GUI_SNAP") {
         let weak = window.as_weak();
@@ -6030,14 +6076,6 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_word_filter_button(t(cat, "Filter"));
     w.set_word_peek(t(cat, "Preview"));
     w.set_word_tab(t(cat, "Tab"));
-    w.set_word_fuzzy_tip(
-        format!(
-            "{} — {}",
-            t(cat, "Similar spelling"),
-            t(cat, "one letter off still matches")
-        )
-        .into(),
-    );
     w.set_word_add_filter(t(cat, "Add a filter"));
     w.set_word_filter_key(t(cat, "filter"));
     w.set_word_tab_key(t(cat, "tab"));
@@ -6061,6 +6099,18 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
          Strict: never in the first four letters, so a longer word never finds more than a shorter one.",
     ));
     w.set_typos_rule_labels(list(&["From a word's start", "Strict"]));
+    w.set_set_field_words(t(cat, "Filter headers"));
+    w.set_set_field_words_note(t(
+        cat,
+        "A filter's name in the query drawn as a picture — a clock for when, a folder for where — or written out. The caret in it writes it out either way.",
+    ));
+    w.set_field_words_labels(list(&["Pictures", "Words"]));
+    w.set_word_calendar(t(cat, "Calendar"));
+    w.set_cal_hint(t(
+        cat,
+        "Press the first day, then the last. The same day twice is that day alone.",
+    ));
+    w.set_cal_week(list(&scour_ui::calendar::WEEKDAYS));
     w.set_set_search_hint(t(
         cat,
         "letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes.",

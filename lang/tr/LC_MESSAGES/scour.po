@@ -2612,6 +2612,81 @@ msgstr "Kelime başından"
 msgid "Strict"
 msgstr "Kesin"
 
+msgid "Filter headers"
+msgstr "Süzgeç başlıkları"
+
+msgid "A filter's name in the query drawn as a picture — a clock for when, a folder for where — or written out. The caret in it writes it out either way."
+msgstr "Sorgudaki süzgeç adı simge olarak (zaman için saat, konum için klasör) ya da yazıyla gösterilir. İmleç içine girince her durumda yazıya döner."
+
+msgid "Pictures"
+msgstr "Simge"
+
+msgid "Words"
+msgstr "Yazı"
+
+msgid "Calendar"
+msgstr "Takvim"
+
+msgid "Press the first day, then the last. The same day twice is that day alone."
+msgstr "Önce ilk güne, sonra son güne bas. Aynı güne iki kez basmak yalnız o günü seçer."
+
+msgid "January"
+msgstr "Ocak"
+
+msgid "February"
+msgstr "Şubat"
+
+msgid "March"
+msgstr "Mart"
+
+msgid "April"
+msgstr "Nisan"
+
+msgid "May"
+msgstr "Mayıs"
+
+msgid "June"
+msgstr "Haziran"
+
+msgid "July"
+msgstr "Temmuz"
+
+msgid "August"
+msgstr "Ağustos"
+
+msgid "September"
+msgstr "Eylül"
+
+msgid "October"
+msgstr "Ekim"
+
+msgid "November"
+msgstr "Kasım"
+
+msgid "December"
+msgstr "Aralık"
+
+msgid "Mo"
+msgstr "Pt"
+
+msgid "Tu"
+msgstr "Sa"
+
+msgid "We"
+msgstr "Ça"
+
+msgid "Th"
+msgstr "Pe"
+
+msgid "Fr"
+msgstr "Cu"
+
+msgid "Sa"
+msgstr "Ct"
+
+msgid "Su"
+msgstr "Pz"
+
 msgid "Narrow:"
 msgstr "Daralt:"
 

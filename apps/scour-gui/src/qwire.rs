@@ -45,6 +45,8 @@ pub struct QueryBar {
     narrow_facets: Option<scour_core::FacetResponse>,
     narrow_usage: Option<scour_core::UsageResponse>,
     chips: Vec<(String, u64, String)>,
+    /// How many months the time lens's calendar is moved back from today's.
+    cal_back: i64,
 }
 
 impl QueryBar {
@@ -115,6 +117,19 @@ fn send(link: &Link, generation: u64, wants: Vec<(u32, scour_proto::Request)>) {
     }
 }
 
+/// What a header drawn as a picture stands for: the filter's name in the list
+/// `:` opens, and what it does.
+fn field_tip(cat: &Catalogue, field: &str) -> String {
+    let key = if field == "parent" { "under" } else { field };
+    lens::LAUNCH
+        .iter()
+        .find(|(f, ..)| f.strip_suffix(':') == Some(key))
+        .map_or_else(
+            || format!("{field}:"),
+            |(_, label, hint)| format!("{} — {}", cat.get(label), cat.get(hint)),
+        )
+}
+
 /// Lay the query out and draw it: the runs, the capsules, the caret, the
 /// selection, the field's height; and the lens, as `lensing` says.
 pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing: Lensing) {
@@ -135,10 +150,16 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         }
     }
     let (line, col, sels) = qb.field.caret(&text, qb.anchor, qb.cursor);
-    // A fuzzy header the caret is not in is drawn as ≈; one being edited
-    // keeps its letters.
+    // A filter's header the caret is not in is drawn as a picture, when the
+    // settings ask for pictures; one being edited keeps its letters.
     for c in &mut caps {
-        c.icon = c.fuzzy && c.head > 0 && !(c.line == line && col > c.at && col < c.at + c.head);
+        c.icon = !w.get_field_words()
+            && qbar::has_icon(&c.field)
+            && c.head > 0
+            && !(c.line == line && col > c.at && col < c.at + c.head);
+        if c.icon {
+            c.tip = field_tip(cat, &c.field).into();
+        }
     }
     // Where every column is drawn, now the headers are known.
     qb.field.advance = w.get_q_advance();
@@ -1405,6 +1426,37 @@ pub fn picked_folder(
     write(w, state, q, caret);
 }
 
+/// The calendar's two months: the one `back` months before today's, and the
+/// one before that, in the language of the window.
+fn show_calendar(w: &MainWindow, back: i64, cat: &Catalogue) {
+    use scour_ui::calendar;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (today, y, m) = calendar::today(now);
+    let months: Vec<crate::CalMonth> = [-1 - back, -back]
+        .into_iter()
+        .map(|delta| {
+            let (y, m) = calendar::shift(y, m, delta);
+            let days: Vec<crate::CalDay> = calendar::month(y, m)
+                .into_iter()
+                .map(|d| crate::CalDay {
+                    n: d.n as i32,
+                    label: d.day.to_string().into(),
+                    here: d.here,
+                    today: d.n == today,
+                    future: d.n > today,
+                })
+                .collect();
+            crate::CalMonth {
+                title: format!("{} {y}", cat.get(calendar::MONTHS[m as usize - 1])).into(),
+                days: ModelRc::new(VecModel::from(days)),
+            }
+        })
+        .collect();
+    w.set_cal_months(ModelRc::new(VecModel::from(months)));
+}
+
 fn wire_v2(
     window: &MainWindow,
     state: &Rc<RefCell<State>>,
@@ -1412,6 +1464,55 @@ fn wire_v2(
     cat: &Rc<RefCell<Rc<Catalogue>>>,
     redraw: impl Fn(Lensing) + Clone + 'static,
 ) {
+    {
+        let (weak, state, cat) = (window.as_weak(), Rc::clone(state), Rc::clone(cat));
+        window.on_cal_opened(move || {
+            let Some(w) = weak.upgrade() else { return };
+            state.borrow_mut().qb.cal_back = 0;
+            show_calendar(&w, 0, &cat.borrow());
+        });
+    }
+    {
+        let (weak, state, cat) = (window.as_weak(), Rc::clone(state), Rc::clone(cat));
+        window.on_cal_shift(move |by| {
+            let Some(w) = weak.upgrade() else { return };
+            // Back into the past only: the newest month shown is today's.
+            let back = (state.borrow().qb.cal_back - i64::from(by)).max(0);
+            state.borrow_mut().qb.cal_back = back;
+            show_calendar(&w, back, &cat.borrow());
+        });
+    }
+    {
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        window.on_lens_cal_range(move |a, b| {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let edit = state.borrow().qb.lenses.open.as_ref().map(|o| {
+                let term = scour_ui::calendar::range_term(
+                    o.term.field.unwrap_or("dm"),
+                    o.term.not,
+                    i64::from(a),
+                    i64::from(b),
+                );
+                (o.a, o.b, term)
+            });
+            let Some((la, lb, term)) = edit else { return };
+            if lb > text.len() {
+                return;
+            }
+            let tail = if !text[lb..].starts_with(char::is_whitespace) {
+                " "
+            } else {
+                ""
+            };
+            let q = format!("{}{term}{tail}{}", &text[..la], &text[lb..]);
+            let caret = la + term.len() + tail.len();
+            state.borrow_mut().qb.lenses.close();
+            w.set_lens_open(false);
+            write(&w, &state, q, caret);
+            redraw(Lensing::Keep);
+        });
+    }
     {
         let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
         window.on_lens_field(move |name| {
