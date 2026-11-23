@@ -1475,7 +1475,7 @@ export component MainWindow inherits Window {
     in property <length> hov-x;
     in property <length> lens-x;
     /// One line of the query: tall enough that a capsule is easy to hit.
-    out property <length> q-pitch: 30px;
+    out property <length> q-pitch: 34px;
     /// One character of the query's face, for Rust to place things with.
     out property <length> q-advance: ruler.preferred-width / 40;
     /// The column under a point of a shown line; `round` for the gap nearest.
@@ -2574,7 +2574,7 @@ export component MainWindow inherits Window {
             // Taller when the query is read back — see `reading`.
             // The bar, a line taller for each line the query wraps onto, and
             // the narrowing line under it, which is always there.
-            height: (root.q-shown - 1) * root.q-pitch + 96px;
+            height: (root.q-shown - 1) * root.q-pitch + 100px;
             background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
@@ -2590,7 +2590,7 @@ export component MainWindow inherits Window {
 
             HorizontalLayout {
                 // The box's own height, so the line under it moves nothing.
-                height: 62px + (root.q-shown - 1) * root.q-pitch;
+                height: 66px + (root.q-shown - 1) * root.q-pitch;
                 padding-left: 16px;
                 padding-right: 12px;
                 padding-top: 10px;
@@ -3280,7 +3280,7 @@ export component MainWindow inherits Window {
                 Rectangle {
                     visible: root.grep-open;
                     width: root.grep-open ? min(410px, max(230px, root.width * 0.34)) : 0px;
-                    height: 38px;
+                    height: 46px;
                     background: Theme.panel;
                     border-radius: 8px;
                     border-width: 1px;
@@ -3430,7 +3430,7 @@ export component MainWindow inherits Window {
                 // One way into the filters, the same list `:` opens: where,
                 // when, what kind, how big, a letter off, inside the file.
                 filter-button := Rectangle {
-                    height: 38px;
+                    height: 46px;
                     width: filter-row.preferred-width + 22px;
                     border-radius: 8px;
                     border-width: Theme.hair;

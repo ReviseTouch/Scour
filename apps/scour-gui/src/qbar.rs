@@ -16,6 +16,9 @@ pub const VISIBLE: usize = 3;
 pub const HEAD_SCALE: f32 = 12.5 / 16.0;
 /// And this much closer, letter to letter: the `letter-spacing` it is drawn with.
 pub const HEAD_TIGHT: f32 = 0.5;
+/// Room between a header and what it holds, past the header's last letter:
+/// drawn small and close, `kind:` ran into its `doc`.
+pub const HEAD_GAP: f32 = 4.0;
 /// A fuzzy header drawn as ≈ is this wide, whatever its letters were.
 pub const ICON_W: f32 = 24.0;
 
@@ -191,6 +194,9 @@ impl Field {
                     for x in w.iter_mut().skip(a).take(h) {
                         *x = each;
                     }
+                    if !c.icon && let Some(x) = w.get_mut(a + h - 1) {
+                        *x += HEAD_GAP;
+                    }
                 }
                 let mut xs = Vec::with_capacity(n + 1);
                 let mut at = 0.0;
@@ -298,8 +304,8 @@ mod tests {
         };
         f.measure(std::slice::from_ref(&cap));
         let narrow = 10.0 * HEAD_SCALE - HEAD_TIGHT;
-        assert!((f.x(0, 4) - 4.0 * narrow).abs() < 0.01);
-        assert!((f.x(0, 5) - (4.0 * narrow + 10.0)).abs() < 0.01);
+        assert!((f.x(0, 4) - (4.0 * narrow + HEAD_GAP)).abs() < 0.01);
+        assert!((f.x(0, 5) - (4.0 * narrow + HEAD_GAP + 10.0)).abs() < 0.01);
         for col in 0..=13 {
             let x = f.x(0, col);
             assert_eq!(f.col_at(0, x, true), col, "a gap at column {col}");
