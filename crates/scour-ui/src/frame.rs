@@ -13,11 +13,7 @@ fn clamp_boundary(s: &str, mut b: usize) -> usize {
 }
 
 /// Byte offset right after `:` when `t` is a recognised filter capsule.
-pub fn head_of(
-    query: &str,
-    t: &Term,
-    mut known_field: impl FnMut(&Term) -> bool,
-) -> Option<usize> {
+pub fn head_of(query: &str, t: &Term, mut known_field: impl FnMut(&Term) -> bool) -> Option<usize> {
     let raw = query.get(t.start..t.end)?;
     let bare = raw.strip_prefix('!').unwrap_or(raw);
     if bare.starts_with('"') {
@@ -84,11 +80,7 @@ pub fn clamp_selection(
 }
 
 /// Snap a pointer press onto the capsule's value rather than its `field:` badge.
-pub fn snap_press(
-    query: &str,
-    offset: usize,
-    mut known_field: impl FnMut(&Term) -> bool,
-) -> usize {
+pub fn snap_press(query: &str, offset: usize, mut known_field: impl FnMut(&Term) -> bool) -> usize {
     let off = clamp_boundary(query, offset);
     for t in lens::terms(query) {
         let Some(head) = head_of(query, &t, &mut known_field) else {
@@ -183,11 +175,7 @@ pub fn delete_forward(
         if c > t.start && c < head {
             return Some((query.to_string(), value_start(query, head, t.end)));
         }
-        if c + 1 == t.start
-            && b.get(c) == Some(&b' ')
-            && c > 0
-            && !b[c - 1].is_ascii_whitespace()
-        {
+        if c + 1 == t.start && b.get(c) == Some(&b' ') && c > 0 && !b[c - 1].is_ascii_whitespace() {
             return Some((query.to_string(), t.start));
         }
     }
@@ -202,7 +190,10 @@ pub fn insert_before(
     inserted: &str,
     mut known_field: impl FnMut(&Term) -> bool,
 ) -> Option<(String, usize)> {
-    if inserted.is_empty() || inserted.chars().all(char::is_control) {
+    // A key that is not a letter — an arrow, End, F2 — arrives as text too, in
+    // the private use area: written in, it was a blank before the capsule.
+    let key = |ch: char| ch.is_control() || ('\u{E000}'..='\u{F8FF}').contains(&ch);
+    if inserted.is_empty() || inserted.chars().any(key) {
         return None;
     }
     if inserted.ends_with(char::is_whitespace) {
@@ -224,6 +215,17 @@ mod tests {
 
     fn known(t: &Term) -> bool {
         t.field.is_some()
+    }
+
+    /// An arrow or End pressed in front of a capsule moves the caret; it is
+    /// not text to keep apart from the capsule.
+    #[test]
+    fn a_key_that_is_not_a_letter_is_not_written_before_a_capsule() {
+        let q = "ext:docx";
+        assert!(insert_before(q, 0, "a", known).is_some());
+        for key in ["\u{F72B}", "\u{F703}", "\u{1b}"] {
+            assert_eq!(insert_before(q, 0, key, known), None, "{key:?}");
+        }
     }
 
     #[test]

@@ -2882,3 +2882,31 @@ msgid "Search inside matching files… (a;b  !c)"
 msgstr "Eşleşen dosyaların içinde ara… (a;b  !c)"
 
 
+
+# --- Capsules: what an empty filter asks for, and the line that reads files ---
+msgid "when?"
+msgstr "ne zaman?"
+
+msgid "how big?"
+msgstr "ne kadar büyük?"
+
+msgid "which type?"
+msgstr "hangi tür?"
+
+msgid "pdf, rs…"
+msgstr "pdf, rs…"
+
+msgid "which folder?"
+msgstr "hangi klasör?"
+
+msgid "text inside the files"
+msgstr "dosyaların içindeki metin"
+
+msgid "a word"
+msgstr "bir kelime"
+
+msgid "{n} files to read"
+msgstr "{n} dosya okunacak"
+
+msgid "in {n} files"
+msgstr "{n} dosyada"

@@ -22,10 +22,24 @@ pub const HEAD_GAP: f32 = 4.0;
 /// Room inside a capsule after what it holds, so the last letter does not
 /// touch its ring.
 pub const CAP_TAIL: f32 = 3.0;
+/// And after what a filter holds, whose capsule has a header: the value sits
+/// in a room of its own, as far from the ring as from the header.
+pub const VALUE_TAIL: f32 = 8.0;
+/// A filter being written is at least this wide past its header: a place to
+/// type, before there is anything in it.
+pub const WELL_MIN: f32 = 88.0;
+/// A header drawn as a picture and a name: the ring to the picture, the
+/// picture, the picture to the name, the name to the header's edge, and the
+/// edge to what the filter holds.
+pub const HEAD_LEAD: f32 = 3.0;
+pub const HEAD_PIC: f32 = 16.0;
+pub const HEAD_JOIN: f32 = 5.0;
+pub const HEAD_TRAIL: f32 = 8.0;
+pub const HEAD_ROOM: f32 = 9.0;
 /// A header drawn as a picture is this wide, whatever its letters were; an
 /// excluded one this much wider, for the `!` in front of it.
 pub const ICON_W: f32 = 27.0;
-pub const NOT_W: f32 = 8.0;
+pub const NOT_W: f32 = 11.0;
 
 /// The fields a header can be drawn as a picture for.
 pub fn has_icon(field: &str) -> bool {
@@ -114,13 +128,16 @@ impl Field {
                 .iter()
                 .filter(inside)
                 .any(|s| s.role == scour_core::Role::Field);
+            // A value that cannot be read yet keeps its capsule — it is a
+            // filter being written, and its colour says the rest. A field
+            // that is not one has none.
             let wrong = read.iter().filter(inside).any(|s| s.role.is_warning());
-            if wrong || !(t.not || named || t.field.is_some()) {
+            if (wrong && !named) || !(t.not || named || t.field.is_some()) {
                 continue;
             }
-            // An empty `content:` is left out of the search: drawn idle, a ring
-            // with no tint, until something is typed in it.
-            let tone = if t.field == Some("content") && t.value.trim().is_empty() {
+            // A filter with nothing after its colon is left out of the search:
+            // drawn idle, a ring with no tint, until it holds something.
+            let tone = if t.field.is_some() && t.value.trim().is_empty() {
                 3
             } else if t.not {
                 2
@@ -143,6 +160,10 @@ impl Field {
                         tone,
                         hov: false,
                         field: t.field.unwrap_or("").into(),
+                        from: t.start as i32,
+                        to: t.end as i32,
+                        whole: s == a && e == b,
+                        raw: t.value.as_str().into(),
                         ..Cap::default()
                     });
                 }
@@ -198,24 +219,33 @@ impl Field {
                 let n = l.end.saturating_sub(l.start);
                 let mut w = vec![adv; n];
                 for c in caps.iter().filter(|c| c.line == i as i32 && c.len > 0) {
-                    if let Some(x) = w.get_mut((c.at + c.len - 1).max(0) as usize) {
-                        *x += CAP_TAIL;
+                    let (a, h, len) = (c.at.max(0) as usize, c.head as usize, c.len as usize);
+                    if h > 0 {
+                        let each = if c.icon && c.head_w > 0.0 {
+                            c.head_w / h as f32
+                        } else if c.icon {
+                            (ICON_W + if c.tone == 2 { NOT_W } else { 0.0 }) / h as f32
+                        } else {
+                            adv * HEAD_SCALE - HEAD_TIGHT
+                        };
+                        for x in w.iter_mut().skip(a).take(h) {
+                            *x = each;
+                        }
+                        if !c.icon
+                            && let Some(x) = w.get_mut(a + h - 1)
+                        {
+                            *x += HEAD_GAP;
+                        }
                     }
-                }
-                for c in caps.iter().filter(|c| c.line == i as i32 && c.head > 0) {
-                    let (a, h) = (c.at.max(0) as usize, c.head as usize);
-                    let each = if c.icon {
-                        (ICON_W + if c.tone == 2 { NOT_W } else { 0.0 }) / h as f32
-                    } else {
-                        adv * HEAD_SCALE - HEAD_TIGHT
-                    };
-                    for x in w.iter_mut().skip(a).take(h) {
-                        *x = each;
+                    // What it holds, said in words: as wide as the words.
+                    if c.nice_w > 0.0 && len > h {
+                        let each = c.nice_w / (len - h) as f32;
+                        for x in w.iter_mut().skip(a + h).take(len - h) {
+                            *x = each;
+                        }
                     }
-                    if !c.icon
-                        && let Some(x) = w.get_mut(a + h - 1)
-                    {
-                        *x += HEAD_GAP;
+                    if let Some(x) = w.get_mut(a + len - 1) {
+                        *x += if c.tail > 0.0 { c.tail } else { CAP_TAIL };
                     }
                 }
                 let mut xs = Vec::with_capacity(n + 1);

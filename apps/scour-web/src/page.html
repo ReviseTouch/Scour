@@ -88,31 +88,42 @@
   .qtrig.grep-on { color: var(--q-bad); border-color: var(--cap-read-ring); background: var(--cap-read); }
   .qtrig.grep-on .gi { color: var(--q-bad); }
   @media (max-width: 980px) { .qtrig .qlab { display: none; } .qtrig { padding: 0 8px; } }
-  /* Inline on-demand Grep capsule: hidden until opened. */
+  /* The field, and under it — in the same box — the line that searches what
+     the files hold: written, not chosen, so it is a field and not a capsule. */
+  .qbox { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .qbox:has(.grep-bar:not([hidden])) .qline { border-radius: 8px 8px 0 0; }
   .grep-bar {
     display: flex; align-items: center; gap: 6px;
-    flex: 0 1 540px; min-width: 320px; height: 34px; padding: 0 8px 0 10px;
-    background: var(--panel); border: 1px solid var(--cap-read-ring);
-    border-radius: 8px; box-shadow: 0 0 0 2px var(--cap-read);
+    height: 36px; padding: 0 6px 0 0; box-sizing: border-box;
+    background: var(--cap-read); border: 1px solid var(--cap-read-ring); border-top: 0;
+    border-radius: 0 0 8px 8px; overflow: hidden;
   }
   .grep-bar[hidden] { display: none; }
   .grep-bar:focus-within { border-color: var(--q-bad); }
+  .grep-bar .ghead {
+    flex: none; align-self: stretch; display: flex; align-items: center; gap: 6px;
+    padding: 0 11px; margin-right: 4px; user-select: none;
+    background: color-mix(in srgb, var(--cap-read-ring) 55%, transparent);
+    color: var(--q-bad); font: 600 12px/1 var(--sans);
+  }
+  .grep-bar .gmeter { flex: none; color: var(--q-bad); font: 400 12px/1 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 760px) { .grep-bar .gmeter { display: none; } }
   .grep-bar .gp { flex: none; font: 700 13px/1 var(--mono); color: var(--q-bad); user-select: none; }
   .grep-bar input {
     flex: 1; min-width: 80px; border: 0; outline: 0; background: none;
-    color: var(--ink); font: 500 13.5px/1 var(--mono); padding: 0;
+    color: var(--ink); font: 500 14px/1 var(--mono); padding: 0;
   }
   .grep-bar input::placeholder { color: var(--ink-3); }
-  .grep-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex: none; }
+  .grep-seg { display: inline-flex; border: 1px solid var(--cap-read-ring); border-radius: 6px; overflow: hidden; flex: none; }
   .grep-seg button, .grep-flag {
-    border: 0; background: none; color: var(--ink-3); font: 600 11px/1 var(--mono);
+    border: 0; background: none; color: var(--ink-2); font: 600 11px/1 var(--mono);
     height: 22px; padding: 0 6px; cursor: pointer;
   }
   .grep-seg button:hover, .grep-flag:hover { color: var(--ink); background: var(--hover); }
   .grep-seg button[aria-pressed="true"], .grep-flag[aria-pressed="true"] {
-    color: var(--ink); background: var(--line-soft);
+    color: var(--ink); background: var(--cap-read-ring);
   }
-  .grep-flag { border: 1px solid var(--line); border-radius: 6px; flex: none; }
+  .grep-flag { border: 1px solid var(--cap-read-ring); border-radius: 6px; flex: none; }
   .grep-x {
     border: 0; background: none; color: var(--ink-3); width: 22px; height: 22px;
     border-radius: 5px; font: 600 14px/1 var(--sans); cursor: pointer; padding: 0; flex: none;
@@ -162,7 +173,6 @@
     display: flex;
     align-items: flex-start;
     gap: calc(var(--u) * 3);
-    flex: 1;
     min-width: 0;
     /* A field, as a desktop draws one: a box, not an underline. */
     background: var(--panel);
@@ -173,16 +183,16 @@
   .qline:focus-within { border-color: var(--focus); }
   .prompt {
     flex: none;
-    font: 500 15px/22px var(--mono);
+    font: 500 15px/36px var(--mono);
     color: var(--ink-3);
     user-select: none;
   }
   .qline:focus-within .prompt { color: var(--ink-2); }
 
-  /* Up to three lines of 22px, then the box scrolls inside itself. The
+  /* Up to three lines of 36px, then the box scrolls inside itself. The
      coloured layer wraps by the same rules at the same width, so a term is
      drawn where its letters are. */
-  .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; --q-lh: 22px; }
+  .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; --q-lh: 36px; }
   .qfield textarea {
     display: block;
     width: 100%;
@@ -266,7 +276,9 @@
      A plain word stays bare; an excluded one is tinted red; `content:` amber,
      because it reads files. */
   .qshadow .term.cap {
-    border-radius: 5px;
+    border-radius: 8px;
+    /* Tall as the window's: the padding is the tint's, it moves no letter. */
+    padding-block: 5px;
     background: var(--cap);
     box-shadow: 0 0 0 2px var(--cap), 0 0 0 3px var(--cap-ring);
     -webkit-box-decoration-break: clone;
@@ -276,15 +288,25 @@
   .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); }
   .qshadow .term.cap.idle { --cap: transparent; --cap-ring: var(--line); }
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
+  /* The filter the caret is in is being written: the field's own focus. */
+  .qshadow .term.cap.edit { box-shadow: 0 0 0 2px var(--cap), 0 0 0 4px var(--focus); }
+  /* An empty one says what it is waiting for, past its ring. */
+  .qshadow .term.cap.idle.edit { position: relative; }
+  .qshadow .term.cap.idle.edit::after {
+    content: attr(data-hint); position: absolute; left: 100%; top: 0; bottom: 0;
+    margin-left: 10px; display: flex; align-items: center; white-space: nowrap;
+    color: var(--ink-3); font: 400 14px/1 var(--sans); letter-spacing: 0;
+  }
   /* A capsule's frame — field, colon, quotes — is one colour, the label's:
      it is not typed into. Only the value reads as text. */
   .qshadow .term.cap .cap-head {
-    border-radius: 4px 0 0 4px;
-    background: color-mix(in srgb, var(--cap-ring) 42%, transparent);
+    border-radius: 7px 0 0 7px;
+    padding-block: 5px;
+    background: color-mix(in srgb, var(--cap-ring) 55%, transparent);
     box-shadow: inset -1px 0 0 var(--cap-ring),
-                -2px 0 0 color-mix(in srgb, var(--cap-ring) 42%, transparent),
-                0 2px 0 color-mix(in srgb, var(--cap-ring) 42%, transparent),
-                0 -2px 0 color-mix(in srgb, var(--cap-ring) 42%, transparent);
+                -2px 0 0 color-mix(in srgb, var(--cap-ring) 55%, transparent),
+                0 2px 0 color-mix(in srgb, var(--cap-ring) 55%, transparent),
+                0 -2px 0 color-mix(in srgb, var(--cap-ring) 55%, transparent);
   }
   .qshadow .term.cap .r-colon, .qshadow .term.cap .r-quote { color: var(--q-key); font-weight: 700; }
   .qshadow .term.cap .cap-head .r-colon { opacity: .55; }
@@ -2109,6 +2131,7 @@
   <div class="app">
     <div class="query">
       <div class="brand"><img class="logo" src="@LOGO@" alt="">Scour</div>
+      <div class="qbox">
       <div class="qline">
         <span class="prompt" aria-hidden="true">⌕</span>
         <div class="qfield">
@@ -2129,9 +2152,10 @@
           <div class="lens" id="lens" role="listbox" data-t-aria="Choices" hidden></div>
         </div>
       </div>
-      <!-- Inline on-demand Grep capsule: zero clutter until opened. -->
+      <!-- What the files hold: a line of its own under the field, in the
+           same box. Hidden until asked for. -->
       <div class="grep-bar" id="grep-bar" hidden>
-        <span class="gp" aria-hidden="true">≣</span>
+        <span class="ghead"><span aria-hidden="true">≣</span><span data-t="Inside"></span></span>
         <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
                data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
         <div class="grep-seg" role="group">
@@ -2143,8 +2167,10 @@
                 data-t-title="Exact case" data-t-aria="Exact case">Aa</button>
         <button type="button" class="grep-flag" id="grep-bin" aria-pressed="false"
                 data-t-title="Include binary files" data-t-aria="Include binary files">01</button>
+        <span class="gmeter" id="grep-meter"></span>
         <button type="button" class="grep-x" id="grep-close"
                 data-t-title="Close grep" data-t-aria="Close grep">×</button>
+      </div>
       </div>
       <!-- Quiet on-demand lenses and filters: unfold only when asked. -->
       <div class="qtriggers" id="qtriggers">
@@ -3498,10 +3524,53 @@
     const f = sp && field(sp[0]);
     if (sp && !f) return "word";
     if (f && sp[1] && f.takes !== "none" && !accepts(f, sp[1])) return "word";
-    // An empty `content:` is left out of the search: drawn idle until typed in.
-    if (f && f.name === "content" && !(sp[1] || "").replace(/"/g, "").trim()) return "cap idle";
+    // A filter with nothing after its colon is left out of the search: drawn
+    // idle until it holds something.
+    if (f && f.takes !== "none" && !(sp[1] || "").replace(/"/g, "").trim()) return "cap idle";
     if (f) return "cap" + (f.name === "content" ? " read" : "") + (neg ? " neg" : "");
     return neg ? "cap neg" : "word";
+  }
+
+  /* What an empty filter asks for, said beside it. */
+  function capHint(raw) {
+    const body = raw.startsWith("!") ? raw.slice(1) : raw;
+    const sp = fieldSplit(body);
+    const f = sp && field(sp[0]);
+    const id = { dm: "when?", dc: "when?", da: "when?", size: "how big?", kind: "which type?",
+      ext: "pdf, rs…", under: "which folder?", parent: "which folder?",
+      content: "text inside the files" }[f ? f.name : ""];
+    return id ? T(id) : "";
+  }
+
+  /* A filter with nothing after its colon, which the caret is not in: where
+     it is, or null. */
+  function emptyFilter(v, caret) {
+    for (const [a, b] of terms(v)) {
+      if (!/\bidle\b/.test(termClass(v.slice(a, b)))) continue;
+      if (caret == null || !(caret > a && caret <= b)) return [a, b];
+    }
+    return null;
+  }
+
+  /* A filter with nothing in it does not stay behind: leaving it takes it
+     out. The space in front of it stays, so the caret is left outside the
+     term before it. True when one went. */
+  function dropEmpty(stayingIn) {
+    const v = q.value;
+    const t = emptyFilter(v, stayingIn);
+    if (!t) return false;
+    const [a, b] = t;
+    const cur = q.selectionStart;
+    let rest = v.slice(b);
+    const head = v.slice(0, a);
+    if ((!head || head.endsWith(" ")) && rest.startsWith(" ")) rest = rest.slice(1);
+    const next = head + rest;
+    const caret = cur > b ? cur - (v.length - next.length) : Math.min(cur, a);
+    lensClose();
+    q.value = next;
+    q.setSelectionRange(caret, caret);
+    render();
+    return true;
   }
 
   function capHeadOf(text, a, b) {
@@ -3558,9 +3627,12 @@
         while (!open && k < ts.length && ts[k][1] <= pos) k++;
         if (!open && k < ts.length && pos >= ts[k][0]) {
           const [a, b] = ts[k];
-          const cls = termClass(text.slice(a, b));
+          let cls = termClass(text.slice(a, b));
+          const isCap = /\bcap\b/.test(cls);
+          if (isCap && caret > a && caret <= b && q.selectionEnd === caret) cls += " edit";
           html += '<span class="term ' + cls +
-            '" data-a="' + a + '" data-b="' + b + '">';
+            '" data-a="' + a + '" data-b="' + b + '"' +
+            (/\bidle\b/.test(cls) ? ' data-hint="' + escape_(capHint(text.slice(a, b))) + '"' : "") + ">";
           open = true;
           headAt = /\bcap\b/.test(cls) ? capHeadOf(text, a, b) : -1;
           if (headAt > pos) { html += '<span class="cap-head">'; headOpen = true; }
@@ -4508,7 +4580,16 @@
     const v = q.value;
     let text = it.term;
     let caretIn = null;
-    if (it.launch && text === "content:") { text = 'content:""'; caretIn = a + text.length - 1; }
+    // What the files hold is not a filter in the query but the line under
+    // the field: the `:` that asked goes, and that line opens.
+    if (it.launch && text === "content:") {
+      lensClose();
+      q.value = v.slice(0, a) + v.slice(b);
+      q.setSelectionRange(a, a);
+      render();
+      setGrepOpen(true);
+      return;
+    }
     const deeper = stay && it.dir;
     if (deeper) text = text.replace(/"$/, "") + (text.endsWith('"') ? '/"' : "/");
     const keep = it.launch || (stay && (it.stays || deeper));
@@ -4669,6 +4750,8 @@
     if (c !== q.selectionEnd) return had;
     const t = lensTerm(q.value, c);
     if (!t || c !== t.b || !/cap/.test(termClass(t.raw))) return had;
+    // Left with nothing in it, a filter goes rather than stays empty.
+    if (/\bidle\b/.test(termClass(t.raw))) return dropEmpty(null);
     const v = q.value;
     if (!/\s/.test(v[c] || "")) q.value = v.slice(0, c) + " " + v.slice(c);
     q.setSelectionRange(c + 1, c + 1);
@@ -4861,7 +4944,7 @@
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (LENS.kind === "launch") dropLauncher(); else lensClose();
+      if (LENS.kind === "launch") dropLauncher(); else if (!dropEmpty(null)) lensClose();
     }
   }, true);
 
@@ -5042,6 +5125,7 @@
   function setTotal(total, exact) {
     LIST.total = total;
     LIST.exact = exact;
+    if (grepReady) drawGrepMeter(false);
     empty.hidden = LIST.total !== 0;
     if (LIST.total !== 0) similarBox.hidden = true;
     dropBeyond();
@@ -5283,6 +5367,20 @@
   const grepBinBtn = document.getElementById("grep-bin");
   let GREP = { mode: "text", exact: false, binary: false, files: [], next: null, gen: 0, stop: null, timer: 0 };
 
+  /* What the inside line says at its end: how many files a pattern would be
+     read in, that they are being read, or how many hold it. */
+  const grepMeter = document.getElementById("grep-meter");
+  // `var`: a total can land before this line has run, and must find a name.
+  var grepReady = true;
+  function drawGrepMeter(reading) {
+    if (grepBar.hidden) return;
+    const n = (k) => fmt(k);
+    grepMeter.textContent = !grepInput.value
+      ? T("{n} files to read", { n: n(LIST.total) + (LIST.exact ? "" : "+") })
+      : reading ? T("reading…")
+      : T("in {n} files", { n: n(GREP.files.length) + (GREP.next != null ? "+" : "") });
+  }
+
   function setGrepOpen(open) {
     grepBar.hidden = !open;
     syncTriggers(q.value);
@@ -5298,6 +5396,7 @@
     }
     grepInput.focus();
     grepInput.select();
+    drawGrepMeter(false);
     if (grepInput.value.trim()) grepSoon(false);
   }
 
@@ -5309,8 +5408,10 @@
       if (GREP.stop) GREP.stop.abort();
       grepView.hidden = true;
       scrollEl.hidden = false;
+      drawGrepMeter(false);
       return;
     }
+    drawGrepMeter(true);
     GREP.timer = setTimeout(() => runGrep(append), append ? 0 : 180);
   }
 
@@ -5343,6 +5444,7 @@
       if (mine !== GREP.gen) return;
       GREP.files = append ? GREP.files.concat(res.files || []) : (res.files || []);
       GREP.next = res.next ?? null;
+      drawGrepMeter(false);
       drawGrep(res);
     }).catch((err) => {
       if (err && err.name === "AbortError") return;
@@ -7323,6 +7425,8 @@
     queryPressing = true;
     clampQuerySelection();
     queryPressing = false;
+    /* A press anywhere else leaves an empty filter, which goes. */
+    if (dropEmpty(q.selectionStart)) return;
     paint(q.value);
     showHints();
     /* A press past the end of the text leaves the term there. */

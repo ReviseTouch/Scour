@@ -53,8 +53,8 @@ mod ui {
 
 pub use ui::{
     Bar, Big, CalDay, CalMonth, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts,
-    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, Reach, Row, Rule, Scheme, Seg, Sel, Slice,
-    Slot, Span, Theme,
+    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, QMeasure, Reach, Row, Rule, Scheme, Seg,
+    Sel, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -4797,6 +4797,7 @@ fn apply(
                 );
                 state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
                 qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total);
+                grep_ui::listed(w, &mut state.borrow_mut(), cat, r.total, r.capped);
                 qwire::narrow(w, &mut state.borrow_mut(), link, cat, r.total);
             }
             let now = unix_now();
@@ -5112,6 +5113,7 @@ fn apply(
                 // And the list gets as long as the answer: the interactive search
                 // counts only to its cap, so the list ran out above the result.
                 rows.set_total(total.min(i32::MAX as u64) as usize);
+                grep_ui::listed(w, &mut state.borrow_mut(), cat, total, capped);
                 // Only the second number moves: a meter that reflows reads as a
                 // window changing its mind.
                 trace(&format!(
@@ -6132,6 +6134,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_word_direct_only(t(cat, "only what is directly inside"));
     w.set_word_spark_hint(t(cat, "Click or drag across bars to pick a range"));
     w.set_word_narrow_pill(t(cat, "Narrow"));
+    w.set_word_inside(t(cat, "Inside"));
     w.set_set_later(t(cat, "Disks that come later"));
     w.set_set_removable(t(cat, "A disk plugged in"));
     w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));

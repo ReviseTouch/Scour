@@ -67,6 +67,9 @@ pub enum Chosen {
     },
     /// Index this disk.
     Disk(String),
+    /// What the files hold: not a filter in the query but the line under the
+    /// field. The query is this — the `:` that asked taken out — the caret here.
+    Inside { query: String, caret: usize },
 }
 
 #[derive(Default)]
@@ -364,10 +367,13 @@ impl Lenses {
             return Some(Chosen::Disk(id));
         }
         let mut text = it.term.clone();
-        let mut caret_in = None;
         if it.launch && text == "content:" {
-            text = "content:\"\"".into();
-            caret_in = Some(o.a + text.len() - 1);
+            // The `:` alone goes; the space before it stays, so the caret is
+            // left outside the term in front.
+            let query = format!("{}{}", &q[..o.a], &q[o.b..]);
+            let caret = o.a;
+            self.close();
+            return Some(Chosen::Inside { query, caret });
         }
         let deeper = stay && it.dir.is_some();
         let quoted = text.ends_with('"');
@@ -385,8 +391,7 @@ impl Lenses {
             ""
         };
         let query = format!("{}{text}{tail}{}", &q[..o.a], &q[o.b..]);
-        let caret =
-            caret_in.unwrap_or(o.a + text.len() - usize::from(deeper && quoted) + tail.len());
+        let caret = o.a + text.len() - usize::from(deeper && quoted) + tail.len();
         if it.launch || deeper {
             o.sel = 0;
         }
@@ -420,7 +425,10 @@ impl Lenses {
         match o.kind {
             Lens::Time => {
                 let edges = ["1d", "2d", "7d", "30d", "365d"];
-                Some(format!("{neg}dm:{}", edges.get(hi).copied().unwrap_or("365d")))
+                Some(format!(
+                    "{neg}dm:{}",
+                    edges.get(hi).copied().unwrap_or("365d")
+                ))
             }
             Lens::Size => {
                 let lo_edge = ["", "100kb", "10mb", "1gb"].get(lo).copied().unwrap_or("");

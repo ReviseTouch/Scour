@@ -47,6 +47,11 @@ pub struct QueryBar {
     chips: Vec<(String, u64, String)>,
     /// How many months the time lens's calendar is moved back from today's.
     cal_back: i64,
+    /// How wide the window draws each word a capsule shows in its own face —
+    /// a header's name, a value said in words — and the words it was asked to
+    /// measure, in the order it was asked.
+    widths: std::collections::HashMap<(String, bool), f32>,
+    asked: Vec<(String, bool)>,
 }
 
 impl QueryBar {
@@ -130,6 +135,123 @@ fn field_tip(cat: &Catalogue, field: &str) -> String {
         )
 }
 
+/// The name a header drawn as a picture carries beside it: the filter's, as
+/// the list `:` opens says it. An ≈ says itself.
+fn head_label(cat: &Catalogue, field: &str) -> String {
+    let key = if field == "parent" { "under" } else { field };
+    if key == "fuzzy" {
+        return String::new();
+    }
+    lens::LAUNCH
+        .iter()
+        .find(|(f, ..)| f.strip_suffix(':') == Some(key))
+        .map_or_else(String::new, |(_, label, _)| cat.get(label).into_owned())
+}
+
+/// What an empty filter asks for, in the place its value will be.
+fn head_hint(cat: &Catalogue, field: &str) -> String {
+    let id = match field {
+        "dm" => "when?",
+        "size" => "how big?",
+        "kind" => "which type?",
+        "ext" => "pdf, rs…",
+        "under" | "parent" => "which folder?",
+        "content" => "text inside the files",
+        _ => "a word",
+    };
+    cat.get(id).into_owned()
+}
+
+/// What a filter holds, in words, when it holds one of the values its lens
+/// offers: `7d` is "last 7 days", `doc` is "Document".
+fn friendly(cat: &Catalogue, field: &str, raw: &str) -> Option<String> {
+    let band = |bands: &[(&str, &str)]| {
+        bands
+            .iter()
+            .find(|(v, _)| *v == raw)
+            .map(|(_, l)| cat.get(l).into_owned())
+    };
+    match field {
+        "dm" => band(lens::TIMES),
+        "size" => band(lens::SIZES),
+        "kind" if lens::KINDS.contains(&raw) => scour_core::Kind::from_name(raw)
+            .and_then(|k| k.first())
+            .map(|k| cat.get(k.msgid()).into_owned()),
+        _ => None,
+    }
+}
+
+/// How wide the window draws `text` — in a header's face, or `big`, a
+/// value's. Not measured yet, it is asked for and guessed at meanwhile.
+fn width_of(qb: &mut QueryBar, text: &str, big: bool) -> f32 {
+    let key = (text.to_string(), big);
+    if let Some(w) = qb.widths.get(&key) {
+        return *w;
+    }
+    if !qb.asked.contains(&key) {
+        qb.asked.push(key);
+    }
+    text.chars().count() as f32 * if big { 8.4 } else { 6.9 }
+}
+
+/// The window measured one of the words it was asked to. True when that
+/// moves something.
+pub fn measured(s: &mut State, i: usize, w: f32) -> bool {
+    let Some(key) = s.qb.asked.get(i).cloned() else {
+        return false;
+    };
+    if w <= 0.0
+        || s.qb
+            .widths
+            .get(&key)
+            .is_some_and(|old| (old - w).abs() < 0.05)
+    {
+        return false;
+    }
+    s.qb.widths.insert(key, w);
+    true
+}
+
+/// Take the letters of one stretch of a line out of the runs, or draw them
+/// small: a header's, or a value said in words instead.
+fn carve(
+    runs: Vec<crate::Span>,
+    line: i32,
+    from: i32,
+    to: i32,
+    small: Option<bool>,
+) -> Vec<crate::Span> {
+    runs.into_iter()
+        .flat_map(|r| {
+            let len = r.text.chars().count() as i32;
+            if r.line != line || r.at + len <= from || r.at >= to {
+                return vec![r];
+            }
+            let chars: Vec<char> = r.text.chars().collect();
+            let piece = |a: i32, b: i32, small: bool| crate::Span {
+                text: chars[(a - r.at) as usize..(b - r.at) as usize]
+                    .iter()
+                    .collect::<String>()
+                    .into(),
+                at: a,
+                small,
+                ..r.clone()
+            };
+            let mut kept = Vec::new();
+            if r.at < from {
+                kept.push(piece(r.at, from, r.small));
+            }
+            if let Some(small) = small {
+                kept.push(piece(r.at.max(from), (r.at + len).min(to), small));
+            }
+            if r.at + len > to {
+                kept.push(piece(to, r.at + len, r.small));
+            }
+            kept
+        })
+        .collect()
+}
+
 /// Lay the query out and draw it: the runs, the capsules, the caret, the
 /// selection, the field's height; and the lens, as `lensing` says.
 pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing: Lensing) {
@@ -150,54 +272,79 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         }
     }
     let (line, col, sels) = qb.field.caret(&text, qb.anchor, qb.cursor);
-    // A filter's header the caret is not in is drawn as a picture, when the
-    // settings ask for pictures; one being edited keeps its letters.
+    // A filter's header the caret is not in is drawn as a picture and a
+    // name, when the settings ask for pictures. The filter the caret is in is
+    // being written: its value as typed, in a well to type in. Any other says
+    // what it holds in words, where its lens has words for it.
+    let adv = match w.get_q_advance() {
+        a if a > 0.0 => a,
+        _ => 9.6,
+    };
+    let asked_before = qb.asked.len();
+    let at_caret = (qb.anchor == qb.cursor && w.get_q_focused()).then_some(qb.cursor as i32);
     for c in &mut caps {
         c.icon = !w.get_field_words()
             && qbar::has_icon(&c.field)
             && c.head > 0
             && !(c.line == line && col > c.at && col < c.at + c.head);
-        if c.icon {
-            c.tip = field_tip(cat, &c.field).into();
+        c.edit = c.head > 0 && at_caret.is_some_and(|k| k > c.from && k <= c.to);
+        if c.head > 0 {
+            c.tail = qbar::VALUE_TAIL;
         }
+        if !c.icon {
+            continue;
+        }
+        let field = c.field.to_string();
+        c.tip = field_tip(cat, &field).into();
+        let label = head_label(cat, &field);
+        let name_w = if label.is_empty() {
+            0.0
+        } else {
+            qbar::HEAD_JOIN + width_of(qb, &label, false)
+        };
+        c.label = label.into();
+        c.head_w = qbar::HEAD_LEAD
+            + qbar::HEAD_PIC
+            + name_w
+            + qbar::HEAD_TRAIL
+            + qbar::HEAD_ROOM
+            + if c.tone == 2 { qbar::NOT_W } else { 0.0 };
+        let held = (c.len - c.head).max(0);
+        if c.tone == 3 && c.whole && held == 0 {
+            let hint = head_hint(cat, &field);
+            c.tail = width_of(qb, &hint, true) + qbar::VALUE_TAIL + 10.0;
+            c.hint = hint.into();
+        } else if c.edit {
+            c.tail = (qbar::WELL_MIN - held as f32 * adv).max(qbar::VALUE_TAIL);
+        } else if c.whole
+            && held as usize == c.raw.chars().count()
+            && let Some(nice) = friendly(cat, &field, c.raw.as_str())
+        {
+            c.nice_w = width_of(qb, &nice, true);
+            c.nice = nice.into();
+        }
+    }
+    if qb.asked.len() != asked_before {
+        let rows: Vec<crate::QMeasure> = qb
+            .asked
+            .iter()
+            .map(|(text, big)| crate::QMeasure {
+                text: text.as_str().into(),
+                big: *big,
+            })
+            .collect();
+        w.set_q_measure(ModelRc::new(VecModel::from(rows)));
     }
     // Where every column is drawn, now the headers are known.
     qb.field.advance = w.get_q_advance();
     qb.field.measure(&caps);
-    // A header's letters are drawn small, and not at all under an ≈: runs
-    // are cut where a header starts and ends.
+    // A header's letters are drawn small, and not at all under a picture;
+    // a value said in words is not drawn in letters.
     for c in caps.iter().filter(|c| c.head > 0) {
-        let (from, to) = (c.at, c.at + c.head);
-        runs = runs
-            .into_iter()
-            .flat_map(|r| {
-                let len = r.text.chars().count() as i32;
-                if r.line != c.line || r.at + len <= from || r.at >= to {
-                    return vec![r];
-                }
-                let chars: Vec<char> = r.text.chars().collect();
-                let piece = |a: i32, b: i32, small: bool| crate::Span {
-                    text: chars[(a - r.at) as usize..(b - r.at) as usize]
-                        .iter()
-                        .collect::<String>()
-                        .into(),
-                    at: a,
-                    small,
-                    ..r.clone()
-                };
-                let mut kept = Vec::new();
-                if r.at < from {
-                    kept.push(piece(r.at, from, r.small));
-                }
-                if !c.icon {
-                    kept.push(piece(r.at.max(from), (r.at + len).min(to), true));
-                }
-                if r.at + len > to {
-                    kept.push(piece(to, r.at + len, r.small));
-                }
-                kept
-            })
-            .collect();
+        runs = carve(runs, c.line, c.at, c.at + c.head, (!c.icon).then_some(true));
+        if !c.nice.is_empty() {
+            runs = carve(runs, c.line, c.at + c.head, c.at + c.len, None);
+        }
     }
     let field = &qb.field;
     for r in &mut runs {
@@ -208,14 +355,25 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         c.x = field.x(l, c.at);
         c.w = field.x(l, c.at + c.len) - c.x;
         c.hw = field.x(l, c.at + c.head) - c.x;
+        // An empty filter's room is past its header, not part of it.
+        if c.len == c.head {
+            c.hw -= c.tail;
+        }
     }
+    // The caret at the end of the filter being written stands after its last
+    // letter, not after the room the well keeps open.
+    let caret_x = field.x(line.max(0) as usize, col)
+        - caps
+            .iter()
+            .find(|c| c.edit && c.line == line && c.at + c.len == col)
+            .map_or(0.0, |c| c.tail - 2.0);
     let mut sels = sels;
     for sl in &mut sels {
         let l = sl.line as usize;
         sl.x = field.x(l, sl.at);
         sl.w = field.x(l, sl.at + sl.len) - sl.x;
     }
-    w.set_caret_x(field.x(line.max(0) as usize, col));
+    w.set_caret_x(caret_x);
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));
@@ -842,6 +1000,42 @@ pub fn explained(w: &MainWindow, s: &mut State, cat: &Catalogue) {
     }
 }
 
+/// A filter with nothing after its colon, which the caret `at` is not in.
+fn empty_filter(text: &str, at: Option<usize>) -> Option<lens::Term> {
+    lens::terms(text).into_iter().find(|t| {
+        t.field.is_some()
+            && t.value.trim().is_empty()
+            && at.is_none_or(|c| !(c > t.start && c <= t.end))
+    })
+}
+
+/// A filter with nothing in it does not stay behind: leaving it takes it
+/// out, the caret kept where it was in what remains. True when one went.
+fn drop_empty(w: &MainWindow, s: &Rc<RefCell<State>>, staying_in: Option<usize>) -> bool {
+    let text = w.get_query().to_string();
+    let Some(t) = empty_filter(&text, staying_in) else {
+        return false;
+    };
+    let cur = s.borrow().qb.cursor.min(text.len());
+    // The term alone goes: the space in front of it stays, so the caret is
+    // left outside the term before it, and two spaces do not meet.
+    let (head, mut rest) = (&text[..t.start], &text[t.end..]);
+    if (head.is_empty() || head.ends_with(' ')) && rest.starts_with(' ') {
+        rest = &rest[1..];
+    }
+    let query = format!("{head}{rest}");
+    let gone = text.len() - query.len();
+    let caret = if cur > t.end {
+        cur - gone
+    } else {
+        cur.min(t.start)
+    };
+    s.borrow_mut().qb.lenses.close();
+    w.set_lens_open(false);
+    write(w, s, query, caret.min(text.len() - gone));
+    true
+}
+
 /// Leave the term the caret is at the end of: the lens shuts and a space
 /// follows the term, so the caret stands outside it. True when there was a
 /// term or a lens to leave.
@@ -863,6 +1057,10 @@ fn exit(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
     let filter = t.not || t.field.is_some() || text[t.start..t.end].contains(':');
     if c != t.end || !filter {
         return had;
+    }
+    // Left with nothing in it, a filter goes rather than stays empty.
+    if t.field.is_some() && t.value.trim().is_empty() {
+        return drop_empty(w, s, None);
     }
     let query = if text[c..].starts_with(char::is_whitespace) {
         text.clone()
@@ -1094,6 +1292,11 @@ pub fn wire(
         window.on_q_pressed(move |line, col| {
             let Some(w) = weak.upgrade() else { return };
             let text = w.get_query().to_string();
+            // A press anywhere else leaves an empty filter, which goes.
+            let cur = state.borrow().qb.cursor;
+            if drop_empty(&w, &state, Some(cur)) {
+                return;
+            }
             let t = state.borrow().qb.field.term_at(&text, line, col);
             // A press past the end of the text leaves the term there.
             if t.is_none() && state.borrow().qb.cursor >= text.len() && exit(&w, &state) {
@@ -1177,6 +1380,16 @@ pub fn wire(
                         w.set_lens_open(false);
                     }
                 }
+                Some(Chosen::Inside { query, caret }) => {
+                    write(&w, &state, query, caret);
+                    w.set_lens_open(false);
+                    // The line under the field: opened, or the keyboard put in it.
+                    if w.get_grep_open() {
+                        w.set_grep_focus_ask(w.get_grep_focus_ask() + 1);
+                    } else {
+                        w.invoke_grep_toggled();
+                    }
+                }
                 Some(Chosen::Disk(id)) => {
                     link.send(Ask::Disk {
                         volume: id,
@@ -1211,8 +1424,16 @@ pub fn wire(
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
         window.on_q_before_char(move |ch| {
-            weak.upgrade()
-                .is_some_and(|w| frame_before_char(&w, &state, ch.as_str()))
+            weak.upgrade().is_some_and(|w| {
+                // A space is how a term is left: an empty filter goes with it.
+                (ch.as_str() == " " && {
+                    let text = w.get_query().to_string();
+                    let c = state.borrow().qb.cursor.min(text.len());
+                    lens::term_at(&text, c).is_some_and(|t| {
+                        c == t.end && t.field.is_some() && t.value.trim().is_empty()
+                    }) && drop_empty(&w, &state, None)
+                }) || frame_before_char(&w, &state, ch.as_str())
+            })
         });
     }
     {
@@ -1235,7 +1456,7 @@ pub fn wire(
             if let Some(w) = weak.upgrade() {
                 if w.get_lens_launching() {
                     drop_launcher(&w, &state);
-                } else {
+                } else if !drop_empty(&w, &state, None) {
                     state.borrow_mut().qb.lenses.close();
                     w.set_lens_open(false);
                 }
@@ -1353,6 +1574,30 @@ pub fn wire(
             if let Some(q) = fixed {
                 let n = q.len();
                 write(&w, &state, q, n);
+            }
+        });
+    }
+    {
+        let redraw = redraw.clone();
+        window.on_q_focus_moved(move || {
+            let redraw = redraw.clone();
+            slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                redraw(Lensing::Keep);
+            });
+        });
+    }
+    {
+        let (state, redraw) = (Rc::clone(state), redraw.clone());
+        window.on_q_measured(move |i, wide| {
+            // Told while the window lays itself out: the drawing waits its turn.
+            let moved = state
+                .try_borrow_mut()
+                .is_ok_and(|mut s| measured(&mut s, i.max(0) as usize, wide));
+            if moved {
+                let redraw = redraw.clone();
+                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                    redraw(Lensing::Keep);
+                });
             }
         });
     }

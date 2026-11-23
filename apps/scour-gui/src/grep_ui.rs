@@ -22,6 +22,41 @@ pub struct GrepUi {
     pub generation: u64,
     pub files: Vec<GrepFile>,
     pub next: Option<u32>,
+    /// How many files the query lists, and whether that is only as far as
+    /// the count went: what a pattern would be read in.
+    pub listed: u64,
+    pub listed_more: bool,
+    /// Asked, and not answered yet.
+    pub reading: bool,
+}
+
+/// The query listed this many files: the line says how many it would read.
+pub fn listed(w: &MainWindow, s: &mut State, cat: &Catalogue, total: u64, more: bool) {
+    s.grep.listed = total;
+    s.grep.listed_more = more;
+    meter(w, s, cat);
+}
+
+/// What the line under the field says at its end: how many files a pattern
+/// would be read in, that they are being read, or how many hold it.
+fn meter(w: &MainWindow, s: &State, cat: &Catalogue) {
+    let g = &s.grep;
+    let said = if !g.open {
+        String::new()
+    } else if g.pattern.is_empty() {
+        let more = if g.listed_more { "+" } else { "" };
+        cat.get("{n} files to read")
+            .replace("{n}", &format!("{}{more}", crate::grouped(g.listed)))
+    } else if g.reading {
+        cat.get("reading…").into_owned()
+    } else {
+        let more = if g.next.is_some() { "+" } else { "" };
+        cat.get("in {n} files").replace(
+            "{n}",
+            &format!("{}{more}", crate::grouped(g.files.len() as u64)),
+        )
+    };
+    w.set_grep_meter(said.into());
 }
 
 fn home_form(p: &str) -> String {
@@ -36,12 +71,23 @@ fn cut_hit(text: &str, at: (u32, u32)) -> (String, String, String) {
             let clean = |v: &str| v.replace(['\t', '\r', '\n'], " ");
             let mut p = clean(pre).trim_start().to_owned();
             if p.chars().count() > 44 {
-                let tail: String = p.chars().rev().take(44).collect::<Vec<_>>().into_iter().rev().collect();
+                let tail: String = p
+                    .chars()
+                    .rev()
+                    .take(44)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
                 p = format!("…{}", tail.trim_start());
             }
             (p, clean(hit), clean(post))
         }
-        _ => (text.replace(['\t', '\r', '\n'], " "), String::new(), String::new()),
+        _ => (
+            text.replace(['\t', '\r', '\n'], " "),
+            String::new(),
+            String::new(),
+        ),
     }
 }
 
@@ -50,9 +96,13 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
         s.grep.generation += 1;
         s.grep.files.clear();
         s.grep.next = None;
+        s.grep.reading = false;
         w.set_grep_active(false);
+        meter(w, s, cat);
         return;
     }
+    s.grep.reading = true;
+    meter(w, s, cat);
     s.grep.generation += 1;
     let offset = if append { s.grep.next.unwrap_or(0) } else { 0 };
     if !append {
@@ -115,23 +165,38 @@ pub fn answered(
         s.grep.files = files;
     }
     s.grep.next = next;
+    s.grep.reading = false;
+    meter(w, s, cat);
 
     let mut summary = cat
         .get("{f} files · {s} scanned · {b} read")
         .replace("{f}", &crate::grouped(s.grep.files.len() as u64))
         .replace("{s}", &crate::grouped(scanned))
-        .replace("{b}", &scour_ui::format::compact_bytes(read, crate::marks().1));
+        .replace(
+            "{b}",
+            &scour_ui::format::compact_bytes(read, crate::marks().1),
+        );
     summary.push_str(&format!(" · {:.1} ms", took_us as f64 / 1000.0));
     if binary > 0 {
         summary.push_str("  ·  ");
-        summary.push_str(&cat.get("{n} binary skipped").replace("{n}", &crate::grouped(binary)));
+        summary.push_str(
+            &cat.get("{n} binary skipped")
+                .replace("{n}", &crate::grouped(binary)),
+        );
     }
     if too_big > 0 {
         summary.push_str("  ·  ");
-        summary.push_str(&cat.get("{n} too large").replace("{n}", &crate::grouped(too_big)));
+        summary.push_str(
+            &cat.get("{n} too large")
+                .replace("{n}", &crate::grouped(too_big)),
+        );
     }
     if unreadable > 0 {
-        summary.push_str(&format!("  ·  {} {}", crate::grouped(unreadable), cat.get("unreadable")));
+        summary.push_str(&format!(
+            "  ·  {} {}",
+            crate::grouped(unreadable),
+            cat.get("unreadable")
+        ));
     }
     w.set_grep_summary(summary.into());
     w.set_grep_more_on(next.is_some());
@@ -192,7 +257,9 @@ pub fn answered(
         });
         for h in &gf.hits {
             let (pre, hit, post) = cut_hit(&h.text, h.at);
-            let line = h.line.map_or_else(|| format!("@{}", h.offset), |l| l.to_string());
+            let line = h
+                .line
+                .map_or_else(|| format!("@{}", h.offset), |l| l.to_string());
             items.push(GrepItem {
                 header: false,
                 file_idx: fi as i32,
@@ -211,7 +278,9 @@ pub fn answered(
         }
     }
     w.set_grep_empty(if s.grep.files.is_empty() {
-        cat.get("No files held that pattern in the scanned batch.").as_ref().into()
+        cat.get("No files held that pattern in the scanned batch.")
+            .as_ref()
+            .into()
     } else {
         slint::SharedString::new()
     });
@@ -354,7 +423,10 @@ pub fn wire(
                 .map(|h| {
                     let (pre, hit, post) = cut_hit(&h.text, h.at);
                     Found {
-                        line: h.line.map_or_else(|| format!("@{}", h.offset), |l| l.to_string()).into(),
+                        line: h
+                            .line
+                            .map_or_else(|| format!("@{}", h.offset), |l| l.to_string())
+                            .into(),
                         pre: pre.into(),
                         hit: hit.into(),
                         post: post.into(),
@@ -363,7 +435,9 @@ pub fn wire(
                 .collect();
             w.set_peek_found(ModelRc::new(VecModel::from(found)));
             w.set_peek_note(cat.borrow().get("reading…").as_ref().into());
-            link.send(Ask::Peek { path: gf.path.clone() });
+            link.send(Ask::Peek {
+                path: gf.path.clone(),
+            });
             link.send(Ask::PeekFacts { path: gf.path });
         });
     }
