@@ -131,7 +131,8 @@ pub enum Ask {
         request: Request,
     },
     /// What the narrowing line under the bar shows for this query: its kinds,
-    /// extensions and week (`slot` 0), and its folders under home (`slot` 1).
+    /// extensions and ages (`slot` 0), its folders under home (`slot` 1), and how
+    /// many files each size band leaves (`slot` 2 to 5).
     Narrow {
         query_revision: u64,
         slot: u32,
@@ -187,6 +188,7 @@ pub enum Got {
     },
     Narrow {
         query_revision: u64,
+        slot: u32,
         reply: Box<Response>,
     },
     Places(Box<Response>),
@@ -807,6 +809,7 @@ fn spawn_lane(
                         },
                         Lane::Narrow => Got::Narrow {
                             query_revision: revision,
+                            slot,
                             reply,
                         },
                         Lane::Grep => Got::Grep {

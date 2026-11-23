@@ -3756,6 +3756,31 @@ fn main() -> Result<()> {
         );
     }
 
+    // `SCOUR_GUI_MOVE=280,69`: the pointer rests there, nothing pressed: for the
+    // look of what appears under it. Logical pixels.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_MOVE") {
+        let p: Vec<f32> = spec
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect();
+        if let [x, y] = p[..] {
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(2500),
+                move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                                position: slint::LogicalPosition::new(x, y),
+                            });
+                    }
+                },
+            );
+        }
+    }
+
     // `SCOUR_GUI_CLICK=900,146`: the only way to ask whether the window's hit test
     // agrees with what it drew. Logical pixels.
     if let Ok(spec) = std::env::var("SCOUR_GUI_CLICK") {
@@ -4126,6 +4151,11 @@ fn peek(
         if !state.borrow().peek_path.is_empty() {
             state.borrow_mut().peek_path.clear();
         }
+        return;
+    }
+    // While the stream of files read for a pattern is the list, the preview is
+    // on one of its files — not on the ordinary list behind it.
+    if w.get_grep_active() {
         return;
     }
     let selected = w.get_selected();
@@ -4671,7 +4701,15 @@ fn apply(
             append,
             reply,
         } => {
-            grep_ui::answered(w, &mut state.borrow_mut(), cat, generation, append, *reply);
+            grep_ui::answered(
+                w,
+                &mut state.borrow_mut(),
+                link,
+                cat,
+                generation,
+                append,
+                *reply,
+            );
         }
         Got::PickedFolder { a, b, prefix, path } => {
             qwire::picked_folder(w, state, a, b, prefix, path);
@@ -5138,9 +5176,16 @@ fn apply(
         // a mistyped `sizE:>1mb` answers `0 of 0`, like a query matching nothing.
         Got::Narrow {
             query_revision,
+            slot,
             reply,
-            ..
-        } => qwire::narrowed(w, &mut state.borrow_mut(), cat, query_revision, *reply),
+        } => qwire::narrowed(
+            w,
+            &mut state.borrow_mut(),
+            cat,
+            query_revision,
+            slot,
+            *reply,
+        ),
         Got::Lens {
             generation,
             slot,

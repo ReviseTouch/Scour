@@ -26,6 +26,8 @@ pub struct GrepUi {
     /// the count went: what a pattern would be read in.
     pub listed: u64,
     pub listed_more: bool,
+    /// The file of the stream the preview is on.
+    pub selected: i32,
     /// Asked, and not answered yet.
     pub reading: bool,
 }
@@ -137,6 +139,7 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
 pub fn answered(
     w: &MainWindow,
     s: &mut State,
+    link: &Link,
     cat: &Catalogue,
     generation: u64,
     append: bool,
@@ -286,6 +289,51 @@ pub fn answered(
     });
     w.set_grep_items(ModelRc::new(VecModel::from(items)));
     w.set_grep_active(true);
+    // A new stream opens on its first file, so the preview shows what was
+    // found at once; more of the same stream leaves where the reader is.
+    if !append {
+        s.grep.selected = -1;
+        w.set_grep_sel(-1);
+        if w.get_peeking() && !s.grep.files.is_empty() {
+            select(w, s, link, cat, 0);
+        }
+    }
+}
+
+/// A file of the stream is the one looked at: the preview opens on it, with
+/// the lines that held the pattern, marked.
+pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i32) {
+    let Some(gf) = s.grep.files.get(fi.max(0) as usize).cloned() else {
+        return;
+    };
+    s.grep.selected = fi;
+    w.set_grep_sel(fi);
+    s.peek_path = gf.path.clone();
+    w.set_peeking(true);
+    w.set_peek_name(scour_ui::path::leaf(&gf.path).into());
+    w.set_peek_path(gf.path.as_str().into());
+    let found: Vec<Found> = gf
+        .hits
+        .iter()
+        .map(|h| {
+            let (pre, hit, post) = cut_hit(&h.text, h.at);
+            Found {
+                line: h
+                    .line
+                    .map_or_else(|| format!("@{}", h.offset), |l| l.to_string())
+                    .into(),
+                pre: pre.into(),
+                hit: hit.into(),
+                post: post.into(),
+            }
+        })
+        .collect();
+    w.set_peek_found(ModelRc::new(VecModel::from(found)));
+    w.set_peek_note(cat.get("reading…").as_ref().into());
+    link.send(Ask::Peek {
+        path: gf.path.clone(),
+    });
+    link.send(Ask::PeekFacts { path: gf.path });
 }
 
 pub fn wire(
@@ -408,37 +456,27 @@ pub fn wire(
         );
         window.on_grep_clicked(move |fi| {
             let Some(w) = weak.upgrade() else { return };
-            let gf = {
-                let s = state.borrow();
-                s.grep.files.get(fi.max(0) as usize).cloned()
-            };
-            let Some(gf) = gf else { return };
-            state.borrow_mut().peek_path = gf.path.clone();
-            w.set_peeking(true);
-            w.set_peek_name(scour_ui::path::leaf(&gf.path).into());
-            w.set_peek_path(gf.path.as_str().into());
-            let found: Vec<Found> = gf
-                .hits
-                .iter()
-                .map(|h| {
-                    let (pre, hit, post) = cut_hit(&h.text, h.at);
-                    Found {
-                        line: h
-                            .line
-                            .map_or_else(|| format!("@{}", h.offset), |l| l.to_string())
-                            .into(),
-                        pre: pre.into(),
-                        hit: hit.into(),
-                        post: post.into(),
-                    }
-                })
-                .collect();
-            w.set_peek_found(ModelRc::new(VecModel::from(found)));
-            w.set_peek_note(cat.borrow().get("reading…").as_ref().into());
-            link.send(Ask::Peek {
-                path: gf.path.clone(),
-            });
-            link.send(Ask::PeekFacts { path: gf.path });
+            select(&w, &mut state.borrow_mut(), &link, &cat.borrow(), fi);
+        });
+    }
+    {
+        let (weak, state, link, cat) = (
+            window.as_weak(),
+            Rc::clone(state),
+            Rc::clone(link),
+            Rc::clone(cat),
+        );
+        // ↑ and ↓ walk the stream's files while it is the list: the preview
+        // follows, as it does down the ordinary list.
+        window.on_grep_step(move |by| {
+            let Some(w) = weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let last = st.grep.files.len() as i32 - 1;
+            if last < 0 {
+                return;
+            }
+            let next = (st.grep.selected + by).clamp(0, last);
+            select(&w, &mut st, &link, &cat.borrow(), next);
         });
     }
     {

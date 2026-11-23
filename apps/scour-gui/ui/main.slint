@@ -1629,6 +1629,8 @@ export component MainWindow inherits Window {
     in property <int> hov-col;
     in property <bool> hov-not;
     in property <bool> hov-fz;
+    // The term is a capsule: its buttons stand in it, over its right end.
+    in property <bool> hov-cap;
     in property <bool> hov-fz-on;
     callback term-act(string);
     // Where Rust wants the selection/caret after it wrote or clamped the query.
@@ -1701,6 +1703,9 @@ export component MainWindow inherits Window {
     in property <string> word-narrow-pill: "Narrow";
     in-out property <bool> grep-open;
     in property <bool> grep-active;
+    // The file of the stream the preview is on.
+    in property <int> grep-sel: -1;
+    callback grep-step(int);
     in-out property <string> grep-pattern;
     in property <string> grep-mode: "text";
     in property <bool> grep-case;
@@ -3212,6 +3217,11 @@ export component MainWindow inherits Window {
                             root.past-open = false;
                             return accept;
                         }
+                        // The stream of files is the list while it is shown.
+                        if (root.grep-active && (e.text == Key.DownArrow || e.text == Key.UpArrow)) {
+                            root.grep-step(e.text == Key.DownArrow ? 1 : -1);
+                            return accept;
+                        }
                         if (e.text == Key.DownArrow) {
                             root.selected = min(root.selected + 1, root.rows.length - 1);
                             root.navigated(root.selected);
@@ -3473,16 +3483,21 @@ export component MainWindow inherits Window {
                             || pair-neg.hovered
                             || pair-drop.hovered;
                         visible: root.hov-on || self.over || field.pair-keep;
-                        x: clamp(field.pad + root.hov-x - self.width + 5px,
-                            0px, field.width - self.width);
-                        y: field.top + root.hov-line * root.q-pitch - 24px;
+                        // A capsule's buttons are in the capsule, over the end of
+                        // what it holds, on its own tint; a word's stand above it.
+                        x: root.hov-cap
+                            ? clamp(field.pad + root.hov-x + 1px - self.width, 0px, field.width - self.width)
+                            : clamp(field.pad + root.hov-x - self.width + 5px, 0px, field.width - self.width);
+                        y: root.hov-cap
+                            ? field.top + root.hov-line * root.q-pitch + 6px
+                            : field.top + root.hov-line * root.q-pitch - 24px;
                         width: pair-row.preferred-width + 4px;
-                        height: 26px;
-                        border-radius: 13px;
-                        background: Theme.panel;
-                        border-width: 1px;
+                        height: root.hov-cap ? 24px : 26px;
+                        border-radius: root.hov-cap ? 8px : 13px;
+                        background: root.hov-cap ? (root.hov-not ? Theme.cap-neg : Theme.cap) : Theme.panel;
+                        border-width: root.hov-cap ? 0px : 1px;
                         border-color: Theme.line;
-                        drop-shadow-blur: 4px;
+                        drop-shadow-blur: root.hov-cap ? 0px : 4px;
                         drop-shadow-color: #00000030;
                         drop-shadow-offset-y: 1px;
                         pair-bridge := TouchArea {
@@ -3781,39 +3796,81 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             vertical-alignment: center;
                         }
-                        if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: Flickable {
+                        if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: chip-flick := Flickable {
                             horizontal-stretch: 1;
                             interactive: false;
                             viewport-width: chip-row.preferred-width;
+                            // The wheel moves the line sideways: it holds more
+                            // than a window is wide.
+                            function nudge(dx: length) {
+                                chip-flick.viewport-x = clamp(chip-flick.viewport-x + dx,
+                                    min(0px, chip-flick.width - chip-row.preferred-width), 0px);
+                            }
                             chip-row := HorizontalLayout {
                                 spacing: 6px;
                                 alignment: start;
-                                for c in root.chips: Rectangle {
+                                // Every chip is one click: the term goes in, with Alt it
+                                // goes in excluded. Where a kind of chip begins, its picture.
+                                for c[ci] in root.chips: Rectangle {
+                                    property <bool> lead: ci == 0 || root.chips[ci - 1].icon != c.icon;
+                                    property <length> lead-w: self.lead ? (ci == 0 ? 22px : 30px) : 0px;
                                     y: 6px;
                                     height: 22px;
-                                    width: chip-text.preferred-width + chip-n.preferred-width + 21px;
-                                    border-radius: 6px;
-                                    border-width: Theme.hair;
-                                    border-color: chip-touch.has-hover ? Theme.ink-3 : Theme.line;
-                                    chip-text := Text {
-                                        x: 8px;
-                                        text: c.label;
-                                        color: chip-touch.has-hover ? Theme.ink : Theme.ink-2;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
+                                    width: self.lead-w + chip-text.preferred-width + chip-n.preferred-width + 21px;
+                                    if self.lead: Rectangle {
+                                        x: 0px;
+                                        width: parent.lead-w;
+                                        if ci > 0: Rectangle {
+                                            x: 6px;
+                                            width: 1px;
+                                            height: 14px;
+                                            y: 4px;
+                                            background: Theme.line;
+                                        }
+                                        Image {
+                                            x: ci > 0 ? 14px : 2px;
+                                            y: 3px;
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: Theme.ink-3;
+                                            source: c.icon == "kind" ? @image-url("icons/tools/field-kind.svg")
+                                                : c.icon == "ext" ? @image-url("icons/tools/field-ext.svg")
+                                                : c.icon == "dm" ? @image-url("icons/tools/lens-time.svg")
+                                                : c.icon == "size" ? @image-url("icons/tools/field-size.svg")
+                                                : @image-url("icons/tools/folder.svg");
+                                        }
                                     }
-                                    chip-n := Text {
-                                        x: 8px + chip-text.preferred-width + 5px;
-                                        text: c.count;
-                                        color: Theme.ink-3;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                    }
-                                    chip-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        pointer-event(e) => {
-                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                root.narrow-taken(c.token, e.modifiers.alt);
+                                    Rectangle {
+                                        x: parent.lead-w;
+                                        width: parent.width - parent.lead-w;
+                                        border-radius: 6px;
+                                        border-width: Theme.hair;
+                                        border-color: chip-touch.has-hover ? Theme.ink-3 : Theme.line;
+                                        background: chip-touch.has-hover ? Theme.hover : transparent;
+                                        chip-text := Text {
+                                            x: 8px;
+                                            text: c.label;
+                                            color: chip-touch.has-hover ? Theme.ink : Theme.ink-2;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        chip-n := Text {
+                                            x: 8px + chip-text.preferred-width + 5px;
+                                            text: c.count;
+                                            color: Theme.ink-3;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        chip-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            scroll-event(e) => {
+                                                chip-flick.nudge(e.delta-x + e.delta-y);
+                                                accept
+                                            }
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                    root.narrow-taken(c.token, e.modifiers.alt);
+                                                }
                                             }
                                         }
                                     }
@@ -5342,7 +5399,8 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         for gitem in root.grep-items: Rectangle {
                             height: gitem.header ? 32px : 25px;
-                            background: ghit.has-hover ? Theme.hover : gitem.header ? Theme.ground : transparent;
+                            background: gitem.file-idx == root.grep-sel ? Theme.selection
+                                : ghit.has-hover ? Theme.hover : gitem.header ? Theme.ground : transparent;
                             if gitem.header: Rectangle {
                                 y: 0px;
                                 height: 1px;

@@ -44,7 +44,10 @@ pub struct QueryBar {
     pub narrow_hidden: bool,
     narrow_facets: Option<scour_core::FacetResponse>,
     narrow_usage: Option<scour_core::UsageResponse>,
-    chips: Vec<(String, u64, String)>,
+    /// Group, label, count and the term a press writes.
+    chips: Vec<(&'static str, String, u64, String)>,
+    /// How many files each size band would leave, as asked.
+    narrow_sizes: [Option<u64>; 4],
     /// How many months the time lens's calendar is moved back from today's.
     cal_back: i64,
     /// How wide the window draws each word a capsule shows in its own face —
@@ -803,6 +806,7 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
     s.qb.narrow_total = total;
     s.qb.narrow_facets = None;
     s.qb.narrow_usage = None;
+    s.qb.narrow_sizes = [None; 4];
     s.qb.chips.clear();
     show_chips(w, &s.qb, cat);
     let ts = lens::terms(&text);
@@ -818,10 +822,25 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
             by: vec![
                 scour_core::FacetBy::Kind,
                 scour_core::FacetBy::Ext { top: 6 },
-                scour_core::FacetBy::Age { edges: vec![7] },
+                scour_core::FacetBy::Age {
+                    edges: vec![1, 7, 30, 365],
+                },
             ],
         },
     });
+    // What each size band would leave: one count apiece, asked beside the rest.
+    if !ts.iter().any(|t| t.field == Some("size") && !t.not) {
+        for (i, (term, _)) in SIZE_CHIPS.iter().enumerate() {
+            link.send(Ask::Narrow {
+                query_revision: revision,
+                slot: 2 + i as u32,
+                request: scour_proto::Request::Count {
+                    query: format!("{text} size:{term}"),
+                    cap: 1_000_000,
+                },
+            });
+        }
+    }
     let home = home();
     if !home.is_empty()
         && !ts
@@ -843,14 +862,32 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
     }
 }
 
+/// The size bands a chip offers, as the term and the msgid that names them.
+const SIZE_CHIPS: [(&str, &str); 4] = [
+    ("<100kb", "under 100 KB"),
+    (">1mb", "over 1 MB"),
+    (">100mb", "over 100 MB"),
+    (">1gb", "over 1 GB"),
+];
+
 /// An answer for the narrowing line.
-pub fn narrowed(w: &MainWindow, s: &mut State, cat: &Catalogue, revision: u64, reply: Response) {
+pub fn narrowed(
+    w: &MainWindow,
+    s: &mut State,
+    cat: &Catalogue,
+    revision: u64,
+    slot: u32,
+    reply: Response,
+) {
     if revision != s.query_revision {
         return;
     }
     match reply {
         Response::Facets(f) => s.qb.narrow_facets = Some(f),
         Response::Usage(u) => s.qb.narrow_usage = Some(u),
+        Response::Count { total, .. } if (2..6).contains(&slot) => {
+            s.qb.narrow_sizes[(slot - 2) as usize] = Some(total);
+        }
         _ => return,
     }
     let text = s.qb.narrow_for.clone();
@@ -860,7 +897,7 @@ pub fn narrowed(w: &MainWindow, s: &mut State, cat: &Catalogue, revision: u64, r
         s.qb.narrow_facets
             .as_ref()
             .map_or(s.qb.narrow_total, |f| f.total);
-    let mut chips = Vec::new();
+    let mut chips: Vec<(&'static str, String, u64, String)> = Vec::new();
     let group = |by: fn(&scour_core::FacetBy) -> bool| {
         s.qb.narrow_facets
             .as_ref()
@@ -871,23 +908,60 @@ pub fn narrowed(w: &MainWindow, s: &mut State, cat: &Catalogue, revision: u64, r
     if !has("kind") {
         for x in group(|b| matches!(b, scour_core::FacetBy::Kind))
             .into_iter()
-            .take(3)
+            .take(5)
         {
             if x.count > 0 && x.count < all {
                 let name = scour_core::Kind::from_name(&x.key)
                     .and_then(|k| k.first())
                     .map_or_else(|| x.key.clone(), |k| cat.get(k.msgid()).into_owned());
-                chips.push((name, x.count, format!("kind:{}", x.key)));
+                chips.push(("kind", name, x.count, format!("kind:{}", x.key)));
             }
         }
     }
     if !has("ext") {
         for x in group(|b| matches!(b, scour_core::FacetBy::Ext { .. }))
             .into_iter()
-            .take(3)
+            .take(6)
         {
             if !x.key.is_empty() && x.count > 0 && x.count < all {
-                chips.push((format!(".{}", x.key), x.count, format!("ext:{}", x.key)));
+                chips.push((
+                    "ext",
+                    format!(".{}", x.key),
+                    x.count,
+                    format!("ext:{}", x.key),
+                ));
+            }
+        }
+    }
+    if !has("dm") {
+        // The bands are apart (a file is in the first it is not older than),
+        // and a chip says "within": each one counts the ones before it too.
+        let bands = group(|b| matches!(b, scour_core::FacetBy::Age { .. }));
+        let mut within = 0;
+        for (key, label, term) in [
+            ("1", "last 24 hours", "dm:24h"),
+            ("7", "last 7 days", "dm:7d"),
+            ("30", "last 30 days", "dm:30d"),
+            ("365", "last year", "dm:1y"),
+        ] {
+            within += bands.iter().find(|x| x.key == key).map_or(0, |x| x.count);
+            if within > 0 && within < all {
+                chips.push(("dm", cat.get(label).into_owned(), within, term.into()));
+            }
+        }
+    }
+    if !has("size") {
+        for (i, (term, label)) in SIZE_CHIPS.iter().enumerate() {
+            if let Some(n) = s.qb.narrow_sizes[i]
+                && n > 0
+                && n < all
+            {
+                chips.push((
+                    "size",
+                    cat.get(label).into_owned(),
+                    n,
+                    format!("size:{term}"),
+                ));
             }
         }
     }
@@ -899,27 +973,14 @@ pub fn narrowed(w: &MainWindow, s: &mut State, cat: &Catalogue, revision: u64, r
             .filter(|c| c.files > 0 && c.files < all)
             .collect();
         kids.sort_by_key(|c| std::cmp::Reverse(c.files));
-        for c in kids.into_iter().take(2) {
+        for c in kids.into_iter().take(4) {
             let shown = match c.path.strip_prefix(&home) {
                 Some(rest) if !home.is_empty() => format!("~{rest}"),
                 _ => c.path.clone(),
             };
             let term = lens::place(&lens::terms("under:x")[0], &shown);
-            chips.push((shown, c.files, term));
+            chips.push(("under", shown, c.files, term));
         }
-    }
-    if !has("dm")
-        && let Some(week) = group(|b| matches!(b, scour_core::FacetBy::Age { .. }))
-            .into_iter()
-            .find(|x| x.key == "7")
-        && week.count > 0
-        && week.count < all
-    {
-        chips.push((
-            cat.get("last 7 days").into_owned(),
-            week.count,
-            "dm:7d".into(),
-        ));
     }
     s.qb.chips = chips;
     show_chips(w, &s.qb, cat);
@@ -929,12 +990,13 @@ fn show_chips(w: &MainWindow, qb: &QueryBar, _cat: &Catalogue) {
     let chips: Vec<crate::Facet> = qb
         .chips
         .iter()
-        .map(|(label, n, term)| crate::Facet {
+        .map(|(group, label, n, term)| crate::Facet {
             label: label.as_str().into(),
             token: term.as_str().into(),
             count: crate::grouped(*n).into(),
             share: 0.0,
-            icon: Default::default(),
+            // The group it belongs to: the line draws a picture where one begins.
+            icon: (*group).into(),
         })
         .collect();
     w.set_chips(ModelRc::new(VecModel::from(chips)));
@@ -1280,6 +1342,7 @@ pub fn wire(
                 w.set_hov_x(f.x(f.first + eline.max(0) as usize, ecol));
             }
             w.set_hov_not(t.not);
+            w.set_hov_cap(t.not || t.field.is_some());
             w.set_hov_fz(fz);
             w.set_hov_fz_on(fz_on);
             w.set_hov_on(true);

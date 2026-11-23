@@ -148,7 +148,13 @@
   .narrow .qread:empty, .narrow .qread[hidden] { display: none; }
   .narrow .nlbl { flex: none; font: 500 12px var(--sans); color: var(--ink-3); }
   .narrow .nlbl[hidden] { display: none; }
-  .chips { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
+  /* One line of one-click narrowings, a group of them to a kind of thing, a
+     picture where each begins. More than the window holds: the wheel moves it. */
+  .chips { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips .cg { flex: none; display: inline-flex; align-items: center; color: var(--ink-3); margin: 0 2px 0 8px; padding-left: 8px; border-left: 1px solid var(--line); height: 16px; }
+  .chips .cg:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
+  .chips .cg svg { width: 16px; height: 16px; }
   .chips button {
     flex: none; border: 1px solid var(--line); border-radius: 6px; background: none;
     padding: 2px 8px; font: 500 12px/1.5 var(--sans); color: var(--ink-2); cursor: pointer;
@@ -412,6 +418,13 @@
   }
   /* Compact pill over the term's top-right edge, within the header's headroom
      and bridged downward so moving to it never crosses a dead gap. */
+  /* On a capsule the buttons stand in it, over the end of what it holds, on its
+     own tint; a word's stand above it. */
+  .qacts .pair.incap {
+    padding: 0 2px; border: 0; border-radius: 8px; box-shadow: none;
+    background: var(--pairbg, var(--cap));
+  }
+  .qacts .pair.incap button { width: 22px; height: 22px; font-size: 12px; }
   .qacts .pair {
     position: absolute;
     top: -15px;
@@ -3349,11 +3362,24 @@
     /* Over the right end of the term's last line, inside the field. */
     const box = qfield.getBoundingClientRect();
     const last = rects[rects.length - 1];
-    const w = pair.offsetWidth;
-    pair.style.left = Math.max(0, Math.min(last.right - box.left - w + 4, box.width - w)) + "px";
-    /* Over the line the term is on, as the window puts it: the pair stands
-       in the room above, and covers none of what is being pointed at. */
-    pair.style.top = (last.top + last.height / 2 - 18 - box.top - 24) + "px";
+    const capEl = termEl(term[0]);
+    const inCap = !!(capEl && capEl.classList.contains("cap"));
+    pair.classList.toggle("incap", inCap);
+    if (inCap) {
+      pair.style.setProperty("--pairbg", capEl.classList.contains("neg") ? "var(--cap-neg)"
+        : capEl.classList.contains("read") ? "var(--cap-read)" : "var(--cap)");
+    }
+    const w = pair.offsetWidth, h = pair.offsetHeight;
+    const mid = last.top + last.height / 2 - box.top;
+    if (inCap) {
+      pair.style.left = Math.max(0, Math.min(last.right - box.left - w - 2, box.width - w)) + "px";
+      pair.style.top = (mid - h / 2) + "px";
+    } else {
+      /* In the room above the line, as the window puts it: it covers none of
+         what is being pointed at. */
+      pair.style.left = Math.max(0, Math.min(last.right - box.left - w + 4, box.width - w)) + "px";
+      pair.style.top = (mid - 18 - 24) + "px";
+    }
     markHover();
   }
 
@@ -5444,6 +5470,7 @@
     narrowLbl.hidden = !show;
     qread.style.display = show ? "none" : "";
     chipsBox.innerHTML = show ? CHIPS.map((c, i) =>
+      (i === 0 || CHIPS[i - 1].g !== c.g ? '<span class="cg" aria-hidden="true">' + (FIELD_ART[c.g] || "") + "</span>" : "") +
       '<button type="button" data-i="' + i + '" title="' + escape_(c.term) + '">' + escape_(c.label) +
       "<b>" + fmt(c.n) + "</b></button>").join("") : "";
     document.getElementById("narrow").title = qread.textContent || "";
@@ -5468,6 +5495,7 @@
       drawNarrow();
     }
   });
+  const NARROW_SIZES = [["<100kb", "under 100 KB"], [">1mb", "over 1 MB"], [">100mb", "over 100 MB"], [">1gb", "over 1 GB"]];
   function narrowSoon(text, total) {
     clearTimeout(narrowTimer);
     const mine = ++narrowGen;
@@ -5481,30 +5509,50 @@
       narrowStop = new AbortController();
       const signal = narrowStop.signal;
       const has = (f) => terms(text).some(([a, b]) => new RegExp("^" + f + ":", "i").test(text.slice(a, b)));
+      const sized = has("size") ? [] : NARROW_SIZES;
       Promise.all([
-        SERVICE.get("facets", { q: text, by: "kind,ext,age", edges: "7" }, signal).catch(() => null),
+        SERVICE.get("facets", { q: text, by: "kind,ext,age", edges: "1,7,30,365" }, signal).catch(() => null),
         HOME && !has("under") && !has("parent") ? SERVICE.get("usage", { path: HOME, top: 4294967295, q: text }, signal).catch(() => null) : null,
-      ]).then(([f, u]) => {
+        Promise.all(sized.map(([term]) =>
+          SERVICE.get("count", { q: text + " size:" + term, cap: 1000000 }, signal).then((r) => r.total).catch(() => 0))),
+      ]).then(([f, u, counts]) => {
         if (mine !== narrowGen || q.value !== text) return;
         const out = [];
         const all = f ? f.total : total;
         const group = (by) => ((f && f.groups.find((g) => g.by === by)) || { facets: [] }).facets;
-        if (!has("kind")) for (const x of group("kind").slice(0, 3)) {
-          if (x.count > 0 && x.count < all) out.push({ label: KIND_KEY[x.key] || x.key, n: x.count, term: "kind:" + x.key });
+        if (!has("kind")) for (const x of group("kind").slice(0, 5)) {
+          if (x.count > 0 && x.count < all) out.push({ g: "kind", label: KIND_KEY[x.key] || x.key, n: x.count, term: "kind:" + x.key });
         }
-        if (!has("ext")) for (const x of group("ext").slice(0, 3)) {
-          if (x.key && x.count > 0 && x.count < all) out.push({ label: "." + x.key, n: x.count, term: "ext:" + x.key });
+        if (!has("ext")) for (const x of group("ext").slice(0, 6)) {
+          if (x.key && x.count > 0 && x.count < all) out.push({ g: "ext", label: "." + x.key, n: x.count, term: "ext:" + x.key });
         }
-        if (u) for (const c of u.children.filter((c) => c.files > 0 && c.files < all).sort((a, b) => b.files - a.files).slice(0, 2)) {
-          out.push({ label: homeForm(c.path), n: c.files, term: "under:" + quoteIf(homeForm(c.path)) });
+        if (!has("dm")) {
+          /* The bands are apart: a chip says "within", so each counts the ones before it too. */
+          const bands = group("age");
+          let within = 0;
+          for (const [key, label, term] of [["1", "last 24 hours", "dm:24h"], ["7", "last 7 days", "dm:7d"],
+                                            ["30", "last 30 days", "dm:30d"], ["365", "last year", "dm:1y"]]) {
+            const b = bands.find((x) => x.key === key);
+            within += b ? b.count : 0;
+            if (within > 0 && within < all) out.push({ g: "dm", label: T(label), n: within, term });
+          }
         }
-        const week = group("age").find((x) => x.key === "7");
-        if (!has("dm") && week && week.count > 0 && week.count < all) out.push({ label: T("last 7 days"), n: week.count, term: "dm:7d" });
+        sized.forEach(([term, label], i) => {
+          if (counts[i] > 0 && counts[i] < all) out.push({ g: "size", label: T(label), n: counts[i], term: "size:" + term });
+        });
+        if (u) for (const c of u.children.filter((c) => c.files > 0 && c.files < all).sort((a, b) => b.files - a.files).slice(0, 4)) {
+          out.push({ g: "under", label: homeForm(c.path), n: c.files, term: "under:" + quoteIf(homeForm(c.path)) });
+        }
         CHIPS = out;
         drawNarrow();
       });
     }, 250);
   }
+  chipsBox.addEventListener("wheel", (e) => {
+    if (chipsBox.scrollWidth <= chipsBox.clientWidth) return;
+    e.preventDefault();
+    chipsBox.scrollLeft += e.deltaX + e.deltaY;
+  }, { passive: false });
   /* A press adds the term, or puts it in place of the one of the same field;
      with Alt held it excludes instead. */
   chipsBox.addEventListener("mousedown", (e) => {

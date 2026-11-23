@@ -2910,3 +2910,13 @@ msgstr "{n} dosya okunacak"
 
 msgid "in {n} files"
 msgstr "{n} dosyada"
+
+# --- The narrowing line's bands ---
+msgid "last 24 hours"
+msgstr "son 24 saat"
+
+msgid "over 1 MB"
+msgstr "1 MB üstü"
+
+msgid "over 100 MB"
+msgstr "100 MB üstü"
