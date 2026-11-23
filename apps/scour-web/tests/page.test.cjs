@@ -693,3 +693,40 @@ test('sparkline range scrubbing produces valid size and time terms', () => {
   assert.equal(c.sparkRangeTerm('size', 2, 3, '!'), '!size:>10mb');
   assert.equal(c.sparkRangeTerm('time', 1, 3, ''), 'dm:30d');
 });
+
+test('drawGrep renders sortable headers and aligned metadata columns without missing globals', () => {
+  const c = vm.createContext({
+    Intl, Date, Math, Set, HOME: '/home/u', DAY: 86400, now: 1700000000,
+    NUMBERS: new Intl.NumberFormat('en'),
+    STAMP: new Intl.DateTimeFormat('en'),
+    MS: new Intl.NumberFormat('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    T: (s, args) => args ? s.replace(/\{(\w+)\}/g, (_, k) => args[k]) : s,
+    KIND_KEY: { doc: 'Document' },
+    sortKey: 'size', sortDesc: true,
+    grepView: { hidden: true, innerHTML: '' },
+    scrollEl: { hidden: false },
+    GREP: {
+      next: 50,
+      files: [{
+        path: '/home/u/Belgeler/dava.docx',
+        size: 20480,
+        mtime: 1699990000,
+        kind: 'doc',
+        more: true,
+        hits: [{ line: 5, pre: 'Antet ', hit: 'İstanbul', post: ' Hukuk' }],
+      }],
+    },
+  });
+  vm.runInContext(section('  const fmt = (n) =>', '\n  /* The deepest mount point'), c);
+  vm.runInContext(section('  const escape_ = (s) =>', '\n  const FIELDS = ['), c);
+  vm.runInContext(section('  const GLYPHS = new Set([', '\n  function writeMark('), c);
+  vm.runInContext(section('  const homeForm = (p) =>', '\n  const fullForm = '), c);
+  vm.runInContext(section('  function drawGrep(res) {', '\n  function applySortChoice('), c);
+  c.drawGrep({ scanned: 100, read: 40960, took_us: 12500, binary: 2 });
+  assert.equal(c.grepView.hidden, false);
+  assert.equal(c.scrollEl.hidden, true);
+  assert.match(c.grepView.innerHTML, /data-gsort="size"/);
+  assert.match(c.grepView.innerHTML, /20 KB/);
+  assert.match(c.grepView.innerHTML, /~\/Belgeler/);
+  assert.match(c.grepView.innerHTML, /<mark>İstanbul<\/mark>/);
+});

@@ -5259,7 +5259,8 @@
           const dir = slash > 0 ? gf.path.slice(0, slash) : "/";
           const ktok = GLYPHS.has(gf.kind) ? gf.kind : "file";
           const kword = KIND_KEY[gf.kind] || T("File");
-          const whenStr = gf.mtime ? stamp(gf.mtime) : "—";
+          const whenStr = gf.mtime ? ago(gf.mtime) : "—";
+          const whenTip = gf.mtime ? exact(gf.mtime) : "";
           const szStr = gf.size >= 0 ? bytes(gf.size) : "—";
           const lines = (gf.hits || []).map((h) =>
             '<div class="grep-line" data-gfi="' + fi + '">' +
@@ -5272,7 +5273,7 @@
             '<span class="gc-nm" title="' + escape_(nm) + '">' + escape_(nm) + "</span>" +
             '<span class="gc-dir" data-greveal="' + fi + '" title="' + escape_(dir) + '">' + escape_(homeForm(dir)) + "</span>" +
             '<span class="gc-kind">' + escape_(kword) + "</span>" +
-            '<span class="gc-when">' + escape_(whenStr) + "</span>" +
+            '<span class="gc-when" title="' + escape_(whenTip) + '">' + escape_(whenStr) + "</span>" +
             '<span class="gc-sz">' + escape_(szStr) + "</span>" +
             '<span class="gc-cnt">' + fmt((gf.hits || []).length) + (gf.more ? "+" : "") + "</span></div>" +
             lines +
@@ -5322,7 +5323,7 @@
     const row = e.target.closest("[data-gfi]");
     const gf = row && GREP.files[+row.dataset.gfi];
     if (!gf) return;
-    rowMenu(e, gf.path, { is_dir: false, size: gf.size || 0 }, () => runGrep(false));
+    openRowMenu(e, gf.path, { is_dir: false, size: gf.size || 0 }, () => runGrep(false));
   });
   grepView.addEventListener("dblclick", (e) => {
     const row = e.target.closest("[data-gfi]");
