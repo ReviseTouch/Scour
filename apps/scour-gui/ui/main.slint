@@ -2042,6 +2042,12 @@ export component MainWindow inherits Window {
     in property <string> set-accents-note;
     in property <string> set-typos;
     in property <string> set-typos-note;
+    /// Where a mistake is forgiven: from a word's start, or strictly.
+    in property <bool> typos-strict;
+    in property <string> set-typos-rule;
+    in property <string> set-typos-rule-note;
+    in property <[string]> typos-rule-labels;
+    callback typos-strict-picked(bool);
     in property <[string]> typos-labels;
     in property <string> set-search-hint;
     callback accents-picked(bool);
@@ -7292,6 +7298,17 @@ export component MainWindow inherits Window {
                                             values: ["off", "", "always"];
                                             value: root.typos-choice;
                                             picked(v) => { root.typos-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-typos-rule;
+                                        note: root.set-typos-rule-note;
+                                        Choice {
+                                            labels: root.typos-rule-labels;
+                                            values: ["word", "strict"];
+                                            value: root.typos-strict ? "strict" : "word";
+                                            picked(v) => { root.typos-strict-picked(v == "strict"); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }

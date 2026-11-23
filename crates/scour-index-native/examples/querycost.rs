@@ -7,7 +7,8 @@
 //!   cargo run --release -p scour-index-native --example querycost -- /tmp/idx/native 7 < queries.txt
 //!
 //! `SCOUR_EXACT_ACCENTS=1` asks as Settings → Searching does with accents not
-//! ignored, `SCOUR_FORGIVE=1` as it does with typing mistakes always forgiven.
+//! ignored, `SCOUR_FORGIVE=1` as it does with typing mistakes always forgiven,
+//! `SCOUR_STRICT_TYPOS=1` with them forgiven strictly.
 
 use std::hash::{Hash, Hasher};
 use std::io::BufRead;
@@ -32,6 +33,7 @@ fn main() {
         // The two settings a service reads words under, for measuring them.
         let mut ast = scour_query::parse(query);
         ast.exact_accents = std::env::var_os("SCOUR_EXACT_ACCENTS").is_some();
+        ast.strict_typos = std::env::var_os("SCOUR_STRICT_TYPOS").is_some();
         if std::env::var_os("SCOUR_FORGIVE").is_some() {
             ast = ast.forgiving().unwrap_or(ast);
         }

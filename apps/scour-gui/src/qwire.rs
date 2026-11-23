@@ -203,10 +203,14 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     w.set_caret_line(line);
     w.set_caret_col(col);
     let ts = lens::terms(&text);
-    w.set_loc_on(ts.iter().any(|t| matches!(t.field, Some("under" | "parent"))));
+    w.set_loc_on(
+        ts.iter()
+            .any(|t| matches!(t.field, Some("under" | "parent"))),
+    );
     w.set_time_on(ts.iter().any(|t| t.field == Some("dm")));
     w.set_fuzzy_on(
-        ts.iter().any(|t| matches!(t.field, Some("fuzzy" | "letters")))
+        ts.iter()
+            .any(|t| matches!(t.field, Some("fuzzy" | "letters")))
             || w.get_typos_choice() == "always",
     );
     if lensing != Lensing::Keep {
@@ -296,16 +300,15 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     w.set_lens_open(true);
 }
 
-fn show_place_lens(
-    w: &MainWindow,
-    o: &qlens::Open,
-    places: &[(String, String)],
-    cat: &Catalogue,
-) {
+fn show_place_lens(w: &MainWindow, o: &qlens::Open, places: &[(String, String)], cat: &Catalogue) {
     let hm = home();
     let (base, part) = lens::place_parts(&o.term.value);
     let active = if base.is_empty() {
-        if hm.is_empty() { "/".to_owned() } else { hm.clone() }
+        if hm.is_empty() {
+            "/".to_owned()
+        } else {
+            hm.clone()
+        }
     } else {
         qlens::full_path(&hm, &base)
     };
@@ -322,7 +325,11 @@ fn show_place_lens(
         let on = d.state.indexed();
         let act = on
             && (active == root
-                || active.starts_with(&if root == "/" { "/".into() } else { format!("{root}/") }));
+                || active.starts_with(&if root == "/" {
+                    "/".into()
+                } else {
+                    format!("{root}/")
+                }));
         left.push(PlaceLeft {
             group: if first_disk {
                 cat.get("Disks").as_ref().into()
@@ -335,7 +342,11 @@ fn show_place_lens(
             } else {
                 cat.get("Index it").as_ref().into()
             },
-            target: if on { root.into() } else { d.volume.id.as_str().into() },
+            target: if on {
+                root.into()
+            } else {
+                d.volume.id.as_str().into()
+            },
             ask_disk: !on,
             active: act,
         });
@@ -844,8 +855,9 @@ fn exit(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
 }
 
 fn known_field(spans: &[scour_core::Span], t: &lens::Term) -> bool {
-    let inside =
-        |sp: &&scour_core::Span| (sp.start as usize) < t.end && (sp.start + sp.len) as usize > t.start;
+    let inside = |sp: &&scour_core::Span| {
+        (sp.start as usize) < t.end && (sp.start + sp.len) as usize > t.start
+    };
     let unknown = spans
         .iter()
         .filter(inside)
@@ -953,9 +965,7 @@ pub fn wire(
     {
         let (state, redraw) = (Rc::clone(state), redraw.clone());
         let state2 = Rc::clone(&state);
-        window.on_q_col(move |line, x, round| {
-            state2.borrow().qb.field.col_at(line, x, round)
-        });
+        window.on_q_col(move |line, x, round| state2.borrow().qb.field.col_at(line, x, round));
         window.on_q_cols(move |n| {
             state.borrow_mut().qb.field.cols = n.max(8) as usize;
             redraw(Lensing::Keep);
@@ -971,9 +981,8 @@ pub fn wire(
             let (sa, sc) = {
                 let mut s = state.borrow_mut();
                 let prev = s.qb.cursor;
-                let (sa, sc) = frame::clamp_selection(&text, prev, raw_a, raw_c, |t| {
-                    known_field(&s.spans, t)
-                });
+                let (sa, sc) =
+                    frame::clamp_selection(&text, prev, raw_a, raw_c, |t| known_field(&s.spans, t));
                 s.qb.anchor = sa;
                 s.qb.cursor = sc;
                 (sa, sc)
@@ -1366,7 +1375,14 @@ fn open_or_focus_field(
     redraw(Lensing::Asked);
 }
 
-pub fn picked_folder(w: &MainWindow, state: &Rc<RefCell<State>>, a: usize, b: usize, prefix: String, path: String) {
+pub fn picked_folder(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    a: usize,
+    b: usize,
+    prefix: String,
+    path: String,
+) {
     let text = w.get_query().to_string();
     let a = a.min(text.len());
     let b = b.min(text.len()).max(a);
@@ -1376,7 +1392,11 @@ pub fn picked_folder(w: &MainWindow, state: &Rc<RefCell<State>>, a: usize, b: us
     } else {
         shown
     };
-    let tail = if !text[b..].starts_with(char::is_whitespace) { " " } else { "" };
+    let tail = if !text[b..].starts_with(char::is_whitespace) {
+        " "
+    } else {
+        ""
+    };
     let ins = format!("{prefix}{quoted}{tail}");
     let q = format!("{}{ins}{}", &text[..a], &text[b..]);
     let caret = a + ins.len();
@@ -1434,14 +1454,20 @@ fn wire_v2(
             let text = w.get_query().to_string();
             let edit = {
                 let st = state.borrow();
-                let Some(o) = st.qb.lenses.open.as_ref() else { return };
+                let Some(o) = st.qb.lenses.open.as_ref() else {
+                    return;
+                };
                 st.qb
                     .lenses
                     .spark_range(a.max(0) as usize, b.max(0) as usize)
                     .map(|term| (o.a, o.b, term))
             };
             let Some((la, lb, term)) = edit else { return };
-            let tail = if !text[lb..].starts_with(char::is_whitespace) { " " } else { "" };
+            let tail = if !text[lb..].starts_with(char::is_whitespace) {
+                " "
+            } else {
+                ""
+            };
             let q = format!("{}{term}{tail}{}", &text[..la], &text[lb..]);
             let caret = la + term.len() + tail.len();
             state.borrow_mut().qb.lenses.close();
@@ -1470,7 +1496,9 @@ fn wire_v2(
                     .as_ref()
                     .map(|o| (o.a, o.b, o.term.field.unwrap_or("under"), o.term.not))
             };
-            let Some((a, b, fld, is_not)) = info else { return };
+            let Some((a, b, fld, is_not)) = info else {
+                return;
+            };
             let neg = if is_not { "!" } else { "" };
             match what.as_str() {
                 "disk" => {
@@ -1526,7 +1554,11 @@ fn wire_v2(
                 "flip" => {
                     let other = if fld == "under" { "parent" } else { "under" };
                     let shown = qlens::home_path(&hm, target.as_str());
-                    let slash = if shown == "/" { "/".into() } else { format!("{shown}/") };
+                    let slash = if shown == "/" {
+                        "/".into()
+                    } else {
+                        format!("{shown}/")
+                    };
                     let quoted = if slash.chars().any(char::is_whitespace) {
                         format!("\"{slash}\"")
                     } else {
@@ -1550,7 +1582,11 @@ fn wire_v2(
                     } else {
                         shown
                     };
-                    let tail = if !text[b..].starts_with(char::is_whitespace) { " " } else { "" };
+                    let tail = if !text[b..].starts_with(char::is_whitespace) {
+                        " "
+                    } else {
+                        ""
+                    };
                     let ins = format!("{pfx}{quoted}{tail}");
                     let q = format!("{}{ins}{}", &text[..a], &text[b..]);
                     let caret = a + ins.len();

@@ -141,6 +141,11 @@ pub struct Ast {
     /// does not find `şirket`. Off, only a term typed with a mark is that strict.
     #[serde(default)]
     pub exact_accents: bool,
+    /// A misspelling is forgiven only past a word's first four letters, so a
+    /// longer word never finds more than a shorter one. Off, anywhere in a
+    /// match that begins where a word of the name begins.
+    #[serde(default)]
+    pub strict_typos: bool,
 }
 
 /// How many typing mistakes a term of this length is forgiven: none up to four

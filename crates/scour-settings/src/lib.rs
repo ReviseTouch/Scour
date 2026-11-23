@@ -166,6 +166,11 @@ pub struct Settings {
     /// its mistakes, `off` does neither. Not validated here.
     #[serde(default)]
     pub typos: String,
+    /// A misspelling is forgiven only past a word's first four letters, so a
+    /// longer word never finds more than a shorter one. Off by default: a
+    /// mistake is forgiven anywhere in a match that begins at a word.
+    #[serde(default)]
+    pub typos_strict: bool,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -235,6 +240,7 @@ pub struct Change {
     pub accents_exact: Option<bool>,
     /// `off`, `always`, or `""` to offer. See [`Settings::typos`].
     pub typos: Option<String>,
+    pub typos_strict: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -358,6 +364,9 @@ impl Change {
         }
         if let Some(v) = self.typos {
             to.typos = v;
+        }
+        if let Some(v) = self.typos_strict {
+            to.typos_strict = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

@@ -715,6 +715,10 @@ fn main() -> Result<()> {
     window.set_tabs_on(!kept.tabs_off);
     window.set_accents_ignored(!kept.accents_exact);
     window.set_typos_choice(typos_choice(&kept.typos).into());
+    window.set_typos_strict(kept.typos_strict);
+    // Said again: the words were put in above, before the choice was known,
+    // and said "offer it" whatever had been chosen.
+    window.set_typos_said(typos_said(&cat.borrow(), &window.get_typos_choice()).into());
     window.set_rail_shown(kept.rail_shown);
     window.set_ribbon_shown(kept.ribbon_shown);
     trace(&format!("history: {} past searches", kept.history.len()));
@@ -1296,6 +1300,28 @@ fn main() -> Result<()> {
     }
 
     // --- how words are read ------------------------------------------------
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_typos_strict_picked(move |strict| {
+            if let Some(w) = weak.upgrade() {
+                w.set_typos_strict(strict);
+                // Asked again once the service has the new rule.
+                let weak = w.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(150), move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.invoke_query_changed(w.get_query());
+                    }
+                });
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    typos_strict: Some(strict),
+                    ..Default::default()
+                },
+            });
+        });
+    }
     // Kept by the service, which reads every query: the answer in sight changes
     // when the service says its index would answer differently.
     {
@@ -6001,9 +6027,9 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     ));
     w.set_set_typos(t(cat, "Typing mistakes"));
     w.set_word_narrow(t(cat, "Narrow:"));
-    w.set_word_filter_button(t(cat, "Filter").into());
-    w.set_word_peek(t(cat, "Preview").into());
-    w.set_word_tab(t(cat, "Tab").into());
+    w.set_word_filter_button(t(cat, "Filter"));
+    w.set_word_peek(t(cat, "Preview"));
+    w.set_word_tab(t(cat, "Tab"));
     w.set_word_fuzzy_tip(
         format!(
             "{} — {}",
@@ -6012,7 +6038,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         )
         .into(),
     );
-    w.set_word_add_filter(t(cat, "Add a filter").into());
+    w.set_word_add_filter(t(cat, "Add a filter"));
     w.set_word_filter_key(t(cat, "filter"));
     w.set_word_tab_key(t(cat, "tab"));
     w.set_set_rail(t(cat, "Sidebar"));
@@ -6028,6 +6054,13 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "A letter wrong, missing, extra or swapped, in a word of five letters or more.",
     ));
     w.set_typos_labels(list(&["Off", "When nothing is found", "Always"]));
+    w.set_set_typos_rule(t(cat, "Where a mistake is forgiven"));
+    w.set_set_typos_rule_note(t(
+        cat,
+        "From a word's start: anywhere in a word, as long as the word begins where the match does. \
+         Strict: never in the first four letters, so a longer word never finds more than a shorter one.",
+    ));
+    w.set_typos_rule_labels(list(&["From a word's start", "Strict"]));
     w.set_set_search_hint(t(
         cat,
         "letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes.",

@@ -50,12 +50,17 @@ pub(crate) fn plan(ast: &Ast) -> Option<Plan> {
         rest: Ast {
             groups: Vec::new(),
             exact_accents: ast.exact_accents,
+            strict_typos: ast.strict_typos,
         },
     };
     for group in &ast.groups {
         match group.alts.as_slice() {
             [(true, Match::ContentContains(text))] => {
-                for piece in text.split([';', '|']).map(str::trim).filter(|s| !s.is_empty()) {
+                for piece in text
+                    .split([';', '|'])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     plan.forbid.push(piece.to_owned());
                 }
             }
@@ -67,7 +72,11 @@ pub(crate) fn plan(ast: &Ast) -> Option<Plan> {
                 let mut clause = Vec::new();
                 for (_, m) in alts {
                     if let Match::ContentContains(text) = m {
-                        for piece in text.split([';', '|']).map(str::trim).filter(|s| !s.is_empty()) {
+                        for piece in text
+                            .split([';', '|'])
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
                             clause.push(piece.to_owned());
                         }
                     }
@@ -299,12 +308,13 @@ impl Contents {
     /// `Ok(true)` when every candidate was read.
     fn read_on(&self, reading: &Reading, lent: &Lent) -> Result<bool> {
         let ground = Ground::probe(lent.roots.iter().map(|r| scour_core::path::to_path(r)));
-        let expr = Expr::from_clauses(&reading.plan.must, &reading.plan.forbid, false).map_err(
-            |e| Error::QuerySyntax {
-                at: 0,
-                expected: e.to_string(),
-            },
-        )?;
+        let expr =
+            Expr::from_clauses(&reading.plan.must, &reading.plan.forbid, false).map_err(|e| {
+                Error::QuerySyntax {
+                    at: 0,
+                    expected: e.to_string(),
+                }
+            })?;
         let options = Options {
             hits_per_file: FOUND_PER_FILE,
             ..Options::default()
@@ -326,8 +336,14 @@ impl Contents {
                 if !self.wanted(reading) {
                     return Ok(false);
                 }
-                let (read, holding) =
-                    holding(&expr, &options, &ground, lent.enter.clone(), &reading.budget, batch);
+                let (read, holding) = holding(
+                    &expr,
+                    &options,
+                    &ground,
+                    lent.enter.clone(),
+                    &reading.budget,
+                    batch,
+                );
                 let mut state = reading.state.lock();
                 state.at = state.at.saturating_add(read as u32);
                 state.scanned += read as u64;
@@ -423,13 +439,14 @@ mod tests {
         let content = |negated| (negated, Match::ContentContains("x".into()));
         let ast = |groups| Ast {
             groups,
-            exact_accents: false,
+            ..Ast::default()
         };
         let both = plan(&ast(vec![name.clone(), group(vec![content(false)])])).expect("a plan");
         assert_eq!(both.must, vec![vec!["x".to_string()]]);
         assert!(both.forbid.is_empty());
         assert_eq!(both.rest, ast(vec![name.clone()]));
-        let scoped_not = plan(&ast(vec![name.clone(), group(vec![content(true)])])).expect("scoped !content");
+        let scoped_not =
+            plan(&ast(vec![name.clone(), group(vec![content(true)])])).expect("scoped !content");
         assert!(scoped_not.must.is_empty());
         assert_eq!(scoped_not.forbid, ["x"]);
         assert_eq!(plan(&ast(vec![name.clone()])), None);

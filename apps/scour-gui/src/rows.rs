@@ -118,7 +118,9 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
                 for w in 0..=chars.len() - len {
                     let sub: Vec<char> = chars[w..w + len].iter().map(|(_, c)| *c).collect();
                     if one_edit(&sub, &want)
-                        && !sub.last().is_some_and(|c| matches!(c, '.' | '_' | '-' | ' '))
+                        && !sub
+                            .last()
+                            .is_some_and(|c| matches!(c, '.' | '_' | '-' | ' '))
                     {
                         let from = chars[w].0;
                         let to = chars.get(w + len).map_or(folded.len(), |(p, _)| *p);

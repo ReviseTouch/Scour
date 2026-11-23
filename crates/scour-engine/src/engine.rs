@@ -31,6 +31,9 @@ pub struct Reading {
     /// A letter and the same letter with a mark are different letters.
     pub exact_accents: bool,
     pub typos: Typos,
+    /// A misspelling forgiven only past a word's first four letters: a longer
+    /// word then never finds more than a shorter one.
+    pub strict_typos: bool,
 }
 
 /// What is done about a word that may be mistyped.
@@ -47,17 +50,18 @@ pub enum Typos {
 
 impl Reading {
     fn bits(self) -> u8 {
-        u8::from(self.exact_accents) | (self.typos as u8) << 1
+        u8::from(self.exact_accents) | (self.typos as u8) << 1 | u8::from(self.strict_typos) << 3
     }
 
     fn of(bits: u8) -> Reading {
         Reading {
             exact_accents: bits & 1 != 0,
-            typos: match bits >> 1 {
+            typos: match bits >> 1 & 3 {
                 0 => Typos::Off,
                 1 => Typos::Suggest,
                 _ => Typos::Always,
             },
+            strict_typos: bits & 8 != 0,
         }
     }
 }
@@ -339,6 +343,7 @@ impl Shared {
         let read = self.read_as();
         let mut ast = scour_query::parse(query);
         ast.exact_accents = read.exact_accents;
+        ast.strict_typos = read.strict_typos;
         match read.typos {
             Typos::Always => ast.forgiving().unwrap_or(ast),
             _ => ast,

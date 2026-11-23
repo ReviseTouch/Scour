@@ -2600,6 +2600,18 @@ msgstr "Süzgeç"
 msgid "Tab"
 msgstr "Sekme"
 
+msgid "Where a mistake is forgiven"
+msgstr "Hata nerede affedilir"
+
+msgid "From a word's start: anywhere in a word, as long as the word begins where the match does. Strict: never in the first four letters, so a longer word never finds more than a shorter one."
+msgstr "Kelime başından: kelimenin her yerinde, yeter ki eşleşme bir kelimenin başında başlasın. Kesin: ilk dört harfte asla; böylece uzun kelime kısa kelimeden fazlasını bulmaz."
+
+msgid "From a word's start"
+msgstr "Kelime başından"
+
+msgid "Strict"
+msgstr "Kesin"
+
 msgid "Narrow:"
 msgstr "Daralt:"
 

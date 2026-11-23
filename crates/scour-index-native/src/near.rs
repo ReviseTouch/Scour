@@ -1,18 +1,40 @@
 //! A term forgiven its typing mistakes, and letters with anything between.
 //!
-//! [`Near`] asks whether any part of a name is within a few edits of a term —
-//! a letter wrong, missing, extra, or two swapped — in one pass over the name's
-//! bytes: the column of the edit-distance table is kept as bits (Myers; Hyyrö
-//! for the swap), so a row costs its length and not its length times the term's.
+//! [`Near`] asks whether a name holds a term, or something within a few edits
+//! of it — a letter wrong, missing, extra, or two swapped. The term spelled
+//! right is found anywhere in the name; a misspelling only where a word of the
+//! name begins, because anywhere is everywhere: one mistake let `salih` find
+//! `universal_hash` and `neslihan`, and a longer word found more than a shorter.
+//!
+//! A first pass over the name's bytes keeps the column of the edit-distance
+//! table as bits (Myers; Hyyrö for the swap), so a row costs its length and not
+//! its length times the term's; it says whether any part is near. Only a name
+//! it passes without the right spelling is read again, a cell at a time, from
+//! where its words begin.
 
 use crate::trigram::TrigramIndex;
 
 /// The longest term the bit columns hold.
 pub(crate) const WIDEST: usize = 64;
 
+/// Where a mistake may be forgiven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rule {
+    /// Anywhere in a match that begins where a word of the name begins.
+    #[default]
+    WordStart,
+    /// The same, and the start of the term is held to what a term that short
+    /// is forgiven: the first four letters exactly, the first ten with one
+    /// mistake. A longer term then never finds what a shorter one does not.
+    Strict,
+}
+
 /// A term of at most [`WIDEST`] characters and how many mistakes it is forgiven.
 #[derive(Debug)]
 pub struct Near {
+    rule: Rule,
+    /// The term, a character a place, for the second reading.
+    chars: Vec<char>,
     /// Where each ASCII byte stands in the term, a bit a place.
     ascii: [u64; 128],
     /// The same for the term's other characters, by their UTF-8 bytes.
@@ -37,12 +59,14 @@ fn pair_bit(a: u8, b: u8) -> (usize, u64) {
 
 impl Near {
     /// `None` for a term the columns cannot hold, or an empty one.
-    pub fn new(folded: &str, edits: u8) -> Option<Near> {
+    pub fn new(folded: &str, edits: u8, rule: Rule) -> Option<Near> {
         let len = folded.chars().count();
         if len == 0 || len > WIDEST {
             return None;
         }
         let mut near = Near {
+            rule,
+            chars: folded.chars().collect(),
             ascii: [0; 128],
             wide: Vec::new(),
             len: len as u32,
@@ -103,6 +127,8 @@ impl Near {
         let mut score = self.len;
         let last = self.len - 1;
         let mut at = 0usize;
+        // Some part near enough, though perhaps not where a word begins.
+        let mut nearly = false;
         while at < name.len() {
             let b = name[at];
             let matches = if b < 0x80 {
@@ -117,16 +143,78 @@ impl Near {
             let left = up & diagonal;
             // Never both, and no branch: which of them it is is a coin toss.
             score = score + (right >> last & 1) as u32 - (left >> last & 1) as u32;
-            if score <= self.edits {
+            // Spelled right: anywhere will do.
+            if score == 0 {
                 return true;
             }
+            nearly |= score <= self.edits;
             // Nothing shifted in: a match may begin at any character.
             let (right, left) = (right << 1, left << 1);
             up = left | !(diagonal | right);
             down = right & diagonal;
             before = matches;
         }
-        false
+        nearly && self.begun_at_a_word(name)
+    }
+
+    /// The table a cell at a time, its matches begun only where a word of the
+    /// name begins, and each row held to what the rule allows it.
+    #[cold]
+    fn begun_at_a_word(&self, name: &[u8]) -> bool {
+        const NONE: u32 = u32::MAX / 2;
+        let text = String::from_utf8_lossy(name);
+        let n: Vec<char> = text.chars().collect();
+        let t = &self.chars;
+        let allowed = |i: usize| match self.rule {
+            Rule::WordStart => self.edits,
+            Rule::Strict => self.edits.min(u32::from(scour_core::mistakes_allowed(
+                &t[..i].iter().collect::<String>(),
+            ))),
+        };
+        // Rows of the table: the term's first `i` characters against the name.
+        let width = n.len() + 1;
+        let mut two_up = vec![NONE; width];
+        let mut up: Vec<u32> = (0..width)
+            .map(|j| {
+                if j < n.len() && word_starts(&n, j) {
+                    0
+                } else {
+                    NONE
+                }
+            })
+            .collect();
+        let mut row = vec![NONE; width];
+        for i in 1..=t.len() {
+            let cap = allowed(i);
+            // A swap is a mistake the row above already carries: it may not
+            // step over a row that allows none.
+            let cap_above = allowed(i - 1);
+            row[0] = up[0].saturating_add(1);
+            for j in 1..width {
+                let cost = u32::from(t[i - 1] != n[j - 1]);
+                let mut best = up[j]
+                    .saturating_add(1)
+                    .min(row[j - 1].saturating_add(1))
+                    .min(up[j - 1].saturating_add(cost));
+                if i > 1
+                    && j > 1
+                    && t[i - 1] == n[j - 2]
+                    && t[i - 2] == n[j - 1]
+                    && two_up[j - 2].saturating_add(1) <= cap_above
+                {
+                    best = best.min(two_up[j - 2].saturating_add(1));
+                }
+                row[j] = best;
+            }
+            for cell in &mut row {
+                if *cell > cap {
+                    *cell = NONE;
+                }
+            }
+            std::mem::swap(&mut two_up, &mut up);
+            std::mem::swap(&mut up, &mut row);
+        }
+        up.iter().any(|&d| d < NONE)
     }
 
     /// Where the character at `at` stands in the term, stepping over it: one
@@ -174,6 +262,20 @@ impl Near {
             blocks = either(&blocks, &tri.candidates(spelling.as_bytes())?);
         }
         Some(blocks)
+    }
+}
+
+/// Does a word of the name begin at its `j`th character: the first, one after
+/// anything not a letter or a digit, or where letters and digits meet
+/// (`2026rapor`).
+fn word_starts(name: &[char], j: usize) -> bool {
+    let c = name[j];
+    if !c.is_alphanumeric() {
+        return false;
+    }
+    match j.checked_sub(1).map(|p| name[p]) {
+        None => true,
+        Some(p) => !p.is_alphanumeric() || p.is_numeric() != c.is_numeric(),
     }
 }
 
@@ -236,34 +338,104 @@ impl Letters {
 mod tests {
     use super::*;
 
-    /// The table itself, a cell at a time: the fewest edits between the term
-    /// and any part of the name, a swap of neighbours counting as one.
-    fn slowly(term: &str, name: &str) -> usize {
+    /// The fewest edits between the term and a part of the name that begins
+    /// where one of its words begins, by the table and nothing else: every such
+    /// start tried, the name's characters before it never paid for.
+    fn from_words(term: &str, name: &str) -> usize {
         let t: Vec<char> = term.chars().collect();
         let n: Vec<char> = name.chars().collect();
-        // rows are the term, columns the name; the top row is free.
-        let mut d = vec![vec![0usize; n.len() + 1]; t.len() + 1];
-        for (i, row) in d.iter_mut().enumerate() {
-            row[0] = i;
-        }
-        for i in 1..=t.len() {
-            for j in 1..=n.len() {
-                let cost = usize::from(t[i - 1] != n[j - 1]);
-                let mut best = (d[i - 1][j] + 1)
-                    .min(d[i][j - 1] + 1)
-                    .min(d[i - 1][j - 1] + cost);
-                if i > 1 && j > 1 && t[i - 1] == n[j - 2] && t[i - 2] == n[j - 1] {
-                    best = best.min(d[i - 2][j - 2] + 1);
+        let mut best = usize::MAX;
+        for start in (0..n.len()).filter(|&j| word_starts(&n, j)) {
+            let n = &n[start..];
+            let mut d = vec![vec![0usize; n.len() + 1]; t.len() + 1];
+            for (i, row) in d.iter_mut().enumerate() {
+                row[0] = i;
+            }
+            for cell in d[0].iter_mut().skip(1) {
+                *cell = usize::MAX / 2;
+            }
+            for i in 1..=t.len() {
+                for j in 1..=n.len() {
+                    let cost = usize::from(t[i - 1] != n[j - 1]);
+                    let mut b = (d[i - 1][j] + 1)
+                        .min(d[i][j - 1] + 1)
+                        .min(d[i - 1][j - 1] + cost);
+                    if i > 1 && j > 1 && t[i - 1] == n[j - 2] && t[i - 2] == n[j - 1] {
+                        b = b.min(d[i - 2][j - 2] + 1);
+                    }
+                    d[i][j] = b;
                 }
-                d[i][j] = best;
+            }
+            best = best.min(d[t.len()].iter().copied().min().unwrap_or(usize::MAX));
+        }
+        best
+    }
+
+    #[test]
+    fn a_mistake_is_forgiven_only_where_a_word_begins() {
+        let near = |term: &str, rule| Near::new(term, 1, rule).expect("fits");
+        // The noise one mistake anywhere let in, for `salih`. (`halihazir` is
+        // not noise by this rule: `halih` is a letter off, where a word begins.)
+        for name in ["universal_hash", "neslihan", "3lmpslihunqk"] {
+            assert!(
+                !near("salih", Rule::WordStart).found_in(name.as_bytes()),
+                "{name}"
+            );
+        }
+        for name in ["hasan salihoglu", "sarihular.doc", "eski_salh", "2026salik"] {
+            assert!(
+                near("salih", Rule::WordStart).found_in(name.as_bytes()),
+                "{name}"
+            );
+        }
+        // Spelled right, it is found anywhere, as a word without forgiveness is.
+        assert!(near("salih", Rule::WordStart).found_in(b"musasalihx"));
+        // A mistake early in the word: forgiven from a word's start, not strictly.
+        assert!(near("hassan", Rule::WordStart).found_in(b"hasan yaman"));
+        assert!(!near("hassan", Rule::Strict).found_in(b"hasan yaman"));
+        assert!(near("hassan", Rule::Strict).found_in(b"hassn yaman"));
+    }
+
+    /// The strict rule's promise: with every word as the engine reads it — four
+    /// letters or fewer spelled exactly, longer ones forgiven by their length —
+    /// a word with one more letter never finds a name the shorter did not.
+    #[test]
+    fn strictly_a_longer_word_never_finds_more() {
+        let alphabet = ['a', 'b', 'r', 's', 'ş', ' ', '-', '1'];
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = |n: usize| -> usize {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 33) as usize) % n
+        };
+        let found = |term: &str, name: &str| match scour_core::mistakes_allowed(term) {
+            0 => name.contains(term),
+            e => Near::new(term, e, Rule::Strict)
+                .expect("fits")
+                .found_in(name.as_bytes()),
+        };
+        let mut checked = 0;
+        for _ in 0..20_000 {
+            let term: String = (0..next(12) + 1).map(|_| alphabet[next(5)]).collect();
+            let longer = format!("{term}{}", alphabet[next(5)]);
+            let name: String = (0..next(30) + 1)
+                .map(|_| alphabet[next(alphabet.len())])
+                .collect();
+            if found(&longer, &name) {
+                checked += 1;
+                assert!(
+                    found(&term, &name),
+                    "{longer:?} found {name:?}, {term:?} did not"
+                );
             }
         }
-        d[t.len()].iter().copied().min().unwrap_or(t.len())
+        assert!(checked > 200, "{checked}");
     }
 
     #[test]
     fn a_wrong_a_missing_an_extra_and_a_swapped_letter_are_one_mistake_each() {
-        let near = |term: &str, edits| Near::new(term, edits).expect("fits");
+        let near = |term: &str, edits| Near::new(term, edits, Rule::WordStart).expect("fits");
         for name in [
             "rapor.pdf",
             "2026-rapot.pdf",
@@ -281,8 +453,8 @@ mod tests {
         assert!(!near("muhasebe", 1).found_in(b"muhsaebi-2026.xlsx"));
         assert!(near("rapor", 0).found_in(b"rapor"));
         assert!(!near("rapor", 0).found_in(b"rapo"));
-        assert!(Near::new("", 1).is_none());
-        assert!(Near::new(&"a".repeat(65), 2).is_none());
+        assert!(Near::new("", 1, Rule::WordStart).is_none());
+        assert!(Near::new(&"a".repeat(65), 2, Rule::WordStart).is_none());
         assert!(near(&"a".repeat(64), 2).found_in("a".repeat(62).as_bytes()));
     }
 
@@ -341,7 +513,7 @@ mod tests {
             "muhasebeci",
         ] {
             for edits in 1..=2u8 {
-                let near = Near::new(&Unaccented.fold(term), edits).expect("fits");
+                let near = Near::new(&Unaccented.fold(term), edits, Rule::WordStart).expect("fits");
                 let Some(blocks) = near.blocks(&tri) else {
                     continue;
                 };
@@ -377,14 +549,14 @@ mod tests {
         for _ in 0..40_000 {
             let term = word(&mut next, 9);
             let name = word(&mut next, 24);
-            let want = slowly(&term, &name);
+            let want = from_words(&term, &name);
             for edits in 0..=3u8 {
-                let got = Near::new(&term, edits)
+                let got = Near::new(&term, edits, Rule::WordStart)
                     .expect("fits")
                     .found_in(name.as_bytes());
                 assert_eq!(
                     got,
-                    want <= usize::from(edits),
+                    name.contains(term.as_str()) || want <= usize::from(edits),
                     "{term:?} in {name:?}, {edits}"
                 );
                 found[usize::from(got)] += 1;
@@ -395,7 +567,7 @@ mod tests {
 
     #[test]
     fn bytes_that_are_not_text_are_read_without_a_panic() {
-        let near = Near::new("rapor", 1).expect("fits");
+        let near = Near::new("rapor", 1, Rule::WordStart).expect("fits");
         assert!(near.found_in(b"\xff\xfe rapo\xc3"));
         assert!(!near.found_in(b"\xe4\xb8"));
         assert!(!Letters::new("ab").found_in(b"\xff\xfea"));

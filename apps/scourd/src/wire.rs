@@ -176,6 +176,7 @@ pub fn reading(kept: &scour_settings::Settings) -> scour_engine::Reading {
             "always" => scour_engine::Typos::Always,
             _ => scour_engine::Typos::Suggest,
         },
+        strict_typos: kept.typos_strict,
     }
 }
 

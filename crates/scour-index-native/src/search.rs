@@ -700,7 +700,10 @@ impl Plan {
         for group in &ast.groups {
             let mut alts = Vec::with_capacity(group.alts.len());
             for (negated, m) in &group.alts {
-                alts.push((*negated, compile_match(m, ast.exact_accents, seg)?));
+                alts.push((
+                    *negated,
+                    compile_match(m, ast.exact_accents, ast.strict_typos, seg)?,
+                ));
             }
             clauses.push(Clause { alts });
         }
@@ -850,7 +853,13 @@ fn compile_regex(pattern: &str) -> Result<Box<regex::Regex>, scour_core::Error> 
 
 /// `exact` is the query's: a letter and the letter with a mark are different.
 /// Without it only a term that carries a mark is asked of names with theirs.
-fn compile_match(m: &Match, exact: bool, seg: &Segment<'_>) -> Result<Test, scour_core::Error> {
+/// `strict` is how a mistake is forgiven — see [`crate::near::Rule`].
+fn compile_match(
+    m: &Match,
+    exact: bool,
+    strict: bool,
+    seg: &Segment<'_>,
+) -> Result<Test, scour_core::Error> {
     use scour_core::TimeField;
     let plain = |t: &str| Unaccented::of_folded(t).into_owned();
     let marked = |t: &str| exact || Unaccented::of_folded(t) != t;
@@ -860,7 +869,15 @@ fn compile_match(m: &Match, exact: bool, seg: &Segment<'_>) -> Result<Test, scou
             folded: Needle::new(&plain(t)),
         })),
         Match::NameContains(t) => Test::NameHas(Needle::new(t)),
-        Match::NameNear(t, edits) => match Near::new(&plain(t), *edits) {
+        Match::NameNear(t, edits) => match Near::new(
+            &plain(t),
+            *edits,
+            if strict {
+                crate::near::Rule::Strict
+            } else {
+                crate::near::Rule::WordStart
+            },
+        ) {
             Some(near) if *edits > 0 => Test::NameNear(Box::new(near)),
             _ => Test::NameHas(Needle::new(&plain(t))),
         },

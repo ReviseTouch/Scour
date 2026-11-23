@@ -114,8 +114,8 @@ impl Field {
                 0
             };
             let (a, b) = (chars_before(query, t.start), chars_before(query, t.end));
-            let head_ch = frame::head_of(query, &t, |_| named)
-                .map_or(a, |h| chars_before(query, h));
+            let head_ch =
+                frame::head_of(query, &t, |_| named).map_or(a, |h| chars_before(query, h));
             for (i, l) in self.lines.iter().enumerate() {
                 let (s, e) = (a.max(l.start), b.min(l.end));
                 if s < e {
@@ -169,7 +169,11 @@ impl Field {
     /// Where each column is drawn, given the capsules: a header's letters are
     /// small, an ≈ header one icon wide, everything else a letter of the face.
     pub fn measure(&mut self, caps: &[Cap]) {
-        let adv = if self.advance > 0.0 { self.advance } else { 9.6 };
+        let adv = if self.advance > 0.0 {
+            self.advance
+        } else {
+            9.6
+        };
         self.xs = self
             .lines
             .iter()
@@ -203,7 +207,11 @@ impl Field {
     /// Where a column of a line (counted from the first line, not the first
     /// shown) is drawn. Past the end, a letter of the face per column.
     pub fn x(&self, line: usize, col: i32) -> f32 {
-        let adv = if self.advance > 0.0 { self.advance } else { 9.6 };
+        let adv = if self.advance > 0.0 {
+            self.advance
+        } else {
+            9.6
+        };
         let col = col.max(0) as usize;
         match self.xs.get(line) {
             Some(xs) if col < xs.len() => xs[col],
@@ -222,7 +230,11 @@ impl Field {
         let x = x.max(0.0);
         let mut col = 0;
         for (i, pair) in xs.windows(2).enumerate() {
-            let mid = if round { (pair[0] + pair[1]) / 2.0 } else { pair[1] };
+            let mid = if round {
+                (pair[0] + pair[1]) / 2.0
+            } else {
+                pair[1]
+            };
             if x >= mid {
                 col = i + 1;
             } else {
@@ -284,7 +296,7 @@ mod tests {
             head: 4,
             ..Cap::default()
         };
-        f.measure(&[cap.clone()]);
+        f.measure(std::slice::from_ref(&cap));
         let narrow = 10.0 * HEAD_SCALE - HEAD_TIGHT;
         assert!((f.x(0, 4) - 4.0 * narrow).abs() < 0.01);
         assert!((f.x(0, 5) - (4.0 * narrow + 10.0)).abs() < 0.01);

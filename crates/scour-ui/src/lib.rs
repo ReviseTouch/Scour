@@ -954,11 +954,7 @@ mod column_tests {
         let avail = 900;
         let w = lay_out(FIVE, |id| (id == "name").then_some(4000), avail);
         assert_eq!(w.iter().sum::<u32>(), avail);
-        for (c, got) in COLUMNS
-            .iter()
-            .filter(|c| FIVE.contains(&c.id))
-            .zip(&w)
-        {
+        for (c, got) in COLUMNS.iter().filter(|c| FIVE.contains(&c.id)).zip(&w) {
             assert!(*got >= c.min, "`{}` fell to {got}, under its floor", c.id);
         }
         // And the two on the right are still readable rather than a sliver.
