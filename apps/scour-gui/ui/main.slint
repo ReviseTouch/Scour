@@ -7990,7 +7990,8 @@ export component MainWindow inherits Window {
     }
 
     // Elevated Zero-Hit Similar Rescue Card when a search finds nothing.
-    if root.similar-said != "" && root.panel == "" && !root.grep-active: Rectangle {
+    // Away while the lens is open: drawn above the card, they would lie over it.
+    if root.similar-said != "" && root.panel == "" && !root.grep-active && !root.lens-open: Rectangle {
         x: list.absolute-position.x + (list.width - self.width) / 2;
         y: list.absolute-position.y + 68px;
         width: min(500px, list.width - 32px);
@@ -8054,7 +8055,7 @@ export component MainWindow inherits Window {
 
     // Nothing found: each filter, left out on its own, and what would then be
     // found. A press takes that filter out.
-    if root.offers.length > 0 && root.panel == "" && !root.grep-active: Rectangle {
+    if root.offers.length > 0 && root.panel == "" && !root.grep-active && !root.lens-open: Rectangle {
         x: list.absolute-position.x + (list.width - self.width) / 2;
         y: list.absolute-position.y + (root.similar-said != "" ? 168px : 104px);
         width: max(offers-col.preferred-width, 200px);

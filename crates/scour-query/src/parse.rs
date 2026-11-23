@@ -346,6 +346,14 @@ fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
     if rest.is_empty() {
         return None;
     }
+    // **A `:` starting a filter is a filter not chosen yet**, and is left out:
+    // the bar's `+` and its filter button write one and open the list of
+    // fields, and the letters after it narrow that list (`:d`, `:kon`). Searched
+    // for as text it found nothing, and the list went empty under the menu.
+    // `":"` in quotes is still the character.
+    if is_launcher(rest) {
+        return None;
+    }
 
     if let Some((field, value)) = split_field(rest) {
         let raw = unquote(value);
@@ -685,6 +693,13 @@ fn token_field(s: &str) -> Option<(String, &str)> {
 
 /// Split `field:value`. A name is at least two alphabetic characters, ASCII or
 /// not; the length rule is what keeps the Windows `C:/Users` from being a field.
+/// A filter being started: `:`, and perhaps the letters choosing one, with no
+/// second `:` — the same term the bar's list of fields opens on.
+pub(crate) fn is_launcher(term: &str) -> bool {
+    term.strip_prefix(':')
+        .is_some_and(|rest| !rest.contains([':', '"']))
+}
+
 fn split_field(s: &str) -> Option<(String, &str)> {
     let idx = s.find(':')?;
     let name = &s[..idx];
@@ -802,6 +817,19 @@ mod paren_tests {
 
 #[cfg(test)]
 mod tests {
+    /// A `:` starting a filter, and the letters choosing it, are left out: the
+    /// rest of the query answers until a field is chosen.
+    #[test]
+    fn a_filter_being_started_is_left_out() {
+        for q in ["kind:doc :", "kind:doc :d", ": kind:doc", "kind:doc !:kon"] {
+            assert_eq!(parse_at(q, 0).groups, parse_at("kind:doc", 0).groups, "{q}");
+        }
+        assert!(parse_at(":", 0).groups.is_empty());
+        // Quoted, it is the character; with a field after it, not a launcher.
+        assert!(!parse_at("\":\"", 0).groups.is_empty());
+        assert!(!parse_at(":a:b", 0).groups.is_empty());
+    }
+
     /// An empty `content:` is a filter not written yet: the rest of the query
     /// answers as if it were not there, not as a search for its text.
     #[test]

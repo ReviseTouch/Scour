@@ -631,6 +631,15 @@ fn word_at(input: &str, cursor: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
 
+    /// A `:` starting a filter is not marked as misread: it is left out.
+    #[test]
+    fn a_filter_being_started_is_not_a_warning() {
+        for q in ["kind:doc :", "kind:doc :ko"] {
+            let spans = spans_at(q, 1_800_000_000);
+            assert!(spans.iter().all(|s| !s.role.is_warning()), "{q}: {spans:?}");
+        }
+    }
+
     /// An empty `content:""` is not marked as misread: it is left out.
     #[test]
     fn an_empty_content_term_is_not_a_warning() {
