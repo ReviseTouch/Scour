@@ -11,6 +11,13 @@ use scour_proto::{Outcome, Request, Response};
 
 use crate::live::Live;
 
+mod answers;
+mod settings;
+mod volumes;
+use answers::*;
+use settings::*;
+use volumes::*;
+
 /// What every frontend remembers, and where it is written. Not in the engine:
 /// which columns somebody shows is a fact about a person, not about the index.
 pub struct Kept {
@@ -137,23 +144,7 @@ fn run(
                     top: top as usize,
                 },
             )?;
-            Response::Duplicates {
-                groups: r
-                    .groups
-                    .iter()
-                    .map(|g| scour_proto::DupGroup {
-                        size: g.size,
-                        paths: g.paths.clone(),
-                        waste: g.waste(),
-                        certainty: g.certainty.token().to_owned(),
-                    })
-                    .collect(),
-                candidates: r.candidates,
-                waste: r.waste,
-                proven: r.proven,
-                read: r.read,
-                unconfirmed: r.unconfirmed,
-            }
+            duplicates_answer(r)
         }
         Request::Grep {
             query,
@@ -170,18 +161,7 @@ fn run(
             max_size,
             timeout_ms,
         } => {
-            let needle = match mode {
-                scour_proto::GrepMode::Text => scour_grep::Needle::Text(pattern),
-                scour_proto::GrepMode::Regex => scour_grep::Needle::Regex(pattern),
-                scour_proto::GrepMode::Hex => {
-                    scour_grep::Needle::hex(&pattern).ok_or_else(|| {
-                        scour_core::Error::QuerySyntax {
-                            at: 0,
-                            expected: "pairs of hex digits".into(),
-                        }
-                    })?
-                }
-            };
+            let needle = needle_of(mode, pattern)?;
             let ask = scour_engine::GrepAsk {
                 needle,
                 exact_case,
@@ -199,38 +179,7 @@ fn run(
             // Every reading thread reads as the person asking; see `preview`.
             let enter: scour_grep::Enter = std::sync::Arc::new(crate::as_owner::for_a_read);
             let r = engine.grep(&query, &ask, Some(enter))?;
-            Response::Grep(scour_proto::GrepResponse {
-                files: r
-                    .files
-                    .into_iter()
-                    .map(|f| scour_proto::GrepFile {
-                        path: f.path,
-                        meta: f.meta,
-                        kind: f.kind,
-                        more: f.more,
-                        hits: f
-                            .hits
-                            .into_iter()
-                            .map(|h| scour_proto::GrepHit {
-                                line: h.line,
-                                offset: h.offset,
-                                text: h.text,
-                                at: h.at,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-                candidates: r.candidates,
-                capped: r.capped,
-                scanned: r.scanned,
-                read: r.read,
-                binary: r.binary,
-                too_big: r.too_big,
-                unreadable: r.unreadable,
-                next: r.next,
-                misread: r.misread,
-                took_us: r.took_us,
-            })
+            Response::Grep(grep_answer(r))
         }
         Request::Settings {} => Response::Settings(Box::new(
             kept.settings
@@ -238,181 +187,10 @@ fn run(
                 .unwrap_or_else(|p| p.into_inner())
                 .clone(),
         )),
-        // Written where the change happens, not at shutdown: a killed process
-        // never gets to write anything.
-        Request::SetSettings { change } => {
-            let replan = change.moves_sources();
-            let tunes = change.tunes();
-            let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
-            let before = rules_of(&held);
-            // Folded in, not assigned: what it does not name is another
-            // frontend's.
-            change.apply(&mut held);
-            if let Err(e) = held.save(&kept.dir) {
-                scour_core::note!("scourd: settings could not be written: {e}");
-            }
-            // A rule is the one setting that changes what the index holds, so
-            // the engine takes the new set. Compared rather than assumed: this
-            // is also the request a window sends for a column drag.
-            let after = rules_of(&held);
-            // How words are read is the engine's to know: every question
-            // that takes a query parses it there.
-            engine.set_reading(crate::wire::reading(&held));
-            if tunes {
-                crate::wire::tune(&held);
-            }
-            if before != after {
-                let was = engine.scan_options();
-                let now = crate::wire::scan_options_with(&kept.config, &held);
-                let opened = opened_up(&was, &now);
-                drop(held);
-                engine.set_scan_options(now);
-
-                // Tightening first and without a walk: the index already holds
-                // every path the answer is about. Timed and reported even when
-                // nothing goes, because the pass reads every row.
-                let began = std::time::Instant::now();
-                match engine.apply_rules() {
-                    Ok(n) => scour_core::note!(
-                        "scourd: {n} subtree(s) left the index · {} ms",
-                        began.elapsed().as_millis()
-                    ),
-                    Err(e) => scour_core::note!("scourd: the new rules could not be applied: {e}"),
-                }
-
-                // A walk only for what was opened: a path rule names its own
-                // subtree, a directory or file name can be anywhere. Said out
-                // loud, because all three look alike from outside.
-                let walk: Vec<Option<String>> = match opened {
-                    Opened::Nothing => {
-                        scour_core::note!("scourd: rules tightened; no walk needed");
-                        Vec::new()
-                    }
-                    Opened::Subtrees(paths) => {
-                        scour_core::note!(
-                            "scourd: rules opened {}; walking those",
-                            paths.join(", ")
-                        );
-                        paths.into_iter().map(Some).collect()
-                    }
-                    Opened::Everything => {
-                        scour_core::note!(
-                            "scourd: a directory or file name was re-admitted; walking everything"
-                        );
-                        vec![None]
-                    }
-                };
-                for subtree in walk {
-                    // Queued and returned from immediately: the walk runs on
-                    // the worker, or a save looks like a frozen window.
-                    match engine.rescan(subtree.clone()) {
-                        Ok(()) => {}
-                        // Outside every root is not a failure: the built-in set
-                        // excludes `/proc` and `/tmp`, which no source holds,
-                        // so switching one off opens nothing.
-                        Err(scour_core::Error::NotFound { .. }) => scour_core::note!(
-                            "scourd: {} is outside every source; nothing to walk",
-                            subtree.as_deref().unwrap_or("everything")
-                        ),
-                        Err(e) => scour_core::note!(
-                            "scourd: the rules opened {} but it could not be walked: {e}",
-                            subtree.as_deref().unwrap_or("everything")
-                        ),
-                    }
-                }
-            } else {
-                drop(held);
-            }
-            // What is said about plugged-in disks, or a folder added: planned
-            // again, which swaps the engine when the sources changed. After
-            // the lock, which planning takes.
-            if replan {
-                live.replan(kept);
-            }
-            Response::Accepted
-        }
-        // Three lists, not one: the built-in set is code, `config.toml` is
-        // hand-written, and only the third can be deleted from a window. Read
-        // from where each group is written, not from what the engine enforces —
-        // it holds the merged set minus what is switched off, so a switched-off
-        // rule would vanish from the panel with no way to turn it back on.
-        Request::Rules {} => {
-            let (bp, bd, bf) = scour_source_fs::platform_defaults();
-            let (cp, cd, cf, ca) = crate::wire::config_rules(&kept.config);
-            let held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
-            // An entry written twice belongs to the group that cannot be
-            // deleted: deleting the other copy would change nothing.
-            let rest = |all: Vec<String>, a: &[String], b: &[String]| -> Vec<String> {
-                all.into_iter()
-                    .filter(|v| {
-                        !a.iter().any(|x| x.eq_ignore_ascii_case(v))
-                            && !b.iter().any(|x| x.eq_ignore_ascii_case(v))
-                    })
-                    .collect()
-            };
-            Response::Rules {
-                config_paths: rest(cp, &bp, &held.exclude_paths),
-                config_dirs: rest(cd, &bd, &held.exclude_dirs),
-                config_files: rest(cf, &bf, &held.exclude_files),
-                config_allow: rest(ca, &[], &held.exclude_allow),
-                added_paths: held.exclude_paths.clone(),
-                added_dirs: held.exclude_dirs.clone(),
-                added_files: held.exclude_files.clone(),
-                added_allow: held.exclude_allow.clone(),
-                off: held.exclude_off.clone(),
-                builtin_paths: bp,
-                builtin_dirs: bd,
-                builtin_files: bf,
-            }
-        }
+        Request::SetSettings { change } => set_settings(engine, live, kept, change),
+        Request::Rules {} => rules(kept),
         Request::Places {} => Response::Places(scour_places::look()),
-        Request::Volumes {} => {
-            let plan = live.plan();
-            let walks = engine.walks();
-            let keeping = engine.keeping();
-            let settings = kept
-                .settings
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone();
-            let named: std::collections::HashSet<String> =
-                plan.sources.iter().map(|s| s.source.name.clone()).collect();
-            let folders = settings
-                .folders
-                .iter()
-                .map(|f| {
-                    let name = crate::disks::folder_source(f);
-                    let on = !settings.folders_off.contains(f);
-                    let k = keeping.get(&name).copied().unwrap_or_default();
-                    scour_proto::FolderState {
-                        path: f.clone(),
-                        on,
-                        watched: !settings.folders_unwatched.contains(f),
-                        held: on && !named.contains(&name),
-                        walked: walks.get(&name).cloned(),
-                        live: k.live,
-                        changed: k.changed,
-                        walking: k.walking,
-                    }
-                })
-                .collect();
-            // A disk's source is named by the volume's id.
-            let disks = plan
-                .disks
-                .into_iter()
-                .map(|mut d| {
-                    let k = keeping.get(&d.volume.id).copied().unwrap_or_default();
-                    d.seen = scour_proto::Seen {
-                        walked: walks.get(&d.volume.id).cloned(),
-                        live: k.live,
-                        changed: k.changed,
-                        walking: k.walking,
-                    };
-                    d
-                })
-                .collect();
-            Response::Volumes { disks, folders }
-        }
+        Request::Volumes {} => volumes(engine, live, kept),
         Request::Postpone { volume } => {
             live.postpone(kept, volume);
             Response::Accepted
@@ -518,67 +296,6 @@ fn run(
         // The reply goes out before the accept loop is torn down.
         Request::Shutdown {} => Response::Accepted,
     })
-}
-
-/// What a rule change re-admits, and therefore what has to be walked: excluding
-/// takes entries out of an index that holds them, un-excluding asks for entries
-/// only the filesystem has.
-#[derive(Debug, PartialEq, Eq)]
-enum Opened {
-    /// Nothing was re-admitted; the change only ever removes.
-    Nothing,
-    /// These subtrees were, and nothing else: a path prefix names where it is.
-    Subtrees(Vec<String>),
-    /// A directory or file *name* was re-admitted, and a name can be anywhere.
-    Everything,
-}
-
-/// Compare two rule sets and say what the second lets back in: an exclusion
-/// went away, or an `allow` — which overrides every exclusion under a prefix —
-/// appeared.
-fn opened_up(before: &scour_core::ScanOptions, after: &scour_core::ScanOptions) -> Opened {
-    let gone = |was: &[String], now: &[String]| -> Vec<String> {
-        was.iter()
-            .filter(|v| !now.iter().any(|x| x.eq_ignore_ascii_case(v)))
-            .cloned()
-            .collect()
-    };
-    // A name that stopped being excluded can match at any depth under any
-    // root, and nothing here knows where.
-    if !gone(&before.exclude_dirs, &after.exclude_dirs).is_empty()
-        || !gone(&before.exclude_files, &after.exclude_files).is_empty()
-    {
-        return Opened::Everything;
-    }
-    let mut subtrees = gone(&before.exclude_paths, &after.exclude_paths);
-
-    // An `allow` is only a place when it looks like one: with no leading slash
-    // `Rules` reads it as a sequence matched wherever it appears, so it costs
-    // what a re-admitted name costs rather than naming a directory to walk.
-    let admitted = gone(&after.allow, &before.allow);
-    if admitted.iter().any(|v| !v.starts_with('/')) {
-        return Opened::Everything;
-    }
-    subtrees.extend(admitted);
-
-    if subtrees.is_empty() {
-        Opened::Nothing
-    } else {
-        Opened::Subtrees(subtrees)
-    }
-}
-
-/// The five lists that decide what the index holds, so a save can ask whether
-/// the rules changed. Asked on every save a window makes, a column drag
-/// included, so the comparison has to be the cheap one.
-fn rules_of(s: &scour_settings::Settings) -> [Vec<String>; 5] {
-    [
-        s.exclude_paths.clone(),
-        s.exclude_dirs.clone(),
-        s.exclude_files.clone(),
-        s.exclude_allow.clone(),
-        s.exclude_off.clone(),
-    ]
 }
 
 #[cfg(test)]
