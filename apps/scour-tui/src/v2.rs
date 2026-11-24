@@ -30,13 +30,7 @@ fn home() -> String {
 }
 
 pub fn home_form(p: &str) -> String {
-    let hm = home();
-    match p.strip_prefix(&hm) {
-        Some(rest) if !hm.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => p.to_string(),
-    }
+    scour_ui::path::home_form(&home(), p)
 }
 
 fn quote_if(s: &str) -> String {

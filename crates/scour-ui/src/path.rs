@@ -45,9 +45,40 @@ pub fn steps(path: &str, everything: &str) -> Vec<(String, String)> {
     out
 }
 
+/// A path as a person writes it: under `home`, with `~` in its place. Only a
+/// whole folder name is replaced — `/home/ali2` is not under `/home/ali`.
+pub fn home_form(home: &str, p: &str) -> String {
+    match p.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
+        _ => p.to_string(),
+    }
+}
+
+/// [`home_form`] undone: a leading `~` is `home` again.
+pub fn full_form(home: &str, p: &str) -> String {
+    match p.strip_prefix('~') {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("{home}{rest}")
+        }
+        _ => p.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_is_written_with_a_tilde_and_back() {
+        assert_eq!(home_form("/home/ali", "/home/ali/Belgeler"), "~/Belgeler");
+        assert_eq!(home_form("/home/ali", "/home/ali"), "~");
+        assert_eq!(home_form("/home/ali", "/home/ali2/x"), "/home/ali2/x");
+        assert_eq!(home_form("", "/x"), "/x");
+        assert_eq!(full_form("/home/ali", "~/Belgeler"), "/home/ali/Belgeler");
+        assert_eq!(full_form("/home/ali", "~x"), "~x");
+    }
 
     #[test]
     fn a_leaf_is_the_last_thing_that_is_not_a_slash() {

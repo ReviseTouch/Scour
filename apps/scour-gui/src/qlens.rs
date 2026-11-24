@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use scour_core::FacetBy;
 use scour_proto::{Disk, Request, Response};
 use scour_ui::lens::{self, Lens};
+use scour_ui::path::{full_form, home_form};
 
 /// Counted up to this and no further: a choice that keeps more is "100,000+".
 const COUNT_CAP: u32 = 100_000;
@@ -81,24 +82,6 @@ pub struct Lenses {
 
 fn reads(q: &str) -> bool {
     lens::reads(q)
-}
-
-fn home_form(home: &str, p: &str) -> String {
-    match p.strip_prefix(home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => p.to_string(),
-    }
-}
-
-fn full_form(home: &str, p: &str) -> String {
-    match p.strip_prefix('~') {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("{home}{rest}")
-        }
-        _ => p.to_string(),
-    }
 }
 
 impl Lenses {
