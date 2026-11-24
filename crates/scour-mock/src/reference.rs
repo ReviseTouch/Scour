@@ -3,7 +3,7 @@
 //! that shares a trick with the thing it checks is not a reference.
 
 use scour_core::text::{DefaultFolder, Folder, Unaccented};
-use scour_core::{Ast, Cmp, Entry, Hit, Match, SortKey, TimeField};
+use scour_core::{Ast, Cmp, Entry, Hit, Match, SortKey, TimeField, mistakes_allowed};
 use scour_query::glob_matches;
 
 /// Does this entry satisfy the query?
@@ -11,7 +11,7 @@ pub fn matches(e: &Entry, ast: &Ast) -> bool {
     ast.groups.iter().all(|g| {
         g.alts
             .iter()
-            .any(|(neg, m)| matches_one(e, m, ast.exact_accents) != *neg)
+            .any(|(neg, m)| matches_one(e, m, ast.exact_accents, ast.strict_typos) != *neg)
     })
 }
 
@@ -28,31 +28,71 @@ fn num_of(e: &Entry, f: scour_core::NumField) -> i64 {
     }
 }
 
-/// The fewest edits between `term` and any part of `name`, two neighbours
-/// swapped counting as one: the whole table, a cell at a time.
-fn mistakes(term: &str, name: &str) -> usize {
+/// Does `name` hold `term`, or something within `edits` of it? Spelled right,
+/// anywhere; misspelt, only in a part that begins where a word of the name
+/// begins, two neighbours swapped counting as one. `strict` holds each prefix
+/// of the term to what a term that long is forgiven. The whole table, a cell
+/// at a time.
+fn near(term: &str, name: &str, edits: usize, strict: bool) -> bool {
+    if name.contains(term) {
+        return true;
+    }
+    const NONE: usize = usize::MAX / 2;
     let t: Vec<char> = term.chars().collect();
     let n: Vec<char> = name.chars().collect();
-    let mut d = vec![vec![0usize; n.len() + 1]; t.len() + 1];
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
+    let allowed = |i: usize| {
+        if strict {
+            let prefix: String = t[..i].iter().collect();
+            edits.min(usize::from(mistakes_allowed(&prefix)))
+        } else {
+            edits
+        }
+    };
+    let mut d = vec![vec![NONE; n.len() + 1]; t.len() + 1];
+    for j in 0..n.len() {
+        if word_starts(&n, j) {
+            d[0][j] = 0;
+        }
     }
     for i in 1..=t.len() {
+        d[i][0] = d[i - 1][0].saturating_add(1);
         for j in 1..=n.len() {
             let cost = usize::from(t[i - 1] != n[j - 1]);
-            let mut best = (d[i - 1][j] + 1)
-                .min(d[i][j - 1] + 1)
-                .min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && t[i - 1] == n[j - 2] && t[i - 2] == n[j - 1] {
+            let mut best = d[i - 1][j]
+                .saturating_add(1)
+                .min(d[i][j - 1].saturating_add(1))
+                .min(d[i - 1][j - 1].saturating_add(cost));
+            if i > 1
+                && j > 1
+                && t[i - 1] == n[j - 2]
+                && t[i - 2] == n[j - 1]
+                && d[i - 2][j - 2].saturating_add(1) <= allowed(i - 1)
+            {
                 best = best.min(d[i - 2][j - 2] + 1);
             }
             d[i][j] = best;
         }
+        for cell in &mut d[i] {
+            if *cell > allowed(i) {
+                *cell = NONE;
+            }
+        }
     }
-    d[t.len()].iter().copied().min().unwrap_or(t.len())
+    d[t.len()].iter().any(|&c| c < NONE)
 }
 
-fn matches_one(e: &Entry, m: &Match, exact: bool) -> bool {
+/// A word begins at the first character, after anything not a letter or a
+/// digit, and where letters and digits meet.
+fn word_starts(name: &[char], j: usize) -> bool {
+    let c = name[j];
+    c.is_alphanumeric()
+        && j.checked_sub(1).is_none_or(|p| {
+            let p = name[p];
+            !p.is_alphanumeric() || p.is_numeric() != c.is_numeric()
+        })
+}
+
+fn matches_one(e: &Entry, m: &Match, exact: bool, strict: bool) -> bool {
     // A name as its letters are, and without their marks. A term is asked of
     // the second unless accents are exact or it carries a mark itself.
     let cased = DefaultFolder.fold(e.name());
@@ -64,9 +104,12 @@ fn matches_one(e: &Entry, m: &Match, exact: bool) -> bool {
         Match::NameGlob(p) => glob_matches(p, name(p)),
         Match::PathContains(t) if marked(t) => DefaultFolder.fold(&e.path).contains(t.as_str()),
         Match::PathContains(t) => Unaccented.fold(&e.path).contains(t.as_str()),
-        Match::NameNear(t, edits) => {
-            mistakes(&Unaccented::of_folded(t), &bare) <= usize::from(*edits)
-        }
+        Match::NameNear(t, edits) => near(
+            &Unaccented::of_folded(t),
+            &bare,
+            usize::from(*edits),
+            strict,
+        ),
         Match::NameLetters(t) => {
             let mut letters = bare.chars();
             Unaccented::of_folded(t)

@@ -174,20 +174,31 @@ impl Fixture {
         (got.hits.into_iter().map(|h| h.path).collect(), got.total)
     }
 
-    /// The page and the total, in both readings of an accent.
+    /// The page and the total, in both readings of an accent and the strict
+    /// reading of a mistake.
     fn check(&self, q: &str, sort: SortKey, desc: bool) -> u64 {
         let mut totals = 0;
-        for exact in [false, true] {
+        for (exact, strict) in [(false, false), (true, false), (false, true)] {
             let query = Ast {
                 exact_accents: exact,
+                strict_typos: strict,
                 ..parse_at(q, NOW)
             };
             let all = brute_force(&self.entries, &query, sort, desc, usize::MAX);
             let want: Vec<String> = all.iter().take(60).map(|h| h.path.clone()).collect();
             let (got, total) = self.found(&query, sort, desc);
-            assert_eq!(got, want, "{q:?} by {sort:?} desc={desc} exact={exact}");
-            assert_eq!(total, all.len() as u64, "{q:?} counted, exact={exact}");
-            totals += total;
+            assert_eq!(
+                got, want,
+                "{q:?} by {sort:?} desc={desc} exact={exact} strict={strict}"
+            );
+            assert_eq!(
+                total,
+                all.len() as u64,
+                "{q:?} counted, exact={exact} strict={strict}"
+            );
+            if !strict {
+                totals += total;
+            }
         }
         totals
     }
