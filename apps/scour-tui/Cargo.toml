@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 scour-core     = { workspace = true }
 scour-proto    = { workspace = true }
+scour-client = { workspace = true }
 scour-ipc      = { workspace = true }
 scour-config   = { workspace = true }
 # The service, started by the face when nothing is listening. Knows only a

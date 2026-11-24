@@ -7,13 +7,12 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
+use scour_client::{Lazy, boot, count_all, rail_facets};
 use scour_core::{FacetBy, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
-/// How many matches an interactive search counts before it stops; the exact
-/// figure follows once the typing settles.
-pub const TYPING_CAP: u32 = 1_000;
+pub use scour_client::TYPING_CAP;
 
 /// What to do about the desktop's key that opens Scour.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,16 +353,6 @@ fn export(link: &mut Client, query: &str, to: &str, out: &Sender<Got>) -> Result
     }
 }
 
-/// Have a service at `addr`, starting one if nobody else has. At most once for
-/// the whole program, whichever lane arrives first; the others wait here.
-fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
-    scour_launch::ensure_once(&scour_launch::Autostart::new(
-        addr,
-        log.to_path_buf(),
-        &scour_ipc::is_running,
-    ))
-}
-
 /// Ask the desktop about its key, or change it. Every decision is
 /// `scour-hotkey`'s; this turns the answer into an event.
 fn hotkey(deed: &Deed) -> Got {
@@ -437,7 +426,7 @@ fn next_ask(inbox: &Receiver<Ask>, queued: &mut std::collections::VecDeque<Ask>)
 }
 
 fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<Got>) {
-    let mut client: Option<Client> = None;
+    let mut conn = Lazy::new(addr, log);
     let mut queued = std::collections::VecDeque::new();
     while let Some(ask) = next_ask(inbox, &mut queued) {
         if matches!(ask, Ask::Done) {
@@ -451,13 +440,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
         }
         // Reconnect on every failure rather than once at startup: the service
         // is restarted far more often than the terminal is.
-        if client.is_none() {
-            client = Client::connect(addr).ok();
-            if client.is_none() {
-                boot(addr, log);
-                client = Client::connect(addr).ok();
-            }
-        }
+        let _ = conn.open();
         let generation = match &ask {
             Ask::Search { generation, .. }
             | Ask::Facets { generation, .. }
@@ -467,7 +450,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             _ => 0,
         };
         let grep_append = matches!(ask, Ask::Grep { append: true, .. });
-        let Some(link) = client.as_mut() else {
+        let Some(link) = conn.client() else {
             // A msgid, not a sentence: `App::upset` puts it through the
             // catalogue. The socket it failed on is in `SCOUR_TUI_TRACE`.
             let _ = out.send(Got::Trouble {
@@ -499,30 +482,13 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                     count_cap: cap,
                 },
             },
-            // Both groups in both requests: the scan cap follows the questions
-            // asked, so asking for kinds alone samples the first 200,000 rows
-            // the walk reaches — a rail off by a sixth. The walk is the cost.
-            Ask::Facets { query, .. } => Request::Facets {
-                query,
-                by: vec![
-                    FacetBy::Kind,
-                    FacetBy::Age {
-                        edges: scour_ui::bar_edges(),
-                    },
-                ],
-            },
+            Ask::Facets { query, .. } => rail_facets(query),
             Ask::Explain { query, .. } => Request::Explain {
                 query,
                 // No caret: the completions this could return are not drawn.
                 cursor: None,
             },
-            Ask::Count { query, .. } => Request::Count {
-                query,
-                // The whole answer, whatever it costs: uncapped counting is
-                // 18 ms of a 37 ms keystroke, so it waits for the typing to
-                // stop.
-                cap: u32::MAX,
-            },
+            Ask::Count { query, .. } => count_all(query),
             Ask::Await { since } => Request::Await {
                 since,
                 // Two requests a minute when idle, and short enough that a
@@ -787,7 +753,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Err(e) => {
                 // A refused query and a dead socket arrive the same way, so the
                 // connection goes either way: reconnecting is ~100 µs.
-                client = None;
+                conn.lost();
                 let _ = out.send(Got::Trouble {
                     generation,
                     why: e.to_string(),

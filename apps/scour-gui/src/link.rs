@@ -9,12 +9,10 @@ use std::sync::{
     mpsc::{Receiver, Sender, channel},
 };
 
-use scour_ipc::Client;
+use scour_client::{Lazy, count_all, rail_facets};
 use scour_proto::{Request, Response};
 
-/// How many matches an interactive search counts before it stops. Enough for a
-/// meter to say "at least this many"; the exact figure follows.
-pub const TYPING_CAP: u32 = 1_000;
+pub use scour_client::TYPING_CAP;
 
 /// What the window asks for. Not boxed: one per user action, one channel hop.
 #[allow(clippy::large_enum_variant)]
@@ -496,15 +494,7 @@ enum Lane {
     Grep,
 }
 
-/// Have a service at `addr`, starting one if nobody else has. At most once for
-/// the whole program, whichever lane arrives first; the others wait here.
-pub fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
-    scour_launch::ensure_once(&scour_launch::Autostart::new(
-        addr,
-        log.to_path_buf(),
-        &scour_ipc::is_running,
-    ))
-}
+pub use scour_client::boot;
 
 /// One lane: connect, serve, reconnect when the service comes back.
 fn spawn_lane(
@@ -516,8 +506,7 @@ fn spawn_lane(
     coalesce: bool,
 ) {
     std::thread::spawn(move || {
-        let mut client: Option<Client> = None;
-        let mut was_down = false;
+        let mut conn = Lazy::new(addr.as_str(), log.as_path());
         for first in &rx {
             let ask = if coalesce {
                 newest_queued(first, &rx)
@@ -532,36 +521,16 @@ fn spawn_lane(
                 continue;
             }
             // Reconnect lazily: the window only cares when it has something to ask.
-            if client.is_none() {
-                // A second try, because the first failure is what starts a
-                // service; `boot` blocks here until one is listening or gone.
-                // The line this leaves on screen is the last one said, so it
-                // carries why the start failed, or where the service wrote
-                // when it started and then went away: "no such file" alone
-                // hides both.
-                let opened = Client::connect(&addr).or_else(|e| {
-                    let booted = boot(&addr, &log);
-                    Client::connect(&addr).map_err(|_| match booted.reason() {
-                        Some(why) => why.to_string(),
-                        None if booted.running() => format!("{e} (see {})", log.display()),
-                        None => e.to_string(),
-                    })
-                });
-                match opened {
-                    Ok(c) => {
-                        client = Some(c);
-                        if was_down {
-                            was_down = false;
-                            sink(Got::Up);
-                        }
+            // A second try inside `open`, because the first failure is what
+            // starts a service; it blocks until one is listening or gone.
+            match conn.open() {
+                Ok(true) => sink(Got::Up),
+                Ok(false) => {}
+                Err(down) => {
+                    if down.first {
+                        sink(Got::Down(down.why));
                     }
-                    Err(e) => {
-                        if !was_down {
-                            was_down = true;
-                            sink(Got::Down(e));
-                        }
-                        continue;
-                    }
+                    continue;
                 }
             }
             // Connecting can outlast a key interval, so recheck freshness at the
@@ -569,7 +538,7 @@ fn spawn_lane(
             if !freshness.accepts(&ask) {
                 continue;
             }
-            let Some(c) = client.as_mut() else { continue };
+            let Some(c) = conn.client() else { continue };
             // Taken before the match consumes the request: an answer for a folder
             // nobody is looking at any more is dropped rather than drawn.
             let weighed = match &ask {
@@ -621,21 +590,7 @@ fn spawn_lane(
                     query_revision,
                     query,
                     half: _,
-                } => (
-                    query_revision,
-                    // Both in one request: the same walk over the same matching
-                    // set, and two walks could disagree about a changing query.
-                    Request::Facets {
-                        query,
-                        by: vec![
-                            scour_core::FacetBy::Kind,
-                            scour_core::FacetBy::Age {
-                                edges: scour_ui::bar_edges(),
-                            },
-                        ],
-                    },
-                    Lane::Facets,
-                ),
+                } => (query_revision, rail_facets(query), Lane::Facets),
                 Ask::Explain {
                     query_revision,
                     query,
@@ -756,14 +711,7 @@ fn spawn_lane(
                 Ask::Count {
                     query_revision,
                     query,
-                } => (
-                    query_revision,
-                    Request::Count {
-                        query,
-                        cap: 10_000_000,
-                    },
-                    Lane::Count,
-                ),
+                } => (query_revision, count_all(query), Lane::Count),
                 Ask::Lens {
                     generation,
                     request,
@@ -859,8 +807,7 @@ fn spawn_lane(
                         e,
                         scour_core::Error::Unreachable { .. } | scour_core::Error::Io { .. }
                     ) {
-                        client = None;
-                        was_down = true;
+                        conn.lost();
                         sink(Got::Down(e.to_string()));
                     } else if matches!(facets, Lane::Lens | Lane::Narrow) {
                         // A choice whose count was refused keeps no number;

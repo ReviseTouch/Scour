@@ -78,8 +78,10 @@ impl Lazy {
         self.client.as_mut()
     }
 
-    /// A call failed on it: the next [`Lazy::open`] makes a new one.
+    /// A call failed on it: the next [`Lazy::open`] makes a new one, and says
+    /// it came back when it does.
     pub fn lost(&mut self) {
         self.client = None;
+        self.down = true;
     }
 }
