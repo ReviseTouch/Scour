@@ -169,9 +169,7 @@ impl App {
         let Some((_, _, term, dir)) = self.v2.lens_items.get(self.panel_at).cloned() else {
             return Want::Nothing;
         };
-        if drill
-            && let Some(next_dir) = dir
-        {
+        if drill && let Some(next_dir) = dir {
             self.v2.place_dir = next_dir.clone();
             self.v2.tree_dirs.clear();
             self.panel_at = 0;
@@ -232,9 +230,17 @@ impl App {
 
     pub fn lens_panel_lines(&self) -> (String, Vec<PanelLine>) {
         let title = if self.v2.place_mode {
-            format!("{} · {}", self.say("Location"), home_form(&self.v2.place_dir))
+            format!(
+                "{} · {}",
+                self.say("Location"),
+                home_form(&self.v2.place_dir)
+            )
         } else {
-            format!("{}  {}", self.say("Word matching"), sparkline_bar(&self.strip))
+            format!(
+                "{}  {}",
+                self.say("Word matching"),
+                sparkline_bar(&self.strip)
+            )
         };
         let lines = self
             .v2
@@ -270,7 +276,11 @@ impl App {
             return Want::Nothing;
         }
         self.v2.grep_gen += 1;
-        let offset = if append { self.v2.grep_next.unwrap_or(0) } else { 0 };
+        let offset = if append {
+            self.v2.grep_next.unwrap_or(0)
+        } else {
+            0
+        };
         if !append {
             self.v2.grep_files.clear();
             self.v2.grep_next = None;
@@ -304,7 +314,10 @@ impl App {
         let mark = self.mark();
         let mut s = self
             .say("{f} files · {s} scanned · {b} read")
-            .replace("{f}", &scour_ui::format::grouped(self.v2.grep_files.len() as u64, mark.0))
+            .replace(
+                "{f}",
+                &scour_ui::format::grouped(self.v2.grep_files.len() as u64, mark.0),
+            )
             .replace("{s}", &scour_ui::format::grouped(reply.scanned, mark.0))
             .replace("{b}", &scour_ui::format::compact_bytes(reply.read, mark.1));
         if self.v2.grep_next.is_some() {
@@ -392,7 +405,10 @@ mod tests {
         assert_eq!(up, Want::Tree("/home/demo/Projeler".into()));
 
         // Press `!` to exclude the current folder.
-        let excl = crate::keys::press(&mut app, KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        let excl = crate::keys::press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+        );
         assert!(matches!(excl, Want::Page { .. }));
         assert!(app.query.contains("!under:"));
         assert_eq!(app.panel, Panel::None);
@@ -403,11 +419,17 @@ mod tests {
         let mut app = App::default();
         assert!(!app.v2.grep_open);
 
-        let w = crate::keys::press(&mut app, KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        let w = crate::keys::press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        );
         assert!(app.v2.grep_open);
         assert_eq!(w, Want::Nothing, "empty pattern waits quietly");
 
-        let w = crate::keys::press(&mut app, KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        let w = crate::keys::press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+        );
         assert!(matches!(
             w,
             Want::Grep {
@@ -416,7 +438,10 @@ mod tests {
                 ..
             } if pattern == "f"
         ));
-        assert!(app.query.is_empty(), "typing goes into grep capsule while open");
+        assert!(
+            app.query.is_empty(),
+            "typing goes into grep capsule while open"
+        );
 
         let _ = crate::keys::press(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.v2.grep_open);
@@ -428,4 +453,3 @@ mod tests {
         assert_eq!(bar, "·▅█");
     }
 }
-

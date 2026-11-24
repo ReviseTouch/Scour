@@ -9,8 +9,14 @@ use std::time::Instant;
 use scour_grep::{Budget, File, Ground, Needle, Options, Outcome, Pattern, Scanner, Skip};
 
 fn main() {
-    let needle = std::env::args().nth(1).unwrap_or_else(|| "mahkemesi".into());
-    let roots = [PathBuf::from("/home"), PathBuf::from("/mnt/depo"), PathBuf::from("/")];
+    let needle = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "mahkemesi".into());
+    let roots = [
+        PathBuf::from("/home"),
+        PathBuf::from("/mnt/depo"),
+        PathBuf::from("/"),
+    ];
     let files: Vec<File> = BufReader::new(std::io::stdin().lock())
         .lines()
         .map_while(Result::ok)

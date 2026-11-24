@@ -180,7 +180,10 @@ pub enum Got {
     /// The disks, for the panel and the question.
     Disks(Vec<scour_proto::Disk>),
     /// Exactly how many match.
-    Counted { generation: u64, total: u64 },
+    Counted {
+        generation: u64,
+        total: u64,
+    },
     /// The query cut into runs: where each starts, how long, and what it is.
     Explained {
         generation: u64,
@@ -218,7 +221,10 @@ pub enum Got {
     /// That attempt ended. `Some` is why nothing is listening even so.
     Booted(Option<String>),
     /// The service could not be reached, or said no.
-    Trouble { generation: u64, why: String },
+    Trouble {
+        generation: u64,
+        why: String,
+    },
 }
 
 /// The service, at the far end of a thread.

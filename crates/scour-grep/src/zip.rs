@@ -155,7 +155,8 @@ impl ZipScratch {
             let Some(comp) = slice_entry_data(archive, e) else {
                 continue;
             };
-            let name = std::str::from_utf8(&names_src[e.name_range.0..e.name_range.1]).unwrap_or("");
+            let name =
+                std::str::from_utf8(&names_src[e.name_range.0..e.name_range.1]).unwrap_or("");
             let joined: String;
             let label = match (prefix, kind) {
                 (Some(p), Container::Doc) => Some(p),
@@ -184,7 +185,13 @@ impl ZipScratch {
     ) -> u64 {
         let mut read_bytes = 0u64;
         self.entries.clear();
-        if !load_file_cd(file, file_len, &mut self.cd, &mut self.entries, &mut read_bytes) {
+        if !load_file_cd(
+            file,
+            file_len,
+            &mut self.cd,
+            &mut self.entries,
+            &mut read_bytes,
+        ) {
             return read_bytes;
         }
         let mut work = std::mem::take(&mut self.entries);
@@ -272,14 +279,7 @@ impl ZipScratch {
                     }
                 } else if e.method == 8 {
                     let mut nested = std::mem::take(&mut self.nested);
-                    if inflate_whole(
-                        &mut self.inflate,
-                        8,
-                        comp,
-                        e.uncomp_size,
-                        &mut nested,
-                        cap,
-                    )
+                    if inflate_whole(&mut self.inflate, 8, comp, e.uncomp_size, &mut nested, cap)
                         && nested.len() >= 4
                         && nested[..4] == [0x50, 0x4B, 0x03, 0x04]
                     {
@@ -376,7 +376,18 @@ impl ZipScratch {
                     _ => floor,
                 }
             };
-            collect_in_chunk(hay, cut, eof, base, lines_before, k, label, pattern, opts, tally);
+            collect_in_chunk(
+                hay,
+                cut,
+                eof,
+                base,
+                lines_before,
+                k,
+                label,
+                pattern,
+                opts,
+                tally,
+            );
             if eof || tally.more {
                 break;
             }
@@ -430,7 +441,10 @@ fn inflate_whole(
                 out.clear();
                 inflate.reset(false);
             }
-            let init = comp.len().saturating_mul(3).clamp(64 << 10, cap.min(1 << 20));
+            let init = comp
+                .len()
+                .saturating_mul(3)
+                .clamp(64 << 10, cap.min(1 << 20));
             if out.capacity() < init {
                 out.reserve(init - out.len());
             }
@@ -444,8 +458,7 @@ fn inflate_whole(
                     out.reserve(add);
                 }
                 let before_in = inflate.total_in();
-                let status =
-                    inflate.decompress_vec(&comp[in_pos..], out, FlushDecompress::None);
+                let status = inflate.decompress_vec(&comp[in_pos..], out, FlushDecompress::None);
                 let consumed = (inflate.total_in() - before_in) as usize;
                 in_pos += consumed;
                 match status {
@@ -536,7 +549,18 @@ fn scan_bytes(
     opts: &Options,
     tally: &mut Tally,
 ) {
-    collect_in_chunk(hay, hay.len(), true, 0, 0, kind, label, pattern, opts, tally);
+    collect_in_chunk(
+        hay,
+        hay.len(),
+        true,
+        0,
+        0,
+        kind,
+        label,
+        pattern,
+        opts,
+        tally,
+    );
 }
 
 fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Container {
@@ -683,12 +707,15 @@ fn parse_cd_bytes(cd: &[u8], base_in_buf: usize, max_count: usize, out: &mut Vec
         }
         let flags = u16::from_le_bytes([cd[at + 8], cd[at + 9]]);
         let method = u16::from_le_bytes([cd[at + 10], cd[at + 11]]);
-        let comp_size = u32::from_le_bytes([cd[at + 20], cd[at + 21], cd[at + 22], cd[at + 23]]) as u64;
-        let uncomp_size = u32::from_le_bytes([cd[at + 24], cd[at + 25], cd[at + 26], cd[at + 27]]) as u64;
+        let comp_size =
+            u32::from_le_bytes([cd[at + 20], cd[at + 21], cd[at + 22], cd[at + 23]]) as u64;
+        let uncomp_size =
+            u32::from_le_bytes([cd[at + 24], cd[at + 25], cd[at + 26], cd[at + 27]]) as u64;
         let nlen = u16::from_le_bytes([cd[at + 28], cd[at + 29]]) as usize;
         let elen = u16::from_le_bytes([cd[at + 30], cd[at + 31]]) as usize;
         let clen = u16::from_le_bytes([cd[at + 32], cd[at + 33]]) as usize;
-        let local_offset = u32::from_le_bytes([cd[at + 42], cd[at + 43], cd[at + 44], cd[at + 45]]) as u64;
+        let local_offset =
+            u32::from_le_bytes([cd[at + 42], cd[at + 43], cd[at + 44], cd[at + 45]]) as u64;
         let Some(name_end) = at.checked_add(46).and_then(|x| x.checked_add(nlen)) else {
             break;
         };
@@ -732,20 +759,36 @@ fn parse_local_headers<'a>(archive: &'a [u8], out: &mut Vec<EntryMeta>) -> &'a [
         }
         let flags = u16::from_le_bytes([archive[at + 6], archive[at + 7]]);
         let method = u16::from_le_bytes([archive[at + 8], archive[at + 9]]);
-        let comp_size =
-            u32::from_le_bytes([archive[at + 18], archive[at + 19], archive[at + 20], archive[at + 21]]) as u64;
-        let uncomp_size =
-            u32::from_le_bytes([archive[at + 22], archive[at + 23], archive[at + 24], archive[at + 25]]) as u64;
+        let comp_size = u32::from_le_bytes([
+            archive[at + 18],
+            archive[at + 19],
+            archive[at + 20],
+            archive[at + 21],
+        ]) as u64;
+        let uncomp_size = u32::from_le_bytes([
+            archive[at + 22],
+            archive[at + 23],
+            archive[at + 24],
+            archive[at + 25],
+        ]) as u64;
         let nlen = u16::from_le_bytes([archive[at + 26], archive[at + 27]]) as usize;
         let elen = u16::from_le_bytes([archive[at + 28], archive[at + 29]]) as usize;
-        let Some(data_start) = at.checked_add(30).and_then(|x| x.checked_add(nlen)).and_then(|x| x.checked_add(elen)) else {
+        let Some(data_start) = at
+            .checked_add(30)
+            .and_then(|x| x.checked_add(nlen))
+            .and_then(|x| x.checked_add(elen))
+        else {
             break;
         };
         if data_start > archive.len() {
             break;
         }
         let avail = (archive.len() - data_start) as u64;
-        let eff_comp = if comp_size == 0 && flags & 8 != 0 { avail } else { comp_size };
+        let eff_comp = if comp_size == 0 && flags & 8 != 0 {
+            avail
+        } else {
+            comp_size
+        };
         out.push(EntryMeta {
             name_range: (at + 30, at + 30 + nlen),
             method,

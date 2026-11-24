@@ -48,7 +48,10 @@ pub fn api_grep(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         binary: req.param("binary") == Some("1"),
         sort,
         descending,
-        offset: req.param("offset").and_then(|s| s.parse().ok()).unwrap_or(0),
+        offset: req
+            .param("offset")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
         top: req
             .param("top")
             .and_then(|s| s.parse().ok())

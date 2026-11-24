@@ -310,7 +310,8 @@ fn make_zip(entries: &[(&str, u16, &[u8])]) -> Vec<u8> {
         let data = if method == 8 {
             let mut c = Compress::new(Compression::fast(), false);
             let mut dst = Vec::with_capacity(raw.len() + 64);
-            c.compress_vec(raw, &mut dst, FlushCompress::Finish).unwrap();
+            c.compress_vec(raw, &mut dst, FlushCompress::Finish)
+                .unwrap();
             dst
         } else {
             raw.to_vec()
@@ -394,7 +395,10 @@ fn udf_docx_xlsx_and_nested_zip_documents_are_searched_in_memory() {
     assert!(udf_hits[0].text.contains("İş Kazası Tazminatı"));
 
     // 2. DOCX matched across split `<w:r><w:t>` runs!
-    let Outcome::Found { hits: docx_hits, .. } = &got[1] else {
+    let Outcome::Found {
+        hits: docx_hits, ..
+    } = &got[1]
+    else {
         panic!("docx: {:?}", got[1]);
     };
     assert_eq!(docx_hits[0].text, "İş Kazası Raporu");

@@ -147,7 +147,11 @@ fn read(
     out: &mut Grepped,
 ) -> Option<u32> {
     let (places, files) = files_of(rows);
-    for (k, outcome) in expr.scan(options, ground, enter, &files, budget).into_iter().enumerate() {
+    for (k, outcome) in expr
+        .scan(options, ground, enter, &files, budget)
+        .into_iter()
+        .enumerate()
+    {
         match outcome {
             Outcome::NotReached => return Some(places[k]),
             Outcome::Clean => out.scanned += 1,

@@ -75,8 +75,9 @@ impl Reader {
                 && hay.len() >= 4
                 && hay[..4] == [0x50, 0x4B, 0x03, 0x04]
             {
-                let (outcome, extra) =
-                    self.zip.search_file(&mut file, file_len, hay, eof, pattern, opts);
+                let (outcome, extra) = self
+                    .zip
+                    .search_file(&mut file, file_len, hay, eof, pattern, opts);
                 return (outcome, total + extra);
             }
             let kind = *kind.get_or_insert_with(|| Kind::sniff(hay));

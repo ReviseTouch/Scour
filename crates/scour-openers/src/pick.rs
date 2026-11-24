@@ -43,7 +43,11 @@ fn linux(start: Option<&Path>) -> Option<String> {
     let qa = ("qarma", zn_args);
     let yd = (
         "yad",
-        vec!["--file".into(), "--directory".into(), format!("--filename={start_arg}/")],
+        vec![
+            "--file".into(),
+            "--directory".into(),
+            format!("--filename={start_arg}/"),
+        ],
     );
 
     if kde {
@@ -87,12 +91,15 @@ fn macos(start: Option<&Path>) -> Option<String> {
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    out.status.success().then(|| {
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .trim_end_matches('/')
-            .to_owned()
-    }).filter(|s| !s.is_empty())
+    out.status
+        .success()
+        .then(|| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .filter(|s| !s.is_empty())
 }
 
 #[cfg(windows)]

@@ -110,7 +110,11 @@ impl Pattern {
 
     /// One compiled DFA matching any of `alts` (`a;b` / `a|b`) in a single pass.
     pub fn any_text(alts: &[String], exact_case: bool) -> Result<Pattern, BadPattern> {
-        let non_empty: Vec<&str> = alts.iter().map(String::as_str).filter(|s| !s.is_empty()).collect();
+        let non_empty: Vec<&str> = alts
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .collect();
         if non_empty.is_empty() {
             return Err(BadPattern::Empty);
         }

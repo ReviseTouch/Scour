@@ -325,14 +325,26 @@ mod tests {
         };
         let files = [
             put("a.txt", "Ankara Hukuk Bürosu\nİş kazası tazminatı\n"),
-            put("b.txt", "İstanbul Ticaret\nİş kazası ve feragat protokolü\n"),
+            put(
+                "b.txt",
+                "İstanbul Ticaret\nİş kazası ve feragat protokolü\n",
+            ),
             put("c.txt", "İstanbul Asliye\nİş kazası dilekçesi\n"),
             put("d.txt", "İzmir İcra\nKira sözleşmesi\n"),
         ];
         let ground = Ground::of([(dir.path().to_path_buf(), None, Medium::Solid)]);
-        let expr = Expr::new(&Needle::Text("ankara;istanbul \"iş kazası\" !feragat".into()), false)
-            .unwrap();
-        let got = expr.scan(&Options::default(), &ground, None, &files, &Budget::unlimited());
+        let expr = Expr::new(
+            &Needle::Text("ankara;istanbul \"iş kazası\" !feragat".into()),
+            false,
+        )
+        .unwrap();
+        let got = expr.scan(
+            &Options::default(),
+            &ground,
+            None,
+            &files,
+            &Budget::unlimited(),
+        );
 
         // `a.txt`: has Ankara + "iş kazası", no "feragat" -> Found!
         assert!(matches!(got[0], Outcome::Found { .. }));
@@ -345,7 +357,13 @@ mod tests {
 
         // Negation-only `!feragat` returns every text file without `feragat`.
         let only_not = Expr::new(&Needle::Text("!feragat".into()), false).unwrap();
-        let neg_got = only_not.scan(&Options::default(), &ground, None, &files, &Budget::unlimited());
+        let neg_got = only_not.scan(
+            &Options::default(),
+            &ground,
+            None,
+            &files,
+            &Budget::unlimited(),
+        );
         assert!(matches!(neg_got[0], Outcome::Found { .. }));
         assert_eq!(neg_got[1], Outcome::Clean);
         assert!(matches!(neg_got[2], Outcome::Found { .. }));

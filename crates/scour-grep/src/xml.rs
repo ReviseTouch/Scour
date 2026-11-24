@@ -185,6 +185,9 @@ mod tests {
         let docx = b"<w:body><w:p><w:r><w:t>Mahke</w:t></w:r><w:r><w:t>mesi</w:t></w:r></w:p><w:p><w:r><w:t>Karar &amp; Sonu&#231;</w:t></w:r></w:p></w:body>";
         let mut out = Vec::new();
         strip_xml(docx, &mut out, 4096);
-        assert_eq!(std::str::from_utf8(&out).unwrap(), "Mahkemesi\nKarar & Sonuç\n");
+        assert_eq!(
+            std::str::from_utf8(&out).unwrap(),
+            "Mahkemesi\nKarar & Sonuç\n"
+        );
     }
 }
