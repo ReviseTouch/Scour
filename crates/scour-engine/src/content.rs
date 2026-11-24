@@ -12,7 +12,7 @@ use scour_core::{
     Ast, Error, FoundLine, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest,
     SearchResponse, SortKey,
 };
-use scour_grep::{Budget, Enter, Expr, Ground, Options, Outcome};
+use scour_grep::{Budget, Enter, Expr, Ground, Options, Outcome, Texts};
 
 /// How long a page waits for its rows before answering with what there is.
 const WAIT: Duration = Duration::from_millis(300);
@@ -110,6 +110,7 @@ pub(crate) struct Lent {
     pub index: Arc<dyn Index>,
     pub roots: Vec<String>,
     pub enter: Option<Enter>,
+    pub texts: Option<Arc<dyn Texts>>,
     /// Says a repeated search would now answer differently.
     pub touched: Arc<dyn Fn() + Send + Sync>,
     /// The engine's revision, as it stands.
@@ -343,6 +344,7 @@ impl Contents {
                     &options,
                     &ground,
                     lent.enter.clone(),
+                    lent.texts.clone(),
                     &reading.budget,
                     batch,
                 );
@@ -393,12 +395,13 @@ fn holding(
     options: &Options,
     ground: &Ground,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
     budget: &Budget,
     batch: &[Hit],
 ) -> (usize, Vec<(usize, Vec<FoundLine>)>) {
     let (places, files) = crate::grep::files_of(batch);
     let mut settled = batch.len();
-    let outcomes = expr.scan(options, ground, enter, &files, budget);
+    let outcomes = expr.scan(options, ground, enter, texts, &files, budget);
     let mut rows = Vec::new();
     for (k, outcome) in outcomes.into_iter().enumerate() {
         match outcome {

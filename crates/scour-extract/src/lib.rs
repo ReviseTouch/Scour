@@ -8,6 +8,7 @@ mod document;
 mod inflate;
 mod normal;
 mod rtf;
+pub mod wire;
 mod xml;
 pub mod zip;
 

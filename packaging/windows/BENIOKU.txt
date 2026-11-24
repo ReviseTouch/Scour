@@ -32,6 +32,7 @@ DİĞER YÜZLER
    scour-tui        tam ekran uçbirim
    scour-web        tarayıcıda
    scour-mcp        MCP sunucusu (yapay zekâ araçları için)
+   scour-extractor  servis için PDF ve eski Office dosyalarını okur; elle çalıştırılmaz
 
 SORGU DİLİ
 ----------

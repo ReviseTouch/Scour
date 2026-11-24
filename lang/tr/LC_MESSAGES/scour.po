@@ -2414,6 +2414,12 @@ msgstr "kilitli"
 msgid "in the cloud"
 msgstr "bulutta"
 
+msgid "without text"
+msgstr "metinsiz"
+
+msgid "would not open"
+msgstr "açılamadı"
+
 msgid "stopped early; go on with"
 msgstr "erken durdu; devam için"
 
@@ -2833,6 +2839,12 @@ msgstr "{n} kilitli"
 msgid "{n} in the cloud"
 msgstr "{n} bulutta"
 
+msgid "{n} without text"
+msgstr "{n} metinsiz"
+
+msgid "{n} would not open"
+msgstr "{n} açılamadı"
+
 msgid "Scanning matching files…"
 msgstr "Eşleşen dosyalar taranıyor…"
 
@@ -2944,3 +2956,21 @@ msgstr "1 MB üstü"
 
 msgid "over 100 MB"
 msgstr "100 MB üstü"
+
+msgid "Keep documents' text"
+msgstr "Belgelerin metnini sakla"
+
+msgid "PDF, Word, Excel and PowerPoint files of the old kind and e-mail are read by a helper; kept, the next search finds their words without opening them. Off, every search reads them again."
+msgstr "PDF, eski tür Word, Excel ve PowerPoint dosyaları ile e-postalar yardımcı bir süreçle okunur; metin saklanırsa sonraki arama dosyaları açmadan bulur. Kapalıyken her arama onları yeniden okur."
+
+msgid "Documents' text kept"
+msgstr "Saklanan belge metni"
+
+msgid "No document reader is installed."
+msgstr "Belge okuyucusu kurulu değil."
+
+msgid "Not kept: every search reads them again."
+msgstr "Saklanmıyor: her arama yeniden okur."
+
+msgid "with text"
+msgstr "metinli"

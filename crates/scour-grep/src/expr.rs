@@ -4,7 +4,10 @@
 use crate::budget::Budget;
 use crate::ground::Ground;
 use crate::pattern::{BadPattern, Needle, Pattern};
+use std::sync::Arc;
+
 use crate::scan::{Enter, File, Options, Outcome, Scanner};
+use crate::texts::Texts;
 
 /// Conjunctive content plan: every `must` pattern (each an OR of `;`/`|` terms)
 /// must match the file, and `forbid` (an OR of all `!` terms) must not.
@@ -81,12 +84,14 @@ impl Expr {
         options: &Options,
         ground: &Ground,
         enter: Option<Enter>,
+        texts: Option<Arc<dyn Texts>>,
         files: &[File],
         budget: &Budget,
     ) -> Vec<Outcome> {
         if self.must.len() == 1 && self.forbid.is_none() {
             return Scanner::new(self.must[0].clone(), options.clone(), ground.clone())
                 .entering(enter)
+                .reading_documents(texts.clone())
                 .scan(files, budget);
         }
 
@@ -100,6 +105,7 @@ impl Expr {
             };
             return Scanner::new(forbid.clone(), probe, ground.clone())
                 .entering(enter)
+                .reading_documents(texts.clone())
                 .scan(files, budget)
                 .into_iter()
                 .map(|o| match o {
@@ -115,6 +121,7 @@ impl Expr {
 
         let mut outcomes = Scanner::new(self.must[0].clone(), options.clone(), ground.clone())
             .entering(enter.clone())
+            .reading_documents(texts.clone())
             .scan(files, budget);
 
         for pat in &self.must[1..] {
@@ -129,6 +136,7 @@ impl Expr {
             let sub: Vec<File> = survivors.iter().map(|&i| files[i].clone()).collect();
             let next_out = Scanner::new(pat.clone(), options.clone(), ground.clone())
                 .entering(enter.clone())
+                .reading_documents(texts.clone())
                 .scan(&sub, budget);
             for (idx, sub_res) in survivors.into_iter().zip(next_out) {
                 match sub_res {
@@ -168,6 +176,7 @@ impl Expr {
                 };
                 let rej = Scanner::new(forbid.clone(), probe, ground.clone())
                     .entering(enter)
+                    .reading_documents(texts.clone())
                     .scan(&sub, budget);
                 for (idx, sub_res) in survivors.into_iter().zip(rej) {
                     match sub_res {
@@ -343,6 +352,7 @@ mod tests {
             &Options::default(),
             &ground,
             None,
+            None,
             &files,
             &Budget::unlimited(),
         );
@@ -361,6 +371,7 @@ mod tests {
         let neg_got = only_not.scan(
             &Options::default(),
             &ground,
+            None,
             None,
             &files,
             &Budget::unlimited(),

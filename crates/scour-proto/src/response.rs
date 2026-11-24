@@ -59,6 +59,24 @@ pub enum Response {
         unconfirmed: u64,
     },
     Grep(GrepResponse),
+    /// What `texts` asked: whether documents' text is kept, where, and what is.
+    Texts {
+        on: bool,
+        dir: String,
+        max_mb: u32,
+        /// Documents whose words are kept, scans with none, and those that
+        /// would not open.
+        documents: u64,
+        no_text: u64,
+        failed: u64,
+        /// Compressed, on disk; and text left behind by changed documents.
+        disk: u64,
+        dead: u64,
+        /// False when no extractor is installed: documents are then counted,
+        /// not read.
+        #[serde(default)]
+        reader: bool,
+    },
     /// A piece of an export: CSV text, whole lines, so a relay never buffers a partial
     /// one. The first piece carries the byte-order mark and the heading row. Sized by
     /// the service — see `EXPORT_CHUNK` in `scour-engine` — not one row a frame.

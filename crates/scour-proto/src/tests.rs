@@ -144,6 +144,8 @@ fn every_request_round_trips() {
         Request::Status {},
         Request::Stats {},
         Request::Reread { from_start: false },
+        Request::Texts {},
+        Request::ForgetTexts {},
         Request::Await {
             since: 9,
             timeout_ms: 1_000,
@@ -213,6 +215,17 @@ fn every_response_round_trips() {
             folders: vec![],
         },
         Response::Facets(FacetResponse::default()),
+        Response::Texts {
+            on: true,
+            dir: "/s/texts".into(),
+            max_mb: 1024,
+            documents: 3,
+            no_text: 1,
+            failed: 2,
+            disk: 4096,
+            dead: 9,
+            reader: true,
+        },
         Response::Grep(GrepResponse {
             files: vec![GrepFile {
                 path: "/a/b.rs".into(),

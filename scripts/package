@@ -7,7 +7,7 @@
 #
 # Nothing here compiles: `cargo build --release --workspace` first. The binary
 # directory is SCOUR_BIN_DIR, else target/container/release when it holds all
-# seven — that tree is built against an older glibc and is the one to ship —
+# eight — that tree is built against an older glibc and is the one to ship —
 # else target/release. Whichever it picks is printed.
 #
 # Needs: cargo-deb, cargo-generate-rpm (`cargo install` both) and rsvg-convert.
@@ -15,7 +15,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
 
-bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp)
+bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp scour-extractor)
 version="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
 
 complete() { local d=$1 b; for b in "${bins[@]}"; do [ -x "$d/$b" ] || return 1; done; }
@@ -55,7 +55,7 @@ cat > "$stage/PACKAGE-NOTES" <<'NOTES'
 Where a package puts things, and where the repository's installers do not
 ------------------------------------------------------------------------
 
-The six programs are in /usr/bin. The privileged one, the fanotify helper, is
+The eight programs are in /usr/bin, `scour-extractor` among them: the service starts it to read PDF and old Office files. The privileged one, the fanotify helper, is
 root-owned at /usr/libexec/scour/scour-watch: a package may not write to
 /usr/local, where the source installer puts its own copy.
 

@@ -1,0 +1,22 @@
+[package]
+name        = "scour-textcache"
+description = "Documents' text kept once, compressed, and found again by path, size and time."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **Nothing of Scour's.** Blocks are zstd frames, compressed a megabyte at a
+# time, never a file at a time, so a search opens a few large blocks rather
+# than many small ones.
+[dependencies]
+ruzstd = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

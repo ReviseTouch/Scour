@@ -39,6 +39,9 @@ scour-volumes       = { workspace = true }
 scour-thumbs        = { workspace = true }
 scour-preview       = { workspace = true }
 scour-source-fs     = { workspace = true }
+scour-extract       = { workspace = true }
+scour-textcache     = { workspace = true }
+parking_lot         = { workspace = true }
 anyhow              = { workspace = true }
 clap                = { workspace = true }
 # `termination`: SIGTERM and SIGHUP too. systemd stops a service with SIGTERM,
@@ -51,9 +54,9 @@ serde_json          = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
-# Not optional any more. The arena cap in `main` is part of the shipped
-# service rather than a diagnostic — see `cap_allocator_arenas`.
+# The arena cap in `main` on glibc, and the extractor's limits everywhere
+# else on Unix — see `documents/pool.rs`.
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
 # The Windows service mode: the Service Control Manager's calls, through the
@@ -66,6 +69,7 @@ windows-sys = { workspace = true, features = [
     "Win32_System_RemoteDesktop",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
 ] }
 
 # A Mac has nowhere to write a global key, so the one process of Scour's that

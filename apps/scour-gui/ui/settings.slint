@@ -222,6 +222,13 @@ export component SettingsPage inherits Rectangle {
     in property <string> set-index-tidy-note;
     in property <string> set-index-tidy-push;
     callback index-tidy();
+    in property <string> set-texts;
+    in property <string> set-texts-note;
+    in property <bool> texts-on: true;
+    in property <string> set-texts-kept;
+    in property <string> texts-facts;
+    in property <string> set-texts-clear;
+    callback texts-forget();
     in property <string> set-index-reset;
     in property <string> set-index-reset-sure;
     in property <string> set-index-reset-note;
@@ -1250,6 +1257,28 @@ export component SettingsPage inherits Rectangle {
 
                         if root.settings-section == "index": VerticalLayout {
                             spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-texts;
+                                    note: root.set-texts-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.texts-on ? "on" : "off";
+                                        picked(v) => { root.perf-picked("texts", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-texts-kept;
+                                    note: root.texts-facts;
+                                    Push {
+                                        label: root.set-texts-clear;
+                                        enabled: root.texts-on;
+                                        clicked => { root.texts-forget(); }
+                                    }
+                                }
+                            }
                             Card {
                                 SettingRow {
                                     label: root.set-index-where;

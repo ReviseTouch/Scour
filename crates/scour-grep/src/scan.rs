@@ -13,6 +13,8 @@ use crate::ground::{Ground, readers};
 use crate::order::{Order, arrange};
 use crate::pattern::Pattern;
 use crate::read::Reader;
+use crate::texts::{Doc, DocText, Texts, extension_of, handed_over, unopened};
+use crate::zip::search_whole;
 
 /// A file to read. What the caller knows saves opening it: a size says it
 /// is empty or over the limit, a class that it is a picture or a video.
@@ -93,6 +95,11 @@ pub enum Skip {
     /// Its data is in the cloud and reading it would fetch it: a OneDrive or
     /// iCloud placeholder.
     Offline,
+    /// A document that opened and holds no text: a scan without a text layer.
+    NoText,
+    /// A document its reader could not open: damaged, encrypted, or not what
+    /// its name says.
+    Broken,
 }
 
 /// Called by each reading thread before its first file; what it returns is
@@ -107,6 +114,7 @@ pub struct Scanner {
     options: Options,
     ground: Ground,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
     cores: usize,
 }
 
@@ -126,6 +134,7 @@ impl Scanner {
             options,
             ground,
             enter: None,
+            texts: None,
             cores: std::thread::available_parallelism().map_or(2, |n| n.get()),
         }
     }
@@ -133,6 +142,12 @@ impl Scanner {
     /// See [`Enter`].
     pub fn entering(mut self, enter: Option<Enter>) -> Scanner {
         self.enter = enter;
+        self
+    }
+
+    /// Who reads the documents this crate cannot: see [`Texts`].
+    pub fn reading_documents(mut self, texts: Option<Arc<dyn Texts>>) -> Scanner {
+        self.texts = texts;
         self
     }
 
@@ -190,6 +205,23 @@ impl Scanner {
         done
     }
 
+    /// A document whose text is kept, searched without opening it.
+    fn kept(&self, file: &File) -> Option<Outcome> {
+        let texts = self.texts.as_deref()?;
+        let extension = extension_of(&file.path);
+        if self.pattern.is_raw_bytes() || !handed_over(&extension) {
+            return None;
+        }
+        let (size, mtime) = unopened(&file.path)?;
+        let doc = Doc {
+            path: &file.path,
+            size,
+            mtime,
+            extension: &extension,
+        };
+        Some(outcome_of(texts.kept(&doc)?, &self.pattern, &self.options))
+    }
+
     fn one(&self, reader: &mut Reader, file: &File, budget: &Budget) -> Outcome {
         match file.size {
             Some(0) => return Outcome::Clean,
@@ -201,8 +233,21 @@ impl Scanner {
         if file.class == Some(Class::HeaderOnly) && !self.pattern.is_raw_bytes() {
             return Outcome::Skipped(Skip::HeaderOnly);
         }
-        let (outcome, read) = reader.search(&file.path, &self.pattern, &self.options);
+        if let Some(kept) = self.kept(file) {
+            return kept;
+        }
+        let texts = self.texts.as_deref();
+        let (outcome, read) = reader.search(&file.path, &self.pattern, &self.options, texts);
         budget.charge(read);
         outcome
+    }
+}
+
+/// What a document's text says of the pattern.
+pub(crate) fn outcome_of(text: DocText, pattern: &Pattern, options: &Options) -> Outcome {
+    match text {
+        DocText::Words(words) => search_whole(words.as_bytes(), pattern, options),
+        DocText::NoText => Outcome::Skipped(Skip::NoText),
+        DocText::Broken => Outcome::Skipped(Skip::Broken),
     }
 }

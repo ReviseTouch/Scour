@@ -52,6 +52,8 @@ pub(super) fn grep_answer(r: scour_engine::Grepped) -> scour_proto::GrepResponse
         no_reader: r.no_reader,
         locked: r.locked,
         offline: r.offline,
+        no_text: r.no_text,
+        broken: r.broken,
         next: r.next,
         misread: r.misread,
         took_us: r.took_us,

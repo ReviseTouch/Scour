@@ -66,6 +66,12 @@ pub struct Change {
     pub search_threads: Option<u32>,
     /// See [`Settings::fresh_within`].
     pub fresh_within: Option<u32>,
+    /// See [`Settings::texts_off`].
+    pub texts_off: Option<bool>,
+    /// See [`Settings::texts_max_mb`].
+    pub texts_max_mb: Option<u32>,
+    /// See [`Settings::texts_dir`].
+    pub texts_dir: Option<String>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -84,6 +90,11 @@ impl Change {
     /// tuned again. See [`Settings::release_after`].
     pub fn tunes(&self) -> bool {
         self.memory.is_some() || self.search_threads.is_some() || self.fresh_within.is_some()
+    }
+
+    /// Whether this changes how documents' text is kept.
+    pub fn moves_texts(&self) -> bool {
+        self.texts_off.is_some() || self.texts_max_mb.is_some() || self.texts_dir.is_some()
     }
 
     /// Whether this changes what is indexed — the disks asked about, the
@@ -214,6 +225,15 @@ impl Change {
         }
         if let Some(v) = self.fresh_within {
             to.fresh_within = v;
+        }
+        if let Some(v) = self.texts_off {
+            to.texts_off = v;
+        }
+        if let Some(v) = self.texts_max_mb {
+            to.texts_max_mb = v;
+        }
+        if let Some(v) = self.texts_dir {
+            to.texts_dir = v;
         }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;

@@ -19,7 +19,8 @@ code — those five are the owner's to settle before the phase they touch.
 | | **Decided 2026-11-24:** RTF is read by `scour-extract`, streamed, no cache (Phase 1). **Xberg is dropped**; e-mail comes from `mail-parser` directly (Phase 3). The design's Xberg row no longer applies |
 | 1 | done on `content/phase-1`: five classes (`scour-grep/src/class.rs`), media refused unopened, PDF/OLE2 counted as `no_reader`, Windows-1254 and decomposed letters, hex `??` and `^`, RTF read by `scour-extract`, sheet names/comments/charts, `normalize()`, links not followed, `locked` on Windows; every face shows the new counts. Parity with ripgrep and the bounds measured (`docs/MEASUREMENTS.md`). On the way: the inflater cost in proportion to its buffer — XLSX 10× faster |
 | 2 | done on `content/phase-2`: readers measured (solid: half the cores up to 16), spinning disk measured on PC2 — the physical order lost to the path and was removed (D2 closed, no index column), small sets read as given, idle I/O priority past the first batch (Linux, Windows, macOS), `rate_mib` ceiling, cloud placeholders counted as `offline`. Snapshots: `/.snapshots` holds no indexed row here. **Open for the owner:** network and FUSE volumes read for content by default or not |
-| 3–4 | not begun |
+| 3 | done on `content/phase-3`: `scour-doctext` (pdf_oxide, office_oxide for DOC/XLS/PPT, mail-parser for EML), `apps/scour-extractor`, `scour-textcache`, `scour_grep::Texts` answered by `scourd/src/documents.rs`; settings `texts_off`/`texts_max_mb`/`texts_dir`, requests `texts`/`forget-texts`, every face. Not built: background extraction ahead of a search (the design's "arka planda önceden çıkar") |
+| 4 | not begun; each item waits for a measurement and the owner's word |
 
 Phase 1 also gains, from Phase 0: the streamed XLSX/PPTX reader reads sheet
 names, cell comments and charts (the five files it missed against

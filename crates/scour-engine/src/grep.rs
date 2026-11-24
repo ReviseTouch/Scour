@@ -2,11 +2,13 @@
 //! files, newest first; `scour-grep` reads them; this decides how far to go
 //! before answering, and says where it stopped.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scour_core::{Ast, Error, Index, Kind, Meta, Page, Result, SearchRequest, SortKey, Span};
 use scour_grep::{
-    Budget, Class, Enter, Expr, File, Ground, Hit, Needle, Options, Outcome, Skip, is_disk_image,
+    Budget, Class, Enter, Expr, File, Ground, Hit, Needle, Options, Outcome, Skip, Texts,
+    is_disk_image,
 };
 
 /// The first page is small, so a find among the newest files answers at once.
@@ -51,6 +53,8 @@ pub struct Grepped {
     pub no_reader: u64,
     pub locked: u64,
     pub offline: u64,
+    pub no_text: u64,
+    pub broken: u64,
     /// The offset to go on from. None: everything the query names was read.
     pub next: Option<u32>,
     pub misread: Vec<Span>,
@@ -73,6 +77,7 @@ pub(crate) fn run(
     count_cap: u32,
     ask: &GrepAsk,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
 ) -> Result<Grepped> {
     let began = Instant::now();
     let expr = Expr::new(&ask.needle, ask.exact_case).map_err(|e| Error::QuerySyntax {
@@ -119,6 +124,7 @@ pub(crate) fn run(
                 &options,
                 &ground,
                 enter.clone(),
+                texts.clone(),
                 &budget,
                 batch,
                 ask.top,
@@ -151,6 +157,7 @@ fn read(
     options: &Options,
     ground: &Ground,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
     budget: &Budget,
     rows: &[scour_core::Hit],
     top: u32,
@@ -158,7 +165,7 @@ fn read(
 ) -> Option<u32> {
     let (places, files) = files_of(rows);
     for (k, outcome) in expr
-        .scan(options, ground, enter, &files, budget)
+        .scan(options, ground, enter, texts, &files, budget)
         .into_iter()
         .enumerate()
     {
@@ -172,6 +179,8 @@ fn read(
             Outcome::Skipped(Skip::NoReader) => out.no_reader += 1,
             Outcome::Skipped(Skip::Locked) => out.locked += 1,
             Outcome::Skipped(Skip::Offline) => out.offline += 1,
+            Outcome::Skipped(Skip::NoText) => out.no_text += 1,
+            Outcome::Skipped(Skip::Broken) => out.broken += 1,
             Outcome::Unreadable(_) => out.unreadable += 1,
             Outcome::Found { hits, more } => {
                 out.scanned += 1;

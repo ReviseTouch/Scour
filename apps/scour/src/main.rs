@@ -248,6 +248,22 @@ enum Command {
         #[arg(long, value_enum)]
         typos: Option<Typos>,
     },
+    /// Documents' kept text — PDF, legacy Office, e-mail: what is kept,
+    /// where, and how much. A flag changes it for every face.
+    Texts {
+        /// Forget every kept text; the next search reads the documents again.
+        #[arg(long)]
+        clear: bool,
+        /// `on` keeps documents' text after a search reads them, `off` does not.
+        #[arg(long, value_enum)]
+        keep: Option<OnOff>,
+        /// Megabytes of compressed text kept at most; zero is the default.
+        #[arg(long)]
+        max_mb: Option<u32>,
+        /// Where it is kept; an empty string is beside the settings.
+        #[arg(long)]
+        dir: Option<String>,
+    },
     /// Print the MCP configuration to paste into a client.
     McpConfig {
         /// Which client: `claude-desktop`, `claude-code`, `codex`, `cursor`, `gemini`, `vscode`.
@@ -256,6 +272,12 @@ enum Command {
     },
     /// Where the settings and the index live.
     Where,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -657,6 +679,23 @@ fn build(args: &Args) -> Result<Request> {
             change: scour_settings::Change {
                 accents_exact: accents.map(|a| a == Accents::Exact),
                 typos: typos.map(|t| t.kept().to_owned()),
+                ..Default::default()
+            },
+        },
+        Some(Command::Texts { clear: true, .. }) => Request::ForgetTexts {},
+        Some(Command::Texts {
+            keep: None,
+            max_mb: None,
+            dir: None,
+            ..
+        }) => Request::Texts {},
+        Some(Command::Texts {
+            keep, max_mb, dir, ..
+        }) => Request::SetSettings {
+            change: scour_settings::Change {
+                texts_off: keep.map(|k| k == OnOff::Off),
+                texts_max_mb: *max_mb,
+                texts_dir: dir.clone(),
                 ..Default::default()
             },
         },

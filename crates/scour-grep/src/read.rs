@@ -10,7 +10,8 @@ use scour_extract::rtf_text;
 use crate::class::{Signature, signature};
 use crate::excerpt::{Hit, Kind, around};
 use crate::pattern::Pattern;
-use crate::scan::{Options, Outcome, Skip};
+use crate::scan::{Options, Outcome, Skip, outcome_of};
+use crate::texts::{Doc, Texts, extension_of, handed_over};
 use crate::zip::{ZipScratch, search_whole};
 
 /// An RTF document's text is kept whole to be searched; past this it is cut.
@@ -45,6 +46,7 @@ impl Reader {
         path: &Path,
         pattern: &Pattern,
         opts: &Options,
+        texts: Option<&dyn Texts>,
     ) -> (Outcome, u64) {
         let (mut file, file_len) = match open(path, opts.max_size) {
             Ok(pair) => pair,
@@ -74,6 +76,15 @@ impl Reader {
             }
             let hay = &buf[..filled];
             if base == 0 && !pattern.is_raw_bytes() {
+                let extension = extension_of(path);
+                let document = matches!(signature(hay), Some(Signature::Unread))
+                    || (extension == "eml" && handed_over(&extension));
+                if let (Some(texts), true) = (texts, document) {
+                    let (outcome, extra) = self.document(
+                        &mut file, file_len, filled, eof, path, &extension, texts, pattern, opts,
+                    );
+                    return (outcome, total + extra);
+                }
                 match signature(hay) {
                     Some(Signature::Zip) if self.zip_on => {
                         let (outcome, extra) = self
@@ -152,6 +163,59 @@ impl Reader {
 }
 
 impl Reader {
+    /// A document handed over: read whole, given to `texts`, its words searched.
+    #[allow(clippy::too_many_arguments)]
+    fn document(
+        &mut self,
+        file: &mut File,
+        file_len: u64,
+        filled: usize,
+        eof: bool,
+        path: &Path,
+        extension: &str,
+        texts: &dyn Texts,
+        pattern: &Pattern,
+        opts: &Options,
+    ) -> (Outcome, u64) {
+        let (whole, extra) = match self.rest_of(file, file_len, filled, eof) {
+            Ok(pair) => pair,
+            Err(kind) => return (Outcome::Unreadable(kind), 0),
+        };
+        let mtime = file
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64);
+        let doc = Doc {
+            path,
+            size: file_len,
+            mtime,
+            extension,
+        };
+        (outcome_of(texts.read(&doc, &whole), pattern, opts), extra)
+    }
+
+    /// The whole file: the first `filled` bytes from the buffer, the rest read.
+    fn rest_of(
+        &mut self,
+        file: &mut File,
+        file_len: u64,
+        filled: usize,
+        eof: bool,
+    ) -> Result<(Vec<u8>, u64), ErrorKind> {
+        let mut whole = self.buf[..filled].to_vec();
+        if eof {
+            return Ok((whole, 0));
+        }
+        let want = file_len.saturating_sub(filled as u64);
+        let n = file
+            .take(want)
+            .read_to_end(&mut whole)
+            .map_err(|e| e.kind())?;
+        Ok((whole, n as u64))
+    }
+
     /// An RTF document: the rest of it read, its text taken out and searched.
     /// The first `filled` bytes are in the buffer already.
     fn rtf(
@@ -163,15 +227,10 @@ impl Reader {
         pattern: &Pattern,
         opts: &Options,
     ) -> (Outcome, u64) {
-        let mut whole = self.buf[..filled].to_vec();
-        let mut extra = 0u64;
-        if !eof {
-            let want = file_len.saturating_sub(filled as u64);
-            match file.take(want).read_to_end(&mut whole) {
-                Ok(n) => extra = n as u64,
-                Err(e) => return (Outcome::Unreadable(e.kind()), extra),
-            }
-        }
+        let (whole, extra) = match self.rest_of(file, file_len, filled, eof) {
+            Ok(pair) => pair,
+            Err(kind) => return (Outcome::Unreadable(kind), 0),
+        };
         let mut text = String::new();
         rtf_text(&whole, &mut text, RTF_TEXT);
         (search_whole(text.as_bytes(), pattern, opts), extra)

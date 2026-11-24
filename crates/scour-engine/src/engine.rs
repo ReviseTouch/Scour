@@ -90,6 +90,8 @@ struct Shared {
     contents: Arc<crate::content::Contents>,
     /// What a thread reading files does first. See [`Engine::read_files_as`].
     enter: RwLock<Option<scour_grep::Enter>>,
+    /// Who reads PDF, legacy Office and e-mail. See [`Engine::read_documents_with`].
+    texts: RwLock<Option<Arc<dyn scour_grep::Texts>>>,
 }
 
 impl Shared {
@@ -232,6 +234,7 @@ impl Engine {
             watchers: AtomicU32::new(0),
             contents: Arc::default(),
             enter: RwLock::new(None),
+            texts: RwLock::new(None),
             read_as: AtomicU8::new(reading.bits()),
             similar: Mutex::new(None),
             prepared: RwLock::new(None),

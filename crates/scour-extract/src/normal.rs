@@ -6,6 +6,17 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 
 /// The comparable form of `text`.
 pub fn normalize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in composed(text).chars() {
+        push_lower(&mut out, c);
+    }
+    out
+}
+
+/// `text` composed, its hyphenated line breaks joined, its case kept: what a
+/// document's text is kept as, so that a search may still ask for exact case
+/// and a find is shown as it was written.
+pub fn composed(text: &str) -> String {
     let composed = ComposingNormalizerBorrowed::new_nfc().normalize(text);
     let mut out = String::with_capacity(composed.len());
     let mut chars = composed.chars().peekable();
@@ -13,7 +24,7 @@ pub fn normalize(text: &str) -> String {
         if c == '-' && joins(&mut chars) {
             continue;
         }
-        push_lower(&mut out, c);
+        out.push(c);
     }
     out
 }
@@ -81,5 +92,6 @@ mod tests {
         // Not a break: a hyphen that stays, a capital after it, no line end.
         assert_eq!(normalize("Ali-\nVeli"), "ali-\nveli");
         assert_eq!(normalize("e-posta"), "e-posta");
+        assert_eq!(composed("Mahke-\nmesi O\u{308}"), "Mahkemesi Ö");
     }
 }

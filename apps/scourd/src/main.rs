@@ -4,6 +4,7 @@
 
 mod as_owner;
 mod disks;
+mod documents;
 mod handle;
 mod live;
 #[cfg(windows)]
@@ -139,6 +140,10 @@ pub(crate) fn run(args: Args) -> Result<()> {
         .unwrap_or_else(|| wire::state_dir(&config));
     let kept = handle::Kept::open(state, config.clone());
     let plan = kept.plan();
+    documents::start(
+        &kept.settings.lock().unwrap_or_else(|p| p.into_inner()),
+        &kept.dir,
+    );
     let index = match wire::open(&config) {
         Ok(index) => index,
         // Somebody already serves this index — a face started one, or the

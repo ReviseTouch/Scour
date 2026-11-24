@@ -44,7 +44,8 @@ Dependencies flow downwards and **never** upwards.
 | **storage** | `scour-index-native` | columns, trigrams, the directory table | where a query came from |
 | **search** | `scour-engine` | which rows answer, in what order | who is asking |
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
-| **reading files** | `scour-grep`, `scour-extract`, `scour-preview` | what is inside a file, under bounds | Scour: paths in, text out |
+| **reading files** | `scour-grep`, `scour-extract`, `scour-preview`, `scour-textcache` | what is inside a file, under bounds; documents' text kept | Scour: paths in, text out |
+| **document readers** | `scour-doctext`, linked by `apps/scour-extractor` alone | PDF, legacy Office, e-mail: bytes in, text out | files, the service; it runs in a process the service may kill |
 | **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
 | **client** | `scour-client` | a held connection, a service started when none answers, the requests whose wording is a decision | what a face draws, and which of its answers is stale |
 | **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-volumes`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
@@ -109,8 +110,17 @@ correct on the day it is written.
   directory, an entry inflated, its XML made plain — is `scour-extract`'s,
   which the preview reads a document's text with too: one reader, so a new
   format is added once and both search and preview have it. It asks `surefoot` what each root stands on, as
-  the walk does, and reads a spinning disk on one thread in path order, a
-  solid one on up to eight, a network one on four.
+  the walk does, and reads a spinning disk on one thread (a large set in path
+  order), a solid one on half the cores up to sixteen, a network one on four.
+- **Documents it cannot stream go to another process.** PDF, `.doc`, `.xls`,
+  `.ppt` and `.eml` are handed to `scour_grep::Texts`, which `scourd` answers
+  (`src/documents.rs`): their text kept in `scour-textcache` (zstd blocks,
+  keyed by path, size and time), and read on a miss by `scour-extractor`
+  processes — 30 s and 2 GiB each, killed and started again when one dies or
+  hangs, ended after 20 s idle. The reading thread opens the file itself,
+  under the asker's identity, and pipes its bytes over: the extractor opens
+  nothing. A kept text is used only after a `stat` says the file is unchanged
+  and `access` says the asker may read it.
 - **`content:` is a search like any other, answered as it is read.** A term
   standing alone is taken out of the query; the rest names the candidates and
   a thread of its own reads them (`scour-engine/src/content.rs`). A page is

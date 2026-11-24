@@ -28,7 +28,7 @@ version="$(grep -m1 '^version' "$here/Cargo.toml" | sed 's/.*"\(.*\)"/\1/')"
 name="scour-$version-linux-x86_64"
 dist="$here/dist"; stage="$dist/$name"
 rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/assets" "$stage/scripts" "$stage/packaging"
-for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
+for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp scour-extractor; do
     [ -x "$from/$b" ] || { echo "missing $from/$b — build first" >&2; exit 1; }
     install -m755 "$from/$b" "$stage/bin/$b"
 done

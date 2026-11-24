@@ -92,6 +92,10 @@ pub enum Ask {
     },
     /// Where the index is and what it holds, for the Index section.
     IndexFacts,
+    /// What documents' text is kept.
+    Texts,
+    /// Forget every kept text.
+    ForgetTexts,
     /// Build the ordered part of the index again from the rows it has.
     Reorganize,
     /// Empty the index and walk everything again.
@@ -325,6 +329,8 @@ impl Freshness {
             | Ask::Rescan { .. }
             | Ask::Reread { .. }
             | Ask::IndexFacts
+            | Ask::Texts
+            | Ask::ForgetTexts
             | Ask::Reorganize
             | Ask::Reset
             | Ask::Usage { .. }
@@ -407,6 +413,8 @@ impl Link {
             | Ask::Rescan { .. }
             | Ask::Reread { .. }
             | Ask::IndexFacts
+            | Ask::Texts
+            | Ask::ForgetTexts
             | Ask::Reorganize
             | Ask::Reset
             | Ask::Usage { .. }
@@ -606,6 +614,8 @@ fn spawn_lane(
                 Ask::Rescan { path } => (0, Request::Rescan { path: Some(path) }, Lane::Places),
                 Ask::Reread { from_start } => (0, Request::Reread { from_start }, Lane::Places),
                 Ask::IndexFacts => (0, Request::Stats {}, Lane::Places),
+                Ask::Texts => (0, Request::Texts {}, Lane::Places),
+                Ask::ForgetTexts => (0, Request::ForgetTexts {}, Lane::Places),
                 Ask::Reorganize => (
                     0,
                     Request::Maintain {

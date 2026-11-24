@@ -205,6 +205,10 @@ pub enum Request {
         #[serde(default)]
         from_start: bool,
     },
+    /// What documents' text is kept, where, and how much.
+    Texts {},
+    /// Forget every kept text; the next search reads the documents again.
+    ForgetTexts {},
     /// Walk a source again. `path` narrows it to one subtree.
     Rescan {
         #[serde(default)]
@@ -298,6 +302,7 @@ impl Request {
             // but this predicate is a security boundary, not a classification.
             | Request::Thumbnails { .. }
             | Request::Postpone { .. }
+            | Request::ForgetTexts {}
             | Request::Choose { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
@@ -320,6 +325,7 @@ impl Request {
             | Request::Stats {}
             | Request::Await { .. }
             | Request::Reread { .. }
+            | Request::Texts {}
             | Request::Syntax {} => false,
         }
     }
@@ -353,6 +359,8 @@ impl Request {
             | Request::Stats {}
             | Request::Await { .. }
             | Request::Thumbnails { .. }
+            | Request::Texts {}
+            | Request::ForgetTexts {}
             | Request::Reread { .. }
             | Request::Rescan { .. }
             | Request::Maintain { .. }
@@ -389,6 +397,8 @@ impl Request {
             Request::Stats {} => "stats",
             Request::Await { .. } => "await",
             Request::Reread { .. } => "reread",
+            Request::Texts {} => "texts",
+            Request::ForgetTexts {} => "forget-texts",
             Request::Rescan { .. } => "rescan",
             Request::Recheck { .. } => "recheck",
             Request::Maintain { .. } => "maintain",

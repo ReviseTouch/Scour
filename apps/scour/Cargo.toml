@@ -97,6 +97,7 @@ assets = [
     ["../../target/package/bin/scour-tui",      "usr/bin/",                                          "755"],
     ["../../target/package/bin/scour-web",      "usr/bin/",                                          "755"],
     ["../../target/package/bin/scour-mcp",      "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scour-extractor", "usr/bin/",                                         "755"],
     # Root-owned and never in a writable home: the system unit gives this one
     # CAP_SYS_ADMIN. A package may not write to /usr/local, so it is not the
     # /usr/local/libexec the unit's own installer uses — see PACKAGE-NOTES.
@@ -139,6 +140,7 @@ assets = [
     { source = "target/package/bin/scour-tui",   dest = "/usr/bin/scour-tui",   mode = "755" },
     { source = "target/package/bin/scour-web",   dest = "/usr/bin/scour-web",   mode = "755" },
     { source = "target/package/bin/scour-mcp",   dest = "/usr/bin/scour-mcp",   mode = "755" },
+    { source = "target/package/bin/scour-extractor", dest = "/usr/bin/scour-extractor", mode = "755" },
     { source = "target/package/bin/scour-watch", dest = "/usr/libexec/scour/scour-watch", mode = "755" },
     { source = "scripts/scour-open",             dest = "/usr/bin/scour-open",  mode = "755" },
     { source = "scripts/scour-app",              dest = "/usr/bin/scour-app",   mode = "755" },

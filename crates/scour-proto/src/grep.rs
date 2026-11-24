@@ -50,6 +50,12 @@ pub struct GrepResponse {
     /// Cloud placeholders, OneDrive's or iCloud's: reading would download them.
     #[serde(default)]
     pub offline: u64,
+    /// Documents that opened and hold no text: scans without a text layer.
+    #[serde(default)]
+    pub no_text: u64,
+    /// Documents their reader could not open: damaged, encrypted, misnamed.
+    #[serde(default)]
+    pub broken: u64,
     /// The `offset` to ask again with. None: every file the query names was read.
     #[serde(default)]
     pub next: Option<u32>,

@@ -171,3 +171,33 @@ fn a_link_is_not_read_through() {
     assert_eq!(got[1], Outcome::Skipped(Skip::NotAFile));
     assert!(matches!(got[2], Outcome::Found { .. }));
 }
+
+#[test]
+fn a_phrase_broken_across_lines_is_still_the_phrase() {
+    let text_of = |s: &str| Needle::Text(s.into());
+    let text = b"Ankara 3. Asliye\n  Hukuk Mahkemesi'ne\nbitti";
+    let got = one(
+        text_of("asliye hukuk mahkemesi"),
+        Options::default(),
+        "a.txt",
+        text,
+    );
+    assert!(matches!(got, Outcome::Found { .. }), "{got:?}");
+    let apart = b"asliye\n\nbaska\nhukuk";
+    let got = one(text_of("asliye hukuk"), Options::default(), "b.txt", apart);
+    assert_eq!(got, Outcome::Clean);
+}
+
+#[test]
+fn a_phrase_spaced_with_no_break_spaces_is_the_phrase() {
+    let text = "icra\u{a0}dairesi ve hukuk\u{2009}\u{a0}mahkemesi".as_bytes();
+    for phrase in ["icra dairesi", "hukuk mahkemesi"] {
+        let got = one(
+            Needle::Text(phrase.into()),
+            Options::default(),
+            "a.txt",
+            text,
+        );
+        assert!(matches!(got, Outcome::Found { .. }), "{phrase}: {got:?}");
+    }
+}

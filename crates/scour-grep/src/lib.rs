@@ -12,6 +12,7 @@ mod pattern;
 mod quiet;
 mod read;
 mod scan;
+mod texts;
 mod zip;
 
 pub use budget::Budget;
@@ -23,3 +24,4 @@ pub use order::Order;
 pub use pattern::{BadPattern, Needle, Pattern};
 pub use scan::{Enter, File, Options, Outcome, Scanner, Skip};
 pub use surefoot::Medium;
+pub use texts::{Doc, DocText, Texts};

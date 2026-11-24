@@ -97,12 +97,20 @@ pub fn human(r: &Response) -> String {
                 ),
                 (
                     g.no_reader,
-                    "skipped as PDF or legacy Office documents with no text reader yet (pass binary to search their raw bytes)",
+                    "skipped as PDF or legacy Office documents, no document reader being installed (pass binary to search their raw bytes)",
                 ),
                 (g.locked, "locked by another program"),
                 (
                     g.offline,
                     "left in the cloud (OneDrive or iCloud placeholders; reading would download them)",
+                ),
+                (
+                    g.no_text,
+                    "documents with no text layer (scans; there is no OCR)",
+                ),
+                (
+                    g.broken,
+                    "documents that would not open (damaged, encrypted or misnamed)",
                 ),
             ] {
                 if n > 0 {
@@ -384,6 +392,20 @@ pub fn human(r: &Response) -> String {
         ),
         Response::Maintained(m) => format!("{:?} finished in {} ms.", m.level, m.took_ms),
         Response::Accepted => "Accepted.".into(),
+        Response::Texts {
+            on,
+            documents,
+            no_text,
+            failed,
+            reader,
+            ..
+        } => match (reader, on) {
+            (false, _) => "No document reader is installed.".into(),
+            (true, false) => "Documents' text is read at each search, not kept.".into(),
+            (true, true) => format!(
+                "{documents} documents' text kept, {no_text} without text, {failed} that would not open."
+            ),
+        },
         Response::Text { text } => text.clone(),
         // No export tool is exposed: a model must not be handed two hundred
         // megabytes through a context window, and answering with a filename

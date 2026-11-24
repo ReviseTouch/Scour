@@ -33,6 +33,7 @@ OTHER FACES
    scour-tui        full-screen terminal
    scour-web        in the browser
    scour-mcp        MCP server, for AI tools
+   scour-extractor  reads PDF and old Office files for the service; not run by hand
 
 REMOVE
 ------

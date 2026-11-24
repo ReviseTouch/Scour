@@ -36,7 +36,7 @@ icons=$share/icons/hicolor
 
 mkdir -p "$bin" "$share/applications" "$icons/scalable/apps"
 
-for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
+for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp scour-extractor; do
     [ -f "$here/bin/$b" ] || continue
     install -m755 "$here/bin/$b" "$bin/$b"
     echo "  $bin/$b"

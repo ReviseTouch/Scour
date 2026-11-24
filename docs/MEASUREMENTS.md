@@ -952,6 +952,54 @@ past its first batch a reading runs at idle disk priority and nice 10.
 SCOUR_GREP_READERS=N scan --cold zzqq < mixed.txt
 ```
 
+## Documents' text, read in another process and kept (2026-11-24)
+
+An isolated service (own socket, own index) over 886 documents copied from
+this machine — 400 PDF, 300 DOC, 150 XLS, 36 EML; 553 MiB — release build,
+`scour grep -n 2000 --lines 0 mahkeme`, twice per round, the cache cleared
+before each round:
+
+| | round 1 | round 2 |
+|---|---:|---:|
+| nothing kept: 842 read, 44 without text, 1 would not open | 19.06 s | 17.42 s |
+| kept: the same 768 files found | 0.116 s, 0 B read | 0.158 s, 0 B read |
+
+The second search opens no document: an inotify watch on the tree saw only
+its five directories opened. The kept text is 10.4 MiB on disk for 40.7 MiB
+of text. A changed e-mail was read again (95 B) and its old word no longer
+found; four extractors killed with `kill -9` mid-search left the service up,
+the search finished, and those four documents were counted as would not open.
+Four idle extractors held 430 MB between two searches; they now end after
+20 s idle. The service idle for 60 s afterwards: 3 ticks and 7 threads, the
+installed build on the same index 2 ticks and 6 threads.
+
+**Compression.** The same 40.7 MiB of text, 1 MiB blocks:
+
+| | size | ratio | time |
+|---|---:|---:|---:|
+| zstd (C) level 1 | 7.53 MiB | 5.4× | 0.05 s |
+| zstd (C) level 9 | 5.94 MiB | 6.8× | 0.29 s |
+| zstd (C) level 19 | 5.46 MiB | 7.4× | 8.10 s |
+| `ruzstd` (Rust) | 10.37 MiB | 3.9× | 0.36 s |
+
+Level 19 cost eight seconds of a reading thread's CPU for 842 documents, and
+the C library would not build for `scripts/check`'s other targets. `ruzstd`
+writes the same format in Rust at about level 1; 1 GiB keeps roughly a
+hundred thousand documents' text.
+
+**Phrases in PDFs.** Five court phrases over the 400 PDFs, a quoted phrase
+against `(?i)` with `\s+` between its words (Turkish `i` spelled out):
+365 of 429 files before, **429 of 429** once a space in a phrase matches any
+run of blanks, line breaks, no-break and typographic spaces. Line breaks were
+the smaller part; `U+00A0` between words the larger.
+
+```sh
+scour --socket S texts --clear
+scour --socket S grep -n 2000 --lines 0 mahkeme          # twice
+scour --socket S grep -n 2000 --lines 0 '"asliye hukuk"' /pdf/
+scour --socket S grep -e -n 2000 --lines 0 '(?i)asl(?:i|İ|ı|I)ye\s+hukuk' /pdf/
+```
+
 ## Reproducing
 
 ```sh

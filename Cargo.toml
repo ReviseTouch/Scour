@@ -16,6 +16,8 @@ members = [
     "crates/scour-dupes",
     "crates/scour-grep",
     "crates/scour-extract",
+    "crates/scour-doctext",
+    "crates/scour-textcache",
     "crates/scour-trash",
     "crates/scour-clip",
     "crates/scour-drag",
@@ -41,6 +43,7 @@ members = [
     "apps/scour-gui",
     "apps/scour-tui",
     "apps/scour-watch",
+    "apps/scour-extractor",
 ]
 
 [workspace.package]
@@ -78,6 +81,8 @@ scour-preview       = { path = "crates/scour-preview" }
 scour-dupes         = { path = "crates/scour-dupes" }
 scour-grep          = { path = "crates/scour-grep" }
 scour-extract       = { path = "crates/scour-extract" }
+scour-doctext       = { path = "crates/scour-doctext" }
+scour-textcache     = { path = "crates/scour-textcache" }
 scour-trash         = { path = "crates/scour-trash" }
 scour-clip           = { path = "crates/scour-clip" }
 scour-drag           = { path = "crates/scour-drag" }
@@ -112,6 +117,12 @@ ratatui     = "0.30.2"
 # what the roots are standing on and reads through the open directory.
 surefoot    = { git = "https://github.com/ReviseTouch/surefoot", tag = "v0.1.0" }
 notify      = "8"
+
+# The text cache's compression: zstd frames, written and read in pure Rust,
+# so every target builds without a C compiler (MIT). Its one level is about
+# zstd's first: 3.9x on documents' text against 7.4x at 19, which took 8 s of
+# CPU for 40 MiB — `docs/MEASUREMENTS.md`.
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std", "hash"] }
 
 # Unicode composition for `scour-extract`'s one normal form. Already in the
 # tree through Slint; Unicode-3.0 licence, like every Unicode table.

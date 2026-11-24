@@ -160,6 +160,8 @@ pub fn answered(
         no_reader,
         locked,
         offline,
+        no_text,
+        broken,
         next,
         took_us,
         ..
@@ -192,6 +194,8 @@ pub fn answered(
         (no_reader, "{n} documents not read"),
         (locked, "{n} locked"),
         (offline, "{n} in the cloud"),
+        (no_text, "{n} without text"),
+        (broken, "{n} would not open"),
     ] {
         if n > 0 {
             summary.push_str("  ·  ");

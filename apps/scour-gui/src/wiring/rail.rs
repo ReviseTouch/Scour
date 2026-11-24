@@ -161,6 +161,13 @@ pub(crate) fn wire(wiring: &Wiring) {
         let weak = window.as_weak();
         let link = Rc::clone(link);
         let cat = Rc::clone(cat);
+        window.on_texts_forget({
+            let link = Rc::clone(&link);
+            move || {
+                link.send(Ask::ForgetTexts);
+                link.send(Ask::Texts);
+            }
+        });
         window.on_index_tidy(move || {
             let Some(w) = weak.upgrade() else { return };
             link.send(Ask::Reorganize);
@@ -282,6 +289,11 @@ pub(crate) fn wire(wiring: &Wiring) {
                 "threads" => {
                     w.set_threads_choice(value.clone());
                     change.search_threads = value.parse().ok();
+                }
+                "texts" => {
+                    let on = value == "on";
+                    w.set_texts_on(on);
+                    change.texts_off = Some(!on);
                 }
                 _ => {
                     w.set_fresh_choice(value.clone());

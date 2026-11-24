@@ -85,6 +85,12 @@
       if (KEPT.narrow_off) { CHIPS = []; drawNarrow(); }
       drawSettings();
     });
+    seg("seg-texts", [["on", T("On")], ["off", T("Off")]], k.texts_off ? "off" : "on", (v) => {
+      KEPT.texts_off = v === "off";
+      keep({ texts_off: KEPT.texts_off });
+      setTimeout(loadTexts, 300);
+      drawSettings();
+    });
     seg("seg-threads",
       [["0", T("Automatic")], ["1", "1"], ["2", "2"], ["4", "4"], ["8", "8"]],
       String(k.search_threads || 0),
@@ -159,8 +165,28 @@
       where.append(st.dir || "", document.createElement("br"), facts);
       document.getElementById("index-open").disabled = !st.dir;
     }).catch(() => {});
+    loadTexts();
     drawIndexReset();
   }
+  /* Documents' kept text, beside the index it serves. */
+  function loadTexts() {
+    SERVICE.get("texts", {}).then((x) => {
+      const facts = document.getElementById("texts-facts");
+      facts.textContent = !x.reader
+        ? T("No document reader is installed.")
+        : !x.on
+          ? T("Not kept: every search reads them again.")
+          : `${fmt(x.documents)} ${T("with text")} · ${fmt(x.no_text)} ${T("without text")} · ` +
+            `${fmt(x.failed)} ${T("would not open")} · ${bytes(x.disk)} / ${bytes(x.max_mb * 1048576)}`;
+      document.getElementById("texts-clear").disabled = !x.on;
+    }).catch(() => {});
+  }
+  document.getElementById("texts-clear").addEventListener("click", () => {
+    fetch(`/api/texts?${new URLSearchParams({ forget: "1", t: TOKEN })}`, {
+      method: "POST",
+      cache: "no-store",
+    }).then(loadTexts).catch((err) => console.warn("texts:", err));
+  });
   function drawIndexReset() {
     document.getElementById("index-reset-desc").textContent = INDEX_SURE
       ? T("Searches will find little until the scan is done, a minute or a few on most machines.")
