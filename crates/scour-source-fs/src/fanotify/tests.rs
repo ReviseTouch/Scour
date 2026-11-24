@@ -1,4 +1,12 @@
 use super::*;
+use crate::path;
+use crate::rules::Rules;
+use crate::scan::FsSource;
+use scour_core::{Change, ChangeSink, ScanOptions, SourceId, WatchHandle};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The tests that use the one [`SUBS`] list, one at a time: the lock test
 /// asks whether anyone holds that lock, and a neighbour holding it for its
