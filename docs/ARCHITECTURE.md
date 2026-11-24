@@ -46,11 +46,12 @@ Dependencies flow downwards and **never** upwards.
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
 | **reading files** | `scour-grep`, `scour-extract`, `scour-preview` | what is inside a file, under bounds | Scour: paths in, text out |
 | **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
+| **client** | `scour-client` | a held connection, a service started when none answers, the requests whose wording is a decision | what a face draws, and which of its answers is stale |
 | **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-volumes`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
 | **faces** | `scour-web`, `scour-gui`, `scour-tui`, `scour` | drawing, keys, the pointer | the index, the filesystem, the engine |
 
 **A face never links the engine.** All four learn everything they know over
-the socket. That is where the loose coupling lives: between the faces and the
+the socket. `apps/scourd/tests/layers.rs` fails the build when one does. That is where the loose coupling lives: between the faces and the
 service.
 
 ---
@@ -119,6 +120,12 @@ correct on the day it is written.
   on for fifteen seconds past what was asked for, and again when a later page
   is. `!content:` and `a | content:` are still refused; the rail counts the
   candidates, not the finds.
+- **Where an index of contents would join.** `holding()` in
+  `scour-engine/src/content.rs` is the one place a batch of candidate rows
+  becomes the rows whose files hold the pattern. An index of contents answers
+  that question first and leaves to the read-through what it cannot; its
+  trait belongs in `scour-core` and its concrete type is named only in
+  `scourd/src/wire.rs`. Nothing implements one yet, so no trait is written.
 
 ---
 
@@ -148,7 +155,7 @@ cannot.
 | face | drawing | its own |
 |---|---|---|
 | **page** (`scour-web`) | HTML/CSS/JS in parts under `src/page/`, joined by `build.rs` into one document the bridge serves | runs in a browser; `POST` routes are fenced by a token, the origin and `--no-launch` |
-| **window** (`scour-gui`) | Slint, software renderer | the model is built once and updated in place |
+| **window** (`scour-gui`) | Slint, software renderer; `ui/` holds the window and its parts (`settings.slint`, `menu.slint`, `report.slint`, `widgets.slint`, `types.slint`) | the model is built once and updated in place; every callback is bound in `src/wiring/`, a file a section, and an answer from the service is drawn by `apply` or `src/answers.rs` |
 | **terminal** (`scour-tui`) | ratatui, immediate mode | `--once`, `--press`, `--click`: the only way to check the screen and a click |
 | **command line** (`scour`) | text and `--json` | one question, one answer; no paging |
 
@@ -229,3 +236,19 @@ screenshots and the thumbnail cache's own files fall in that class.
 to draw nothing. And a list whose own minimum is wider than the window squeezes
 its sibling to fifty pixels: `min-width: 0px` on the list means "may be cut on
 the right", and it is the only way the panel can take its width.
+
+---
+
+## 11. Where the next features go
+
+| feature | where | joins at |
+|---|---|---|
+| index of contents | a crate of its own, implementing a trait in `scour-core` | `holding()` in `scour-engine/src/content.rs`, named in `scourd/src/wire.rs` |
+| a new document format | `scour-extract` | its container and text layers; grep and the preview both read it from there |
+| richer preview | `scour-preview`, reading document text through `scour-extract` | `Request::Preview`, new fields `#[serde(default)]` |
+| AI-written queries | a crate depending on `scour-query` only: a sentence in, a query and its reading out | a request the service answers, so every face has it and one place holds the key and the consent |
+| a plugin | a process of its own, linking `scour-client` | the socket, as `scour-mcp` does |
+
+The tables a plugin would add rows to are already tables: extractors
+(`scour-extract`), actions (`scour_ui::menu`), query fields
+(`scour-query/src/fields.rs`). A loader comes when there is a second author.

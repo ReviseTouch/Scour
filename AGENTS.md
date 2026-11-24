@@ -14,11 +14,15 @@ is `types/` and `traits/`, with no I/O and no dependency beyond `serde` and
 |---|---|---|
 | contract | `scour-core` | nothing |
 | language | `scour-query` | the syntax, no backend |
-| wire | `scour-proto`, `scour-ipc` | the message shape, the socket |
+| wire | `scour-proto`, `scour-ipc`, `scour-client` | the message shape, the socket, a connection held and opened again |
 | implementations | `scour-index-native`, `scour-source-fs`, `scour-config`, `scour-i18n`, … | one technology each |
 | orchestration | `scour-engine` | `Box<dyn Source>`, `Arc<dyn Index>` — no concrete types |
 | wiring | `apps/scourd` | **the only place concrete types are named** (`src/wire.rs`) |
-| faces | `scour`, `scour-mcp`, `scour-web`, `scour-gui`, `scour-tui` | `scour-proto` only |
+| faces | `scour`, `scour-mcp`, `scour-web`, `scour-gui`, `scour-tui` | `scour-proto` and `scour-client` only |
+
+`apps/scourd/tests/layers.rs` checks this table: a face linking the engine,
+a leaf crate linking Scour, or anything but the service naming an index
+fails `cargo test`.
 
 If an implementation crate needs another implementation crate, the trait it
 needs is missing from core. Add the trait, not the dependency. `scour-engine`

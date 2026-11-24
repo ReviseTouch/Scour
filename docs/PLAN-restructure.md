@@ -1,5 +1,32 @@
 # Restructuring plan
 
+## Where it stands (2026-11-24)
+
+Carried out the same day, one commit a step, every step checked; the record
+is `git log 9314ac9^..`. The decisions of §6 were taken as recommended,
+except the first (below).
+
+| phase | done | left, and why |
+|---|---|---|
+| 0 the rule as a test | `apps/scourd/tests/layers.rs` | — |
+| 1 big files below the socket | tests out of 37 files; `lib.rs` is `mod`/`pub use` in nine crates; `fanotify.rs`, `engine.rs`, `search.rs`, `index.rs` by subject, the trait block's five longest methods a call each | `scour-engine`'s `fn run`: one loop over fifteen mutable locals; cutting it means a struct for them, a change to the service's core rather than a move |
+| 2 `scour-extract` | one ZIP reader and XML flattener for grep and the preview; grep measured on it (`docs/MEASUREMENTS.md`) | — |
+| 3 `scour-client` | `Pool` (page, MCP), `Lazy` and `boot` (window, terminal), the rail's and the count's wording | each face keeps its own idea of a stale answer (decision 3) |
+| 4 the faces | `page.html` in parts; the bridge's routes, the terminal's `App` and `draw.rs`, the service's request match, the window's `main()` and `apply()` by section; `main.slint` 8,887 → 5,374 lines | the header and the list in `MainWindow` are tied by element ids (`list.viewport-y` read by the window's own properties, the query input focused from elsewhere): taking them out turns those into properties |
+| 5 small repeats | `scour_ui::path::home_form`; the terminal's msgid test reads every file (decision 4: it was a hole) | `sort_of`/`sort_key` differ on purpose; the hotkey's wording and the bridge's JSON are different jobs |
+
+**Decision 1 went the other way.** `Extractor` in `scour-core` was deleted, not
+reshaped: an implementation would have to live in `scour-extract`, which, like
+`scour-grep` and `scour-preview`, depends on nothing of Scour's. Its `Sink` is
+the trait now.
+
+**Found on the way, and fixed:** the accents test had failed since `3180b79`
+(the brute force was not given the new typo rule); `inflate_whole` panicked
+near the end of an archive's budget; the page re-sent a refused request on a
+new connection; xlsx sheets with strings in their cells showed nothing.
+
+---
+
 For whoever carries it out. Second draft: the first was drawn from sizes and
 dependency lists; this one from the outlines of the files themselves — every
 top-level item and its span in the large files, both `link.rs`, the two
