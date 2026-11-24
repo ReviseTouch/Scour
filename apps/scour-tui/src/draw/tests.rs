@@ -1,4 +1,7 @@
 use super::*;
+use crate::app::{App, Panel};
+use crate::theme::Theme;
+use ratatui::layout::Rect;
 
 /// A press lands on what is drawn under it: a word of the strip by its
 /// columns, an item of the list by its row, and nothing on a rule.
