@@ -847,6 +847,20 @@ cargo build --release -p scour-index-native --example searchcost
 for i in 1 2 3 4 5; do A /var/tmp/idx/native "$q"; B /var/tmp/idx/native "$q"; done
 ```
 
+## Content search, Phase 0 (2026-11-24)
+
+What reading costs per format today, cold and warm, and what `pdf_oxide`,
+`office_oxide` and Xberg make of 21,298 real documents: `docs/bench/phase-0.md`,
+raw numbers in `docs/bench/content-baseline.txt`. In short: text and most
+ZIP documents cost nothing; XLSX (24 CPU s for 3,000) and EPUB are the
+expensive streamed formats; PDF, DOC, XLS and PPT are not read at all today,
+and 2,201 of 3,000 DOC hold a common word.
+
+```sh
+derle cargo build --release -p scour-grep --example scan
+scripts/content-bench baseline /var/tmp/scour-corpus
+```
+
 ## Reproducing
 
 ```sh

@@ -11,6 +11,17 @@ to build the rest.
 decisions are binding **except** where §2 below lists a conflict with the
 code — those five are the owner's to settle before the phase they touch.
 
+## Where it stands
+
+| phase | state |
+|---|---|
+| 0 | done on `content/phase-0`: `scripts/content-bench`, `docs/bench/phase-0.md`. D1 measured and holds. **Waiting:** RTF (Xberg does not open it without `office`) and whether e-mail keeps Xberg — `phase-0.md`, "Asked of the owner" |
+| 1–4 | not begun |
+
+Phase 1 also gains, from Phase 0: the streamed XLSX/PPTX reader reads sheet
+names, cell comments and charts (the five files it missed against
+`office_oxide`).
+
 ## 0. What is already true
 
 Content search exists and is used: `crates/scour-grep` (a leaf: paths in,
