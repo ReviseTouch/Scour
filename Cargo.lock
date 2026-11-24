@@ -4995,6 +4995,18 @@ name = "scour-chart"
 version = "0.2.0-alpha.12"
 
 [[package]]
+name = "scour-client"
+version = "0.2.0-alpha.12"
+dependencies = [
+ "scour-core",
+ "scour-ipc",
+ "scour-launch",
+ "scour-proto",
+ "scour-ui",
+ "tempfile",
+]
+
+[[package]]
 name = "scour-clip"
 version = "0.2.0-alpha.12"
 
@@ -5188,6 +5200,7 @@ dependencies = [
  "humansize",
  "rmcp",
  "schemars",
+ "scour-client",
  "scour-config",
  "scour-core",
  "scour-icon",
@@ -5365,6 +5378,7 @@ dependencies = [
  "clap",
  "libc",
  "scour-chart",
+ "scour-client",
  "scour-config",
  "scour-core",
  "scour-hotkey",

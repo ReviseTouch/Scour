@@ -10,6 +10,7 @@ members = [
     "crates/scour-proto",
     "crates/scour-engine",
     "crates/scour-ipc",
+    "crates/scour-client",
     "crates/scour-i18n",
     "crates/scour-preview",
     "crates/scour-dupes",
@@ -68,6 +69,7 @@ scour-query         = { path = "crates/scour-query" }
 scour-icon          = { path = "crates/scour-icon" }
 scour-proto         = { path = "crates/scour-proto" }
 scour-ipc           = { path = "crates/scour-ipc" }
+scour-client        = { path = "crates/scour-client" }
 scour-index-native  = { path = "crates/scour-index-native" }
 scour-source-fs     = { path = "crates/scour-source-fs" }
 scour-config        = { path = "crates/scour-config" }

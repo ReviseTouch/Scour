@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
+scour-client = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 # For `rule_id`: one spelling of a switched-off rule's name, everywhere.

@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use scour_client::Pool;
 use scour_core::{Catalog, DirUsage, FacetBy, Owner, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
@@ -176,22 +177,16 @@ fn main() -> Result<()> {
     // started instead, and this keeps serving while it comes up. Every route
     // opens its own connection when the pool is empty, and the page already
     // has a state for a service it cannot reach.
-    let idle = match Client::connect(&addr) {
-        Ok(open) => vec![open],
+    let client = Arc::new(Pool::new(addr.clone(), POOL));
+    match Client::connect(&addr) {
+        Ok(open) => client.keep(open),
         Err(e) if !scour_launch::wanted() => {
             return Err(e).with_context(|| {
                 format!("no Scour service is listening on {addr}. Start one with `scourd`.")
             });
         }
-        Err(_) => {
-            start_service(&addr, config.state_dir().join("scourd.log"));
-            Vec::new()
-        }
-    };
-    let client = Arc::new(Mutex::new(Link {
-        idle,
-        addr: addr.clone(),
-    }));
+        Err(_) => start_service(&addr, config.state_dir().join("scourd.log")),
+    }
 
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, args.port)))
         .with_context(|| format!("cannot listen on 127.0.0.1:{}", args.port))?;
@@ -314,11 +309,7 @@ fn start_service(addr: &str, log: std::path::PathBuf) {
     let hint = cat.get("Start one with `scourd`.").into_owned();
     let addr = addr.to_string();
     std::thread::spawn(move || {
-        let outcome = scour_launch::ensure_once(&scour_launch::Autostart::new(
-            &addr,
-            log,
-            &scour_ipc::is_running,
-        ));
+        let outcome = scour_client::boot(&addr, &log);
         match outcome.reason() {
             Some(why) => eprintln!("scour-web: {why} — {hint}"),
             None => eprintln!("scour-web: the service is listening on {addr}"),
@@ -342,7 +333,7 @@ struct Doing {
 /// The desktop's quick-look command, resolved once: it is a `PATH` walk.
 static QUICKLOOK: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
 
-fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, doing: Doing) {
+fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: Doing) {
     // Another account's process, holding a token it read off a command line.
     static ME: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
     if let (Ok(peer), Ok(local)) = (stream.peer_addr(), stream.local_addr())
@@ -478,53 +469,16 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     }
 }
 
-/// One call to the service, with the lock held only for as long as it takes.
-/// Reconnects once: the service is restarted far more often than this is.
-fn call(client: &Mutex<Link>, request: Request) -> Result<Response, String> {
-    let (mut link, addr) = {
-        let mut guard = client.lock().map_err(|_| "the bridge lost its client")?;
-        (guard.idle.pop(), guard.addr.clone())
-    };
-
-    if let Some(mut open) = link.take() {
-        // A failure here is the service restarted underneath: drop, reconnect.
-        if let Ok(r) = open.call(request.clone()) {
-            put_back(client, open);
-            return Ok(r);
-        }
-    }
-
-    let mut fresh = Client::connect(&addr).map_err(|e| e.to_string())?;
-    let out = fresh.call(request).map_err(|e| e.to_string());
-    if out.is_ok() {
-        put_back(client, fresh);
-    }
-    out
+/// One call to the service, on a held connection when one is free.
+fn call(client: &Pool, request: Request) -> Result<Response, String> {
+    client.call(request).map_err(|e| e.to_string())
 }
 
-/// A connection that answered goes back for the next caller, up to the depth.
-fn put_back(client: &Mutex<Link>, open: Client) {
-    if let Ok(mut guard) = client.lock()
-        && guard.idle.len() < Link::POOL
-    {
-        guard.idle.push(open);
-    }
-}
+/// Connections held for the page: more than it has outstanding, and a bound on
+/// the service's threads.
+const POOL: usize = 8;
 
-/// The connections, and where to open another one. Several, because one behind
-/// a mutex queued keystrokes: one request in forty took 1,056 ms, the rest two.
-#[derive(Debug)]
-struct Link {
-    idle: Vec<Client>,
-    addr: String,
-}
-
-impl Link {
-    /// More than the page can have outstanding, and a bound on service threads.
-    const POOL: usize = 8;
-}
-
-fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_search(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let query = req.param("q").unwrap_or_default().to_owned();
     let limit: u32 = req
         .param("limit")
@@ -628,7 +582,7 @@ fn found_json(f: &scour_core::FoundLine) -> serde_json::Value {
 
 /// The thumbnail somebody has already made for a file. Cacheable, unlike every
 /// other route: a file in a cache, not an answer about a watched filesystem.
-fn api_icon(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, pictures: bool) {
+fn api_icon(stream: &mut TcpStream, client: &Pool, req: &http::Req, pictures: bool) {
     let Some(path) = req.param("p").filter(|p| !p.is_empty()) else {
         http::fail(stream, "404 Not Found", "no thumbnail");
         return;
@@ -740,7 +694,7 @@ fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
 
 /// The kinds a frontend should offer, in order, in the user's language.
 /// `?lang=`: these labels are the one part of the rail with no msgid in the page.
-fn api_kinds(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_kinds(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let cat = catalogue_for(client, req);
     let kinds: Vec<serde_json::Value> = scour_core::Kind::OFFERED
         .iter()
@@ -756,7 +710,7 @@ fn api_kinds(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// The whole catalogue, for the one frontend that cannot link `scour-i18n`. A
 /// map, by [`Catalog::get`]'s rule: absent means the msgid is the answer.
-fn api_strings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_strings(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let cat = catalogue_for(client, req);
     let strings: serde_json::Map<String, serde_json::Value> = cat
         .entries()
@@ -783,7 +737,7 @@ static CONFIGURED_LANGUAGE: std::sync::OnceLock<String> = std::sync::OnceLock::n
 /// The catalogue this request should answer in: `?lang=` when the page names
 /// one — the settings write and the re-fetch are two requests — else
 /// [`scour_i18n::choose`]: what was chosen, the config file, the environment.
-fn catalogue_for(client: &Mutex<Link>, req: &http::Req) -> scour_i18n::Catalogue {
+fn catalogue_for(client: &Pool, req: &http::Req) -> scour_i18n::Catalogue {
     if let Some(tag) = req.param("lang").filter(|t| !t.is_empty()) {
         return scour_i18n::Catalogue::for_language(tag);
     }
@@ -798,7 +752,7 @@ fn catalogue_for(client: &Mutex<Link>, req: &http::Req) -> scour_i18n::Catalogue
 
 /// What this person's frontends remember. `POST` only when it is setting, and
 /// what it writes is a column list, not a file. See `scour-settings`.
-fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_settings(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     // A change, not the whole object: what it omits belongs to another frontend.
     let request = match req.param("set") {
         Some(text) => match serde_json::from_str(text) {
@@ -826,7 +780,7 @@ fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// What the walk skips, in two lists: built-in and configured stay apart all
 /// the way to the browser, because only the second can be edited.
-fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
+fn api_rules(stream: &mut TcpStream, client: &Pool) {
     match call(client, Request::Rules {}) {
         Ok(Response::Rules {
             builtin_paths,
@@ -860,7 +814,7 @@ fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
 
 /// Where this person keeps things, so the page does not have to guess. The XDG
 /// user directories, from `scour-places`; only the ones that exist are offered.
-fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
+fn api_places(stream: &mut TcpStream, client: &Pool) {
     match call(client, Request::Places {}) {
         Ok(Response::Places(p)) => match serde_json::to_value(&p) {
             Ok(v) => http::json(stream, &v),
@@ -874,7 +828,7 @@ fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
 /// The whole result set, as a spreadsheet: one walk in the service under one
 /// read lock, so there is no ceiling, no trailer and no row seen twice. `sort`
 /// and `desc` are accepted and do nothing; the quoting is `scour_export`'s.
-fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_csv(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let columns: Vec<String> = req
         .param("cols")
         .map(|c| {
@@ -891,17 +845,7 @@ fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
     // Its own connection, held for the whole walk and not returned: an
     // abandoned stream leaves frames in flight.
-    let addr = match client.lock() {
-        Ok(guard) => guard.addr.clone(),
-        Err(_) => {
-            http::fail(
-                stream,
-                "500 Internal Server Error",
-                "the bridge lost its client",
-            );
-            return;
-        }
-    };
+    let addr = client.addr().to_owned();
     let mut link = match Client::connect(&addr) {
         Ok(c) => c,
         Err(e) => {
@@ -924,7 +868,7 @@ fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// How many match, exactly, however long that takes. Separate from the search,
 /// whose rows have to be on screen before the next keystroke.
-fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_count(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let request = Request::Count {
         query: req.param("q").unwrap_or_default().to_owned(),
         cap: req
@@ -951,7 +895,7 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// The same file, several times over, under one folder. Scoped by the report's
 /// `under:` term; sizes only is 84 ms over thirty thousand candidates, and
 /// confirming reads disk, on a button.
-fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_dupes(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let mb = |k: &str, d: u64| -> u64 {
         req.param(k)
             .and_then(|s| s.parse().ok())
@@ -996,7 +940,7 @@ fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// What a folder weighs, and which of its children weigh the most. `top` come
 /// back, heaviest first; `child_count` is how many there were before the cut.
-fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_usage(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let request = Request::Usage {
         path: req.param("path").unwrap_or_default().to_owned(),
         top: req.param("top").and_then(|s| s.parse().ok()).unwrap_or(24),
@@ -1031,7 +975,7 @@ fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Everything the sidebar needs, from one walk: `by=kind,age` asks both, and a
 /// group per question comes back in the order asked, with the exact total.
-fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_facets(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let edges: Vec<u32> = req
         .param("edges")
         .unwrap_or_default()
@@ -1089,7 +1033,7 @@ fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-fn api_status(stream: &mut TcpStream, client: &Mutex<Link>) {
+fn api_status(stream: &mut TcpStream, client: &Pool) {
     match call(client, Request::Status {}) {
         Ok(Response::Status(s)) => http::json(stream, &status_json(&s)),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
@@ -1143,7 +1087,7 @@ fn api_wait(stream: &mut TcpStream, addr: &str, req: &http::Req) {
 
 /// What the query means and what could follow the caret. Tokenised in the
 /// service: a second parser here would colour a lie the day the two disagreed.
-fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_explain(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let request = Request::Explain {
         query: req.param("q").unwrap_or_default().to_owned(),
         cursor: req.param("cursor").and_then(|s| s.parse().ok()),
@@ -1177,7 +1121,7 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Start the window or the terminal, once a person has asked for it. Two
 /// names, not a path: a program name from the page would run anything.
-fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_face(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let which = req.param("face").unwrap_or_default();
     // Two names only: a program name from the page would run anything. The
     // terminal needs a tty, which `scour_launch::face` knows how to give.
@@ -1241,7 +1185,7 @@ fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
 
 /// Which programs on this machine will take this file. A read, so a `GET`; the
 /// desktop's own association is marked rather than moved.
-fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_openers(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
         return;
@@ -1269,7 +1213,7 @@ fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Start one of them, behind `--no-launch` with everything else that runs a
 /// program. The list above is a read and stays available.
-fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_open_with(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let (Some(path), Some(id)) = (
         req.param("path").filter(|p| !p.is_empty()),
         req.param("id").filter(|p| !p.is_empty()),
@@ -1306,7 +1250,7 @@ fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) 
 
 /// Give a file a different name, and tell the index straight away. Renameable
 /// only if the index holds the path; what a name may be is `scour-name`'s.
-fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_rename(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let (Some(path), Some(name)) = (
         req.param("path").filter(|p| !p.is_empty()),
         req.param("name"),
@@ -1346,7 +1290,7 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// Send rows to the trash, and tell the index straight away. Trashable
 /// only if the index holds the path; the move is this process's, with this
 /// user's permissions, and [`Request::Recheck`] only re-reads.
-fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_trash(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let asked = paths_in(req);
     if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
@@ -1394,7 +1338,7 @@ fn paths_in(req: &http::Req) -> Vec<String> {
 
 /// Those paths, kept only where the index knows them: the fence every
 /// endpoint that changes the disk stands behind.
-fn fenced(client: &Mutex<Link>, asked: &[String]) -> (Vec<String>, Vec<String>) {
+fn fenced(client: &Pool, asked: &[String]) -> (Vec<String>, Vec<String>) {
     let mut known = Vec::new();
     let mut refused = Vec::new();
     for path in asked {
@@ -1417,7 +1361,7 @@ fn fenced(client: &Mutex<Link>, asked: &[String]) -> (Vec<String>, Vec<String>) 
 
 /// Remove for good. The page asked first; this only does it, and tells the
 /// service to look again as the trash does.
-fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_delete(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let asked = paths_in(req);
     if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
@@ -1441,7 +1385,7 @@ fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 }
 
 /// Show these in the file manager, each selected in its folder.
-fn api_reveal(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_reveal(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let asked = paths_in(req);
     if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
@@ -1475,7 +1419,7 @@ fn api_send_targets(stream: &mut TcpStream) {
 }
 
 /// Send what the index knows of these to one of the places above.
-fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_send(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let asked = paths_in(req);
     let Some(to) = req
         .param("to")
@@ -1511,7 +1455,7 @@ fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// Open the window's drag tray for these paths. A page cannot drag a file out:
 /// Chromium hands its `file://` on as `about:blank#`, and `DownloadURL` is not
 /// read on Linux. The tray is a window of its own, whose drag is real.
-fn api_drag(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_drag(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let asked = paths_in(req);
     let (known, refused) = fenced(client, &asked);
     if known.is_empty() {
@@ -1541,7 +1485,7 @@ fn api_drag(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// must not start what it lands on — unless the menu's "Open" asked to run it
 /// (`ask=1`), and then only once the page has asked and been told yes, and
 /// never under `--no-run`.
-fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
+fn api_open(stream: &mut TcpStream, client: &Pool, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
         return;
@@ -1653,7 +1597,7 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
 /// The contents of one file, if it is something a browser can draw. Fenced as
 /// `/api/open` is, so `..` needs no handling: a traversal that escapes the
 /// roots lands somewhere the index has never heard of.
-fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
         return;

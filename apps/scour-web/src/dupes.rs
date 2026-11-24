@@ -6,12 +6,12 @@
 //! instead of once a row.
 
 use std::net::TcpStream;
-use std::sync::Mutex;
 
 use scour_proto::{Request, Response};
 
+use crate::call;
 use crate::http;
-use crate::{Link, call};
+use scour_client::Pool;
 
 /// How many paths may be timed in one answer. The page asks for 25 groups; a
 /// group of hundreds costs one `stat` a copy, and past this they answer 0.
@@ -19,7 +19,7 @@ const TIMED: usize = 600;
 
 /// The groups `/api/dupes` gives, with `mtimes` beside `paths` — unix seconds,
 /// 0 where the file is gone or sat past [`TIMED`].
-pub fn api_duplicates(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+pub fn api_duplicates(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let mb = |k: &str, d: u64| -> u64 {
         req.param(k)
             .and_then(|s| s.parse().ok())
@@ -81,7 +81,7 @@ pub fn api_duplicates(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::
 
 /// When the file was last written, or 0. A path the index no longer owns
 /// answers nothing rather than failing the whole panel.
-fn mtime_of(client: &Mutex<Link>, path: &str) -> i64 {
+fn mtime_of(client: &Pool, path: &str) -> i64 {
     match call(
         client,
         Request::Stat {

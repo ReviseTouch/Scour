@@ -1,12 +1,10 @@
 //! The tools a model is offered. Each description says what the tool is for and
 //! not merely what it does, so choosing between two of them is easy.
 
-use std::sync::Mutex;
-
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use scour_client::Pool;
 use scour_core::{FacetBy, Page, SortKey};
-use scour_ipc::Client;
 use scour_proto::Request;
 use serde::Deserialize;
 
@@ -19,11 +17,9 @@ pub struct Scour {
 }
 
 struct Inner {
-    /// One connection, serialised, and not opened until something is asked. `None`
-    /// means none is held, whether or not anything was ever tried — every call
+    /// One connection held, and not opened until something is asked. Every call
     /// takes the same path, so a service that starts later is picked up.
-    client: Mutex<Option<Client>>,
-    addr: String,
+    client: Pool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -148,8 +144,7 @@ impl Scour {
     pub fn new(addr: &str) -> Scour {
         Scour {
             inner: std::sync::Arc::new(Inner {
-                client: Mutex::new(None),
-                addr: addr.to_owned(),
+                client: Pool::new(addr, 1),
             }),
             tool_router: Self::tool_router(),
         }
@@ -175,30 +170,11 @@ impl Scour {
         let say = |r: &scour_proto::Response| {
             crate::render::human(r) + &crate::render::warning(r, query.as_deref())
         };
-        let mut guard = match self.inner.client.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        // A transient failure drops the held connection and falls through to a
-        // fresh one; anything else is the answer.
-        if let Some(held) = guard.as_mut() {
-            match held.call(req.clone()) {
-                Ok(r) => return Ok(say(&r)),
-                Err(e) if !e.is_transient() => return Err(crate::render::failure(&e)),
-                Err(_) => *guard = None,
-            }
-        }
-        match Client::connect(&self.inner.addr) {
-            Ok(mut fresh) => {
-                let out = match fresh.call(req) {
-                    Ok(r) => Ok(say(&r)),
-                    Err(e) => Err(crate::render::failure(&e)),
-                };
-                *guard = Some(fresh);
-                out
-            }
-            Err(e) => Err(crate::render::failure(&e)),
-        }
+        self.inner
+            .client
+            .call(req)
+            .map(|r| say(&r))
+            .map_err(|e| crate::render::failure(&e))
     }
 
     #[tool(
@@ -456,7 +432,7 @@ mod tests {
         let out = s.call(Request::Shutdown {}).unwrap_err();
         assert!(out.contains("read-only"), "{out}");
         assert!(
-            s.inner.client.lock().unwrap().is_none(),
+            s.inner.client.held() == 0,
             "refusing should not have opened a connection"
         );
     }

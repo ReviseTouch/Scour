@@ -1,0 +1,27 @@
+[package]
+name        = "scour-client"
+description = "Talking to the service: a held connection, one started when none answers, and the questions every face asks the same way."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# What every face did for itself before: hold a connection and make another
+# when the service restarts underneath, start a service when none answers,
+# and word a rail's facets or a whole count the one way the service is best
+# asked. No toolkit, no threads of its own: each face keeps its own lanes and
+# its own idea of which answer is stale.
+[dependencies]
+scour-core   = { workspace = true }
+scour-proto  = { workspace = true }
+scour-ipc    = { workspace = true }
+scour-launch = { workspace = true }
+scour-ui     = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

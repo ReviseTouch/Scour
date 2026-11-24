@@ -3,14 +3,14 @@
 
 use std::net::TcpStream;
 use std::path::Path;
-use std::sync::Mutex;
 
 use scour_core::SortKey;
 use scour_proto::{GrepMode, Request, Response};
 
-use crate::{Link, call, http};
+use crate::{call, http};
+use scour_client::Pool;
 
-pub fn api_grep(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let pattern = req.param("pattern").unwrap_or_default().to_owned();
     if pattern.is_empty() {
         http::json(
@@ -137,7 +137,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-pub fn api_tree(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+pub fn api_tree(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let path = req.param("path").unwrap_or("/").to_owned();
     let limit = req
         .param("limit")
