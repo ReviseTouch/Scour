@@ -1,4 +1,9 @@
+use super::fold::{Member, head_of, size_tiers};
 use super::*;
+use crate::build::build;
+use crate::segment::Live;
+use scour_core::{Change, Entry, Hit, Index, Maintenance, SearchRequest, SourceId};
+use std::path::{Path, PathBuf};
 
 fn row(source: u32, path: &str, size: i64) -> Entry {
     Entry {

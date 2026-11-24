@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::names::Folded;
 use scour_core::text::{Folder, Unaccented};
