@@ -2625,20 +2625,12 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod words {
     /// Every string handed to [`App::say`] in the terminal, plus the tables
-    /// looked up by value. It scans its own file: a msgid in a comment counts.
+    /// looked up by value. It reads every source file under `src/`, so a file
+    /// added later is asked about too; a msgid in a comment counts.
     fn asked_for() -> Vec<String> {
-        const SOURCE: [&str; 7] = [
-            include_str!("app.rs"),
-            include_str!("draw.rs"),
-            include_str!("keys.rs"),
-            include_str!("link.rs"),
-            include_str!("main.rs"),
-            include_str!("icons.rs"),
-            include_str!("v2.rs"),
-        ];
         let mut out: Vec<String> = Vec::new();
-        for text in SOURCE {
-            let mut rest = text;
+        for text in sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")) {
+            let mut rest = text.as_str();
             while let Some(at) = rest.find("say(\"") {
                 rest = &rest[at + 5..];
                 // No escapes are used in any of them, and a msgid that needed
@@ -2677,6 +2669,27 @@ mod words {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// Every `.rs` file under `dir`, read.
+    fn sources(dir: &std::path::Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("src/").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(sources(&path));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(std::fs::read_to_string(&path).expect("a source file"));
+            }
+        }
+        out
+    }
+
+    /// The scan reaches the files a hand-kept list once left out.
+    #[test]
+    fn every_source_file_is_read() {
+        let all = sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
+        assert!(all.len() >= 10, "{} files", all.len());
     }
 
     #[test]
