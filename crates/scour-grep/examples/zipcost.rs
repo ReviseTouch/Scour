@@ -24,6 +24,7 @@ fn main() {
         .map(|l| File {
             path: PathBuf::from(l),
             size: None,
+            class: None,
         })
         .collect();
 

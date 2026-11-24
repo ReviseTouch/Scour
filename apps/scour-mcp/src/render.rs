@@ -91,6 +91,15 @@ pub fn human(r: &Response) -> String {
                 (g.binary, "skipped as not text (pass binary to read them)"),
                 (g.too_big, "skipped as over 64 MB"),
                 (g.unreadable, "could not be read"),
+                (
+                    g.header_only,
+                    "skipped as pictures, sound, video or disk images (a hex pattern reads them)",
+                ),
+                (
+                    g.no_reader,
+                    "skipped as PDF or legacy Office documents with no text reader yet (pass binary to search their raw bytes)",
+                ),
+                (g.locked, "locked by another program"),
             ] {
                 if n > 0 {
                     out.push_str(&format!(" {n} {what}."));

@@ -38,6 +38,15 @@ pub struct GrepResponse {
     /// Could not be opened or read: gone, or not this person's to read.
     #[serde(default)]
     pub unreadable: u64,
+    /// Pictures, sound, video and disk images: not read for words, only for bytes.
+    #[serde(default)]
+    pub header_only: u64,
+    /// Documents with no reader yet — PDF, `.doc`, `.xls`, `.ppt` — left unread.
+    #[serde(default)]
+    pub no_reader: u64,
+    /// Held open by another program that shares it with nobody.
+    #[serde(default)]
+    pub locked: u64,
     /// The `offset` to ask again with. None: every file the query names was read.
     #[serde(default)]
     pub next: Option<u32>,

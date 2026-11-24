@@ -155,6 +155,9 @@ pub fn answered(
         binary,
         too_big,
         unreadable,
+        header_only,
+        no_reader,
+        locked,
         next,
         took_us,
         ..
@@ -180,19 +183,17 @@ pub fn answered(
             &scour_ui::format::compact_bytes(read, crate::marks().1),
         );
     summary.push_str(&format!(" · {:.1} ms", took_us as f64 / 1000.0));
-    if binary > 0 {
-        summary.push_str("  ·  ");
-        summary.push_str(
-            &cat.get("{n} binary skipped")
-                .replace("{n}", &crate::grouped(binary)),
-        );
-    }
-    if too_big > 0 {
-        summary.push_str("  ·  ");
-        summary.push_str(
-            &cat.get("{n} too large")
-                .replace("{n}", &crate::grouped(too_big)),
-        );
+    for (n, msgid) in [
+        (binary, "{n} binary skipped"),
+        (too_big, "{n} too large"),
+        (header_only, "{n} media skipped"),
+        (no_reader, "{n} documents not read"),
+        (locked, "{n} locked"),
+    ] {
+        if n > 0 {
+            summary.push_str("  ·  ");
+            summary.push_str(&cat.get(msgid).replace("{n}", &crate::grouped(n)));
+        }
     }
     if unreadable > 0 {
         summary.push_str(&format!(

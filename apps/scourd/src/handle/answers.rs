@@ -13,7 +13,7 @@ pub(super) fn needle_of(
         scour_proto::GrepMode::Hex => {
             scour_grep::Needle::hex(&pattern).ok_or_else(|| scour_core::Error::QuerySyntax {
                 at: 0,
-                expected: "pairs of hex digits".into(),
+                expected: "pairs of hex digits, ?? for any byte, ^ for the start".into(),
             })?
         }
     })
@@ -48,6 +48,9 @@ pub(super) fn grep_answer(r: scour_engine::Grepped) -> scour_proto::GrepResponse
         binary: r.binary,
         too_big: r.too_big,
         unreadable: r.unreadable,
+        header_only: r.header_only,
+        no_reader: r.no_reader,
+        locked: r.locked,
         next: r.next,
         misread: r.misread,
         took_us: r.took_us,

@@ -3,6 +3,7 @@
 //! as it can bear, the disks side by side, and never more than was allowed.
 
 mod budget;
+mod class;
 mod excerpt;
 mod expr;
 mod ground;
@@ -12,6 +13,7 @@ mod scan;
 mod zip;
 
 pub use budget::Budget;
+pub use class::{Class, is_disk_image};
 pub use excerpt::Hit;
 pub use expr::Expr;
 pub use ground::{Ground, readers};

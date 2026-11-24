@@ -73,7 +73,12 @@ pub(crate) fn around(
             if to > end && hay[to - 1] == b'\r' {
                 to -= 1;
             }
-            |b| tame(String::from_utf8_lossy(b))
+            // Not UTF-8: then the code page older Turkish files are in.
+            if std::str::from_utf8(&hay[from..to]).is_ok() {
+                |b| tame(String::from_utf8_lossy(b))
+            } else {
+                |b| tame(Cow::Owned(scour_extract::cp1254_decode(b)))
+            }
         }
         Kind::Wide(big) => {
             // Whole code units, counted from the find outwards.
@@ -156,6 +161,14 @@ mod tests {
         assert_eq!(&short[at.0 as usize..(at.0 + at.1) as usize], "şey");
         // Cut at both ends, and it says so.
         assert_eq!(short, "…r şey…");
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_is_read_as_1254() {
+        let hay = b"ilk\nbu \xFEehir g\xFCzel\nson";
+        let (text, at) = around(hay, 7, 12, Kind::Text, 160);
+        assert_eq!(text, "bu şehir güzel");
+        assert_eq!(&text[at.0 as usize..(at.0 + at.1) as usize], "şehir");
     }
 
     #[test]

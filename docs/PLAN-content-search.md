@@ -17,7 +17,8 @@ code — those five are the owner's to settle before the phase they touch.
 |---|---|
 | 0 | done, PR #1: `scripts/content-bench`, `docs/bench/phase-0.md`. D1 measured and holds |
 | | **Decided 2026-11-24:** RTF is read by `scour-extract`, streamed, no cache (Phase 1). **Xberg is dropped**; e-mail comes from `mail-parser` directly (Phase 3). The design's Xberg row no longer applies |
-| 1–4 | not begun |
+| 1 | done on `content/phase-1`: five classes (`scour-grep/src/class.rs`), media refused unopened, PDF/OLE2 counted as `no_reader`, Windows-1254 and decomposed letters, hex `??` and `^`, RTF read by `scour-extract`, sheet names/comments/charts, `normalize()`, links not followed, `locked` on Windows; every face shows the new counts. Parity with ripgrep and the bounds measured (`docs/MEASUREMENTS.md`). On the way: the inflater cost in proportion to its buffer — XLSX 10× faster |
+| 2–4 | not begun |
 
 Phase 1 also gains, from Phase 0: the streamed XLSX/PPTX reader reads sheet
 names, cell comments and charts (the five files it missed against

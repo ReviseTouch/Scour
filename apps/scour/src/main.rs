@@ -136,7 +136,9 @@ enum Command {
         /// The pattern is a regular expression, read a line at a time.
         #[arg(long, short = 'e', conflicts_with = "hex")]
         regex: bool,
-        /// The pattern is bytes, in hex: `"DE AD BE EF"`. Implies `--binary`.
+        /// The pattern is bytes, in hex: `"DE AD BE EF"`; `??` is any byte, and a
+        /// leading `^` means at the start of the file. Reads every file, pictures and
+        /// binaries included.
         #[arg(long)]
         hex: bool,
         /// `a` is not `A`.

@@ -5,12 +5,16 @@ use std::io::{ErrorKind, Read as _};
 use std::path::Path;
 
 use memchr::{memchr_iter, memrchr};
+use scour_extract::rtf_text;
 
+use crate::class::{Signature, signature};
 use crate::excerpt::{Hit, Kind, around};
 use crate::pattern::Pattern;
 use crate::scan::{Options, Outcome, Skip};
-use crate::zip::ZipScratch;
+use crate::zip::{ZipScratch, search_whole};
 
+/// An RTF document's text is kept whole to be searched; past this it is cut.
+const RTF_TEXT: usize = 64 << 20;
 /// Read at once. A megabyte holds 98% of this machine's files whole.
 const CHUNK: usize = 1 << 20;
 /// Carried into the next read, so a find across the seam is still whole.
@@ -69,19 +73,33 @@ impl Reader {
                 }
             }
             let hay = &buf[..filled];
-            if base == 0
-                && self.zip_on
-                && !pattern.is_raw_bytes()
-                && hay.len() >= 4
-                && hay[..4] == [0x50, 0x4B, 0x03, 0x04]
-            {
-                let (outcome, extra) = self
-                    .zip
-                    .search_file(&mut file, file_len, hay, eof, pattern, opts);
-                return (outcome, total + extra);
+            if base == 0 && !pattern.is_raw_bytes() {
+                match signature(hay) {
+                    Some(Signature::Zip) if self.zip_on => {
+                        let (outcome, extra) = self
+                            .zip
+                            .search_file(&mut file, file_len, hay, eof, pattern, opts);
+                        return (outcome, total + extra);
+                    }
+                    Some(Signature::Rtf) => {
+                        let (outcome, extra) =
+                            self.rtf(&mut file, file_len, filled, eof, pattern, opts);
+                        return (outcome, total + extra);
+                    }
+                    Some(Signature::Media) => return (Outcome::Skipped(Skip::HeaderOnly), total),
+                    Some(Signature::Unread) if !opts.binary => {
+                        return (Outcome::Skipped(Skip::NoReader), total);
+                    }
+                    Some(Signature::Unread | Signature::Packed) => kind = Some(Kind::Binary),
+                    _ => {}
+                }
+            }
+            if base == 0 && pattern.at_start() {
+                kind = Some(Kind::Binary);
             }
             let kind = *kind.get_or_insert_with(|| Kind::sniff(hay));
-            if kind == Kind::Binary && !opts.binary {
+            // A run of bytes is looked for in binary files without being asked.
+            if kind == Kind::Binary && !opts.binary && !pattern.is_raw_bytes() {
                 return (Outcome::Skipped(Skip::Binary), total);
             }
             let regex = pattern.reading(kind);
@@ -115,7 +133,8 @@ impl Reader {
                     at,
                 });
             }
-            if eof || more {
+            // Anchored at offset zero: a later buffer cannot hold it.
+            if eof || more || pattern.at_start() {
                 break;
             }
             lines.pass(base, hay, cut);
@@ -129,6 +148,33 @@ impl Reader {
             Outcome::Found { hits, more }
         };
         (outcome, total)
+    }
+}
+
+impl Reader {
+    /// An RTF document: the rest of it read, its text taken out and searched.
+    /// The first `filled` bytes are in the buffer already.
+    fn rtf(
+        &mut self,
+        file: &mut File,
+        file_len: u64,
+        filled: usize,
+        eof: bool,
+        pattern: &Pattern,
+        opts: &Options,
+    ) -> (Outcome, u64) {
+        let mut whole = self.buf[..filled].to_vec();
+        let mut extra = 0u64;
+        if !eof {
+            let want = file_len.saturating_sub(filled as u64);
+            match file.take(want).read_to_end(&mut whole) {
+                Ok(n) => extra = n as u64,
+                Err(e) => return (Outcome::Unreadable(e.kind()), extra),
+            }
+        }
+        let mut text = String::new();
+        rtf_text(&whole, &mut text, RTF_TEXT);
+        (search_whole(text.as_bytes(), pattern, opts), extra)
     }
 }
 
@@ -191,9 +237,10 @@ enum Refused {
 }
 
 /// Open to read, without being held by what is not a file — a pipe opened
-/// plainly waits for a writer for ever — and without touching its read time.
+/// plainly waits for a writer for ever — without following a link, whose
+/// target is a file of its own, and without touching its read time.
 fn open(path: &Path, max_size: u64) -> Result<(File, u64), Refused> {
-    let file = open_quietly(path).map_err(|e| Refused::Io(e.kind()))?;
+    let file = open_quietly(path).map_err(refused)?;
     let meta = file.metadata().map_err(|e| Refused::Io(e.kind()))?;
     if !meta.is_file() {
         return Err(Refused::Skip(Skip::NotAFile));
@@ -205,20 +252,46 @@ fn open(path: &Path, max_size: u64) -> Result<(File, u64), Refused> {
     Ok((file, len))
 }
 
+fn refused(e: std::io::Error) -> Refused {
+    #[cfg(unix)]
+    if e.raw_os_error() == Some(libc::ELOOP) {
+        return Refused::Skip(Skip::NotAFile);
+    }
+    // ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
+    #[cfg(windows)]
+    if matches!(e.raw_os_error(), Some(32 | 33)) {
+        return Refused::Skip(Skip::Locked);
+    }
+    Refused::Io(e.kind())
+}
+
 #[cfg(unix)]
 fn open_quietly(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let with = |flags: i32| File::options().read(true).custom_flags(flags).open(path);
+    let base = libc::O_NONBLOCK | libc::O_NOFOLLOW;
     // Only a file's owner may leave its read time alone; anybody else asks again.
     #[cfg(target_os = "linux")]
-    match with(libc::O_NONBLOCK | libc::O_NOATIME) {
+    match with(base | libc::O_NOATIME) {
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {}
         other => return other,
     }
-    with(libc::O_NONBLOCK)
+    with(base)
 }
 
-#[cfg(not(unix))]
+/// Shared for reading, writing and deletion — `std`'s default — and read
+/// front to back, which the cache manager is told.
+#[cfg(windows)]
+fn open_quietly(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+    File::options()
+        .read(true)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_quietly(path: &Path) -> std::io::Result<File> {
     File::open(path)
 }

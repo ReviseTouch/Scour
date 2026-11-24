@@ -9,17 +9,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use surefoot::Medium;
 
 use crate::budget::Budget;
+use crate::class::Class;
 use crate::excerpt::Hit;
 use crate::ground::{Ground, readers};
 use crate::pattern::Pattern;
 use crate::read::Reader;
 
-/// A file to read. The size, when the caller knows it, saves opening one
-/// that is empty or over the limit.
+/// A file to read. What the caller knows saves opening it: a size says it
+/// is empty or over the limit, a class that it is a picture or a video.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct File {
     pub path: PathBuf,
     pub size: Option<u64>,
+    /// Only [`Class::HeaderOnly`] is acted on before the file is opened.
+    pub class: Option<Class>,
+}
+
+impl File {
+    pub fn at(path: impl Into<PathBuf>) -> File {
+        File {
+            path: path.into(),
+            size: None,
+            class: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +81,13 @@ pub enum Skip {
     Binary,
     /// A pipe, a socket, a device, a directory.
     NotAFile,
+    /// A picture, a sound, a video or a disk image, and not a run of bytes asked for.
+    HeaderOnly,
+    /// A document no reader here opens yet (PDF, `.doc`, `.xls`, `.ppt`), and
+    /// binary files were not asked for.
+    NoReader,
+    /// Held open by another program that shares it with nobody (Windows).
+    Locked,
 }
 
 /// Called by each reading thread before its first file; what it returns is
@@ -172,6 +192,9 @@ impl Scanner {
                 return Outcome::Skipped(Skip::TooBig);
             }
             _ => {}
+        }
+        if file.class == Some(Class::HeaderOnly) && !self.pattern.is_raw_bytes() {
+            return Outcome::Skipped(Skip::HeaderOnly);
         }
         let (outcome, read) = reader.search(&file.path, &self.pattern, &self.options);
         budget.charge(read);

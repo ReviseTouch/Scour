@@ -861,6 +861,49 @@ derle cargo build --release -p scour-grep --example scan
 scripts/content-bench baseline /var/tmp/scour-corpus
 ```
 
+## An inflater handed only the room it needs (2026-11-24)
+
+**XLSX ten times faster, EPUB three, DOCX half again.** Each reading thread
+keeps one output buffer between ZIP entries, and it grows to the largest
+entry seen. `flate2`'s `decompress_vec` hands `zlib-rs` the buffer's whole
+spare capacity, and the cost was in proportion to it: a 1 KiB part read
+after a 30 MiB sheet paid for 30 MiB (mean capacity 12 MiB over 2,000
+workbooks, measured inside the branch). `inflate_whole` now gives it a
+window of the entry's size. Found while measuring Phase 1's added parts
+(sheet names cost 35 % more CPU, all of it in this).
+
+Two release binaries of the `scan` example, before (A) and after (N),
+alternated three times, warm cache, needle that is nowhere:
+
+| corpus | A seconds | N seconds | A CPU s | N CPU s | peak MiB A → N |
+|---|---:|---:|---:|---:|---:|
+| XLSX, 3,000 | 2.48–3.17 | 0.29–0.31 | 19.7–23.9 | 1.94–2.04 | 263–309 → 213–216 |
+| EPUB, 1,690 | 1.25–1.53 | 0.43 | 9.5–11.4 | 3.37–3.39 | 57–60 → 53–55 |
+| DOCX, 3,000 | 0.056–0.057 | 0.037–0.039 | 0.39 | 0.25 | 35 → 29–33 |
+| PPTX, 889 | 0.024 | 0.020–0.021 | 0.17 | 0.15 | 18 → 17 |
+
+The files with a find are the same for `mahkeme` in DOCX, ODT, UDF and EPUB;
+N finds four more XLSX, one more PPTX (sheet names, comments, charts) and
+two more RTF (now read as text).
+
+```sh
+derle cargo build --release -p scour-grep --example scan   # once at each commit
+for i in 1 2 3; do A zzqq < doc-xlsx.txt; N zzqq < doc-xlsx.txt; done
+```
+
+## Content search, Phase 1 (2026-11-24)
+
+Against ripgrep on 20,000 source files (`rg -i -F --no-ignore --hidden`,
+one path list, 9 binary files skipped by both): for `unsafe`, `TODO`,
+`pub fn` and `mahkeme` the same files, and the same first line in each.
+Whole process, warm, five alternations: scour 30–34 ms, rg 105–109 ms
+(rg's time includes `xargs`).
+
+A 300 MB file with no newline: 4.9 MiB peak, one reader's buffer. A
+UTF-16LE word in a Windows executable (`CompanyName` in the version
+resource) is found with `--binary` in 1,638 of 3,000 `.exe`/`.dll`.
+Every corpus, cold and warm: `docs/bench/content-phase-1.txt`.
+
 ## Reproducing
 
 ```sh

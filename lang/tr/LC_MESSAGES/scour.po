@@ -2402,6 +2402,15 @@ msgstr "çok büyük"
 msgid "unreadable"
 msgstr "okunamadı"
 
+msgid "media"
+msgstr "medya"
+
+msgid "documents not read"
+msgstr "belge okunmadı"
+
+msgid "locked"
+msgstr "kilitli"
+
 msgid "stopped early; go on with"
 msgstr "erken durdu; devam için"
 
@@ -2808,6 +2817,15 @@ msgstr "{n} ikili atlandı"
 
 msgid "{n} too large"
 msgstr "{n} çok büyük"
+
+msgid "{n} media skipped"
+msgstr "{n} medya atlandı"
+
+msgid "{n} documents not read"
+msgstr "{n} belge okunmadı"
+
+msgid "{n} locked"
+msgstr "{n} kilitli"
 
 msgid "Scanning matching files…"
 msgstr "Eşleşen dosyalar taranıyor…"

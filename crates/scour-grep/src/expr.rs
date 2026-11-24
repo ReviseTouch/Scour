@@ -19,7 +19,7 @@ impl Expr {
     /// `!term` (exclude file), and `"..."` (literal phrase).
     pub fn new(needle: &Needle, exact_case: bool) -> Result<Expr, BadPattern> {
         match needle {
-            Needle::Regex(_) | Needle::Bytes(_) => Ok(Expr {
+            Needle::Regex(_) | Needle::Bytes(_) | Needle::Wild { .. } => Ok(Expr {
                 must: vec![Pattern::new(needle, exact_case)?],
                 forbid: None,
             }),
@@ -321,6 +321,7 @@ mod tests {
             File {
                 path,
                 size: Some(txt.len() as u64),
+                class: None,
             }
         };
         let files = [

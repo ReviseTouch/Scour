@@ -113,6 +113,10 @@ ratatui     = "0.30.2"
 surefoot    = { git = "https://github.com/ReviseTouch/surefoot", tag = "v0.1.0" }
 notify      = "8"
 
+# Unicode composition for `scour-extract`'s one normal form. Already in the
+# tree through Slint; Unicode-3.0 licence, like every Unicode table.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+
 # Platform config/data directories. Replaces the hand-rolled XDG logic, which
 # put macOS config in ~/.config instead of ~/Library/Application Support.
 directories = "6"

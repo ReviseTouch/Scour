@@ -14,7 +14,7 @@ use scour_grep::{Budget, File, Ground, Needle, Options, Outcome, Pattern, Scanne
 
 struct Args {
     binary: bool,
-    /// The paths with a find, on standard error.
+    /// The paths with a find and the line of the first, on standard error.
     list: bool,
     cold: bool,
     needle: Needle,
@@ -65,6 +65,7 @@ fn main() {
         .map(|line| File {
             path: line.into(),
             size: None,
+            class: None,
         })
         .collect();
     let kept = if args.cold { drop_cached(&files) } else { 0 };
@@ -93,18 +94,16 @@ fn main() {
     println!("files {}", files.len());
     println!("found {}", count(&|o| matches!(o, Outcome::Found { .. })));
     println!("clean {}", count(&|o| matches!(o, Outcome::Clean)));
-    println!(
-        "binary {}",
-        count(&|o| *o == Outcome::Skipped(Skip::Binary))
-    );
-    println!(
-        "too_big {}",
-        count(&|o| *o == Outcome::Skipped(Skip::TooBig))
-    );
-    println!(
-        "not_a_file {}",
-        count(&|o| *o == Outcome::Skipped(Skip::NotAFile))
-    );
+    for (key, skip) in [
+        ("binary", Skip::Binary),
+        ("too_big", Skip::TooBig),
+        ("not_a_file", Skip::NotAFile),
+        ("header_only", Skip::HeaderOnly),
+        ("no_reader", Skip::NoReader),
+        ("locked", Skip::Locked),
+    ] {
+        println!("{key} {}", count(&|o| *o == Outcome::Skipped(skip)));
+    }
     println!(
         "unreadable {}",
         count(&|o| matches!(o, Outcome::Unreadable(_)))
@@ -118,8 +117,9 @@ fn main() {
     println!("peak_rss_mib {:.1}", peak_kib as f64 / 1024.0);
     if args.list {
         for (file, outcome) in files.iter().zip(&outcomes) {
-            if matches!(outcome, Outcome::Found { .. }) {
-                eprintln!("{}", file.path.display());
+            if let Outcome::Found { hits, .. } = outcome {
+                let line = hits.first().and_then(|h| h.line).unwrap_or(0);
+                eprintln!("{}\t{line}", file.path.display());
             }
         }
     }

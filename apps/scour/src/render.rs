@@ -211,6 +211,9 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 (g.binary, "not text"),
                 (g.too_big, "too large"),
                 (g.unreadable, "unreadable"),
+                (g.header_only, "media"),
+                (g.no_reader, "documents not read"),
+                (g.locked, "locked"),
             ] {
                 if n > 0 {
                     said.push_str(&format!(" · {n} {}", t(what)));

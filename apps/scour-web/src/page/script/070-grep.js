@@ -101,6 +101,9 @@
     if (res.binary) skips.push(T("{n} binary skipped", { n: fmt(res.binary) }));
     if (res.too_big) skips.push(T("{n} too large", { n: fmt(res.too_big) }));
     if (res.unreadable) skips.push(fmt(res.unreadable) + " " + T("unreadable"));
+    if (res.header_only) skips.push(T("{n} media skipped", { n: fmt(res.header_only) }));
+    if (res.no_reader) skips.push(T("{n} documents not read", { n: fmt(res.no_reader) }));
+    if (res.locked) skips.push(T("{n} locked", { n: fmt(res.locked) }));
     const sortBtn = (key, msgid, num) => {
       const on = sortKey === key;
       const arr = on ? ' <span class="arrow">' + (sortDesc ? "▾" : "▴") + "</span>" : "";

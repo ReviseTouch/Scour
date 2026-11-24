@@ -5078,6 +5078,7 @@ name = "scour-extract"
 version = "0.2.0-alpha.12"
 dependencies = [
  "flate2",
+ "icu_normalizer",
  "memchr",
 ]
 
