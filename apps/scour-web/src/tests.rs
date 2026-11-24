@@ -1,4 +1,5 @@
 use super::*;
+use scour_core::SortKey;
 
 /// A name may hold a newline. Split on one, `victim\nsuffix.txt` named
 /// `victim`, and the trash took the file nobody had chosen.
