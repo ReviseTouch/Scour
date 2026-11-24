@@ -1,0 +1,804 @@
+// The report: what a folder weighs, its kinds, its biggest files, its duplicates.
+
+import { Theme, Fonts } from "theme.slint";
+import { DragTray } from "tray.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+
+/// The report tab's page.
+export component ReportPaper inherits ScrollView {
+    in-out property <string> tab;
+    in property <[Facet]> crumb;
+    callback report-open(string);
+    in property <string> report-total;
+    in property <string> report-files;
+    in property <string> report-took;
+    in property <[Seg]> age-segs;
+    in-out property <length> strip-width;
+    callback report-resized();
+    in property <[Facet]> age-key;
+    in property <string> head-bytes;
+    in property <string> kids-aside;
+    in property <[Seg]> kid-segs;
+    in property <string> head-folder;
+    in property <string> head-age;
+    in property <length> age-bar;
+    in property <string> head-size;
+    in property <string> head-share;
+    in property <string> head-files;
+    in property <[Kid]> kids;
+    in property <string> kids-empty;
+    in property <string> kids-note;
+    in property <string> head-kinds;
+    in property <string> kinds-sampled;
+    in property <[Slice]> report-kinds;
+    in property <string> kinds-count;
+    in property <string> kinds-word;
+    callback facet-clicked(string);
+    in property <string> kinds-note;
+    in property <string> head-biggest;
+    in property <[Big]> report-big;
+    callback big-menu-at(string, length, length);
+    in property <string> biggest-note;
+    in property <string> head-jump;
+    in property <string> report-under;
+    in property <string> jump-label;
+    callback report-search();
+    in property <string> jump-note;
+    in property <string> head-dupes;
+    in property <bool> dupes-open;
+    in property <string> dupes-hide;
+    in property <string> dupes-show;
+    callback dupes-toggled();
+    in property <string> dupes-sum;
+    in property <[string]> dupe-floors;
+    in property <int> dupe-floor;
+    callback dupes-floored(int);
+    in property <string> dupes-confirm;
+    callback dupes-read();
+    in property <string> dupes-note;
+    in property <[Dupe]> dupes;
+
+    visible: root.tab == "report";
+    max-height: root.tab == "report" ? 100000px : 0px;
+    min-height: 0px;
+    // Said, not inferred: a `ScrollView` does not learn its content's
+    // height from a layout inside it, so there would be no overflow.
+    viewport-height: sheet.preferred-height;
+
+    sheet := VerticalLayout {
+    // Its natural height: a layout inside a `ScrollView` otherwise
+    // stretches to fill it, and there is nothing to scroll.
+    height: self.preferred-height;
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    spacing: 10px;
+
+    // The scope, one segment a button: any ancestor is one press away.
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        height: 22px;
+
+        for step[i] in root.crumb: Rectangle {
+            width: label.preferred-width + 12px;
+            border-radius: 3px;
+            background: steptouch.has-hover ? Theme.hover : transparent;
+
+            steptouch := TouchArea {
+                clicked => {
+                    root.report-open(step.token);
+                }
+            }
+
+            label := Text {
+                text: step.label;
+                color: i == root.crumb.length - 1 ? Theme.ink : Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11.5px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
+    }
+
+    // 1. What the whole scope comes to. Large and light, with the two
+    // quieter facts on its line.
+    HorizontalLayout {
+        spacing: 18px;
+        alignment: start;
+
+        Text {
+            text: root.report-total;
+            color: Theme.ink;
+            font-family: Fonts.mono;
+            font-size: 30px;
+            font-weight: 250;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.report-files;
+                color: Theme.ink-2;
+                font-size: 12.5px;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.report-took;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11.5px;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // 2. The scope's bytes by age: one bar, then the six words under it.
+    // The only place the strip's width is published; the folder bar
+    // below is the same width and is relabelled with it.
+    Strip {
+        segments: root.age-segs;
+        kinds: false;
+        changed width => {
+            root.strip-width = self.width;
+            root.report-resized();
+        }
+    }
+
+    HorizontalLayout {
+        height: 22px;
+        spacing: 16px;
+        alignment: start;
+
+        for band[i] in root.age-key: HorizontalLayout {
+            spacing: 6px;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 9px;
+                    height: 9px;
+                    border-radius: 2px;
+                    background: Tones.age(i);
+                }
+            }
+            Text {
+                text: band.label;
+                color: Theme.ink-2;
+                font-size: 11.5px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: band.count;
+                color: Theme.ink;
+                font-size: 11.5px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // 3. Where the bytes are: the same width again, cut by folder.
+    Heading {
+        label: root.head-bytes;
+        aside: root.kids-aside;
+    }
+
+    Strip {
+        segments: root.kid-segs;
+        kinds: true;
+    }
+
+    // The children, heaviest first. The engine ordered them.
+    Rectangle {
+        height: 24px;
+        background: Theme.panel;
+
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: Theme.line;
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Text {
+                text: root.head-folder;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+                width: 34%;
+            }
+            Text {
+                text: root.head-age;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+                width: root.age-bar;
+            }
+            Text {
+                text: root.head-size;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                width: 90px;
+            }
+            Text {
+                text: root.head-share;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                width: 70px;
+            }
+            Text {
+                text: root.head-files;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                width: 80px;
+            }
+        }
+    }
+
+    // At most two dozen — `top` in the request says so — so a plain
+    // repeater: a `ListView` would scroll inside the report's scroll.
+    VerticalLayout {
+        spacing: 0px;
+
+        for kid[i] in root.kids: Rectangle {
+            height: 30px;
+            background: !kid.rest && kidtouch.has-hover ? Theme.hover : transparent;
+
+            kidtouch := TouchArea {
+                enabled: !kid.rest;
+                clicked => {
+                    root.report-open(kid.path);
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line-soft;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                // The name, with its share of the heaviest behind it —
+                // the way a rail row carries its own bar.
+                Rectangle {
+                    width: 34%;
+                    min-width: 0px;
+
+                    if kid.bar > 0: Rectangle {
+                        x: 0;
+                        y: 4px;
+                        height: parent.height - 8px;
+                        width: parent.width * kid.bar;
+                        background: Theme.line;
+                        border-radius: 2px;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 6px;
+                        spacing: 3px;
+
+                        // Elide rather than cap: a `max-width` read
+                        // from the cell that holds it is a binding loop.
+                        Text {
+                            text: kid.name;
+                            color: kid.rest ? Theme.ink-3 : Theme.ink;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 0;
+                        }
+                        Text {
+                            text: kid.rest ? "" : "›";
+                            color: Theme.ink-3;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                // The bytes by age, as one bar, in the six colours the
+                // rows and the ribbon use. Placed rather than laid out:
+                // widths taken from the parent's width are a binding loop.
+                VerticalLayout {
+                    alignment: center;
+                    width: root.age-bar;
+                    if !kid.rest: Rectangle {
+                        height: 12px;
+                        Rectangle {
+                            x: 0;
+                            width: root.age-bar * kid.a0;
+                            height: parent.height;
+                            background: Theme.t0;
+                        }
+                        Rectangle {
+                            x: root.age-bar * kid.a0;
+                            width: root.age-bar * kid.a1;
+                            height: parent.height;
+                            background: Theme.t1;
+                        }
+                        Rectangle {
+                            x: root.age-bar * (kid.a0 + kid.a1);
+                            width: root.age-bar * kid.a2;
+                            height: parent.height;
+                            background: Theme.t2;
+                        }
+                        Rectangle {
+                            x: root.age-bar * (kid.a0 + kid.a1 + kid.a2);
+                            width: root.age-bar * kid.a3;
+                            height: parent.height;
+                            background: Theme.t3;
+                        }
+                        Rectangle {
+                            x: root.age-bar * (kid.a0 + kid.a1 + kid.a2 + kid.a3);
+                            width: root.age-bar * kid.a4;
+                            height: parent.height;
+                            background: Theme.t4;
+                        }
+                        Rectangle {
+                            x: root.age-bar * (kid.a0 + kid.a1 + kid.a2 + kid.a3 + kid.a4);
+                            width: root.age-bar * kid.a5;
+                            height: parent.height;
+                            background: Theme.t5;
+                        }
+                    }
+                }
+
+                Text {
+                    text: kid.size;
+                    color: kid.rest ? Theme.ink-3 : Theme.ink;
+                    font-family: Fonts.mono;
+                    font-size: 12px;
+                    font-weight: kid.rest ? 400 : 650;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    width: 90px;
+                }
+                Text {
+                    text: kid.share;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    width: 70px;
+                }
+                Text {
+                    text: kid.files;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    width: 80px;
+                }
+            }
+        }
+    }
+
+    if root.kids.length == 0: Text {
+        text: root.kids-empty;
+        color: Theme.ink-3;
+        font-size: Fonts.small;
+        height: 40px;
+        vertical-alignment: center;
+    }
+
+    Note {
+        text: root.kids-note;
+    }
+
+    // 4. Two panels side by side: what kinds the weight is in, and the
+    // heaviest files under here.
+    HorizontalLayout {
+        spacing: 28px;
+
+        VerticalLayout {
+            spacing: 6px;
+            horizontal-stretch: 1;
+            min-width: 260px;
+
+            Heading {
+                label: root.head-kinds;
+                aside: root.kinds-sampled;
+            }
+
+            // No `alignment`: the legend takes what the ring leaves,
+            // and a start-aligned row hands out preferred widths only.
+            HorizontalLayout {
+                spacing: 20px;
+
+                // The ring: one arc a slice, built in Rust in this
+                // box's own 150 units, so nothing here does
+                // trigonometry per frame.
+                Rectangle {
+                    width: 150px;
+                    height: 150px;
+
+                    // Filled, never stroked: the software renderer's
+                    // stroker does not come back from a stroked arc.
+                    for slice[i] in root.report-kinds: Path {
+                        width: 150px;
+                        height: 150px;
+                        viewbox-width: 150;
+                        viewbox-height: 150;
+                        commands: slice.commands;
+                        fill: Tones.kind(slice.tone);
+                    }
+
+                    Text {
+                        x: 0;
+                        y: 58px;
+                        width: parent.width;
+                        height: 24px;
+                        text: root.kinds-count;
+                        color: Theme.ink;
+                        font-size: 20px;
+                        font-weight: 250;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 0;
+                        y: 82px;
+                        width: parent.width;
+                        height: 14px;
+                        text: root.kinds-word;
+                        color: Theme.ink-3;
+                        font-size: 12px;
+                        font-weight: 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    // Capped so the counts stay beside their words: a
+                    // legend as wide as the window puts a hand's width
+                    // between the two halves of one line.
+                    max-width: 300px;
+
+                    for slice[i] in root.report-kinds: Rectangle {
+                        height: 19px;
+                        min-width: 0px;
+                        background: slice.token != "" && kindtouch.has-hover
+                            ? Theme.hover : transparent;
+                        border-radius: 2px;
+
+                        kindtouch := TouchArea {
+                            enabled: slice.token != "";
+                            clicked => {
+                                root.tab = "search";
+                                root.facet-clicked(slice.token);
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 2px;
+                                    background: Tones.kind(slice.tone);
+                                }
+                            }
+                            Text {
+                                text: slice.label;
+                                color: slice.token == "" ? Theme.ink-3 : Theme.ink-2;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: slice.count;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                width: 62px;
+                            }
+                            Text {
+                                text: slice.percent;
+                                color: Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                width: 46px;
+                            }
+                        }
+                    }
+                }
+
+                // The width the capped legend does not want. Without it
+                // the whole column stops at the legend's ceiling and the
+                // panel beside it takes the rest of the window.
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            Note {
+                text: root.kinds-note;
+            }
+            Rectangle { }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            horizontal-stretch: 1;
+            min-width: 260px;
+
+            Heading {
+                label: root.head-biggest;
+            }
+
+            for big[i] in root.report-big: Rectangle {
+                height: 22px;
+                min-width: 0px;
+                background: bigtouch.has-hover ? Theme.hover : transparent;
+                border-radius: 2px;
+
+                if big.share > 0: Rectangle {
+                    x: 0;
+                    y: 2px;
+                    height: parent.height - 4px;
+                    width: parent.width * big.share;
+                    background: Theme.line;
+                    border-radius: 2px;
+                }
+
+                bigtouch := TouchArea {
+                    pointer-event(e) => {
+                        if (e.button == PointerEventButton.right
+                            && e.kind == PointerEventKind.down) {
+                            root.big-menu-at(big.path,
+                                self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+
+                    // Both capped by a constant, never by the width of
+                    // the column: an uncapped file name asks for its
+                    // whole length and takes the panel beside it with it.
+                    Text {
+                        text: big.name;
+                        color: Theme.ink-2;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 0;
+                        max-width: 260px;
+                    }
+                    Text {
+                        text: big.dir;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: big.size;
+                        color: Theme.ink;
+                        font-family: Fonts.mono;
+                        font-size: 11.5px;
+                        font-weight: 650;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 76px;
+                    }
+                }
+            }
+
+            Note {
+                text: root.biggest-note;
+            }
+            Rectangle { }
+        }
+    }
+
+    // The way into a search scoped to this folder.
+    Rectangle {
+        background: Theme.panel-2;
+        border-width: Theme.hair;
+        border-color: Theme.line-soft;
+        border-radius: 3px;
+
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+
+            Text {
+                text: root.head-jump;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: "under:";
+                    color: Theme.q-key;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.report-under;
+                    color: Theme.ink-2;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                Push {
+                    label: root.jump-label;
+                    clicked => {
+                        root.report-search();
+                    }
+                }
+            }
+
+            Note {
+                text: root.jump-note;
+            }
+        }
+    }
+
+    // The same file, several times over. Not run unasked: it is a walk
+    // of every candidate.
+    HorizontalLayout {
+        spacing: 10px;
+        height: 30px;
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.head-dupes;
+                color: Theme.ink-3;
+                font-size: 12px;
+                font-weight: 500;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Push {
+                label: root.dupes-open ? root.dupes-hide : root.dupes-show;
+                clicked => {
+                    root.dupes-toggled();
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.dupes-sum;
+                color: Theme.ink-3;
+                font-size: 11.5px;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle { }
+
+        for floor[i] in root.dupe-floors: VerticalLayout {
+            alignment: center;
+            Push {
+                label: floor;
+                asking: i == root.dupe-floor;
+                clicked => {
+                    root.dupes-floored(i);
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Push {
+                label: root.dupes-confirm;
+                clicked => {
+                    root.dupes-read();
+                }
+            }
+        }
+    }
+
+    if root.dupes-open: Text {
+        text: root.dupes-note;
+        color: Theme.ink-3;
+        font-size: 11.5px;
+        wrap: word-wrap;
+    }
+
+    if root.dupes-open: VerticalLayout {
+        spacing: 10px;
+
+        for group[i] in root.dupes: VerticalLayout {
+            spacing: 2px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: group.size;
+                    color: Theme.ink;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    font-weight: 650;
+                }
+                Text {
+                    text: group.times;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                }
+                Rectangle { }
+                Text {
+                    text: group.certainty;
+                    color: group.proven ? Theme.t1 : Theme.q-bad;
+                    font-family: Fonts.mono;
+                    font-size: 11px;
+                }
+            }
+            Text {
+                text: group.paths;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11px;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+    }
+    }
+}
