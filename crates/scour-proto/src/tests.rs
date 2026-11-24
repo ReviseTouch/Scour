@@ -1,4 +1,8 @@
 use super::*;
+use scour_core::{
+    Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page, SearchResponse,
+    SortKey, Status, TreeNode,
+};
 
 #[test]
 fn what_changes_something_is_named_one_by_one() {
