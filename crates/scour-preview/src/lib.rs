@@ -13,7 +13,6 @@ pub use shape::*;
 
 pub mod doc;
 pub mod office;
-pub mod ooxml;
 mod pdf_macos;
 mod pdf_win;
 mod ppm;

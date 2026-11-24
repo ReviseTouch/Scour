@@ -5062,6 +5062,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-extract"
+version = "0.2.0-alpha.12"
+dependencies = [
+ "flate2",
+ "memchr",
+]
+
+[[package]]
 name = "scour-grep"
 version = "0.2.0-alpha.12"
 dependencies = [
@@ -5069,6 +5077,7 @@ dependencies = [
  "libc",
  "memchr",
  "regex",
+ "scour-extract",
  "surefoot",
  "tempfile",
 ]
@@ -5228,7 +5237,7 @@ dependencies = [
 name = "scour-preview"
 version = "0.2.0-alpha.12"
 dependencies = [
- "miniz_oxide",
+ "scour-extract",
  "serde",
  "windows",
 ]

@@ -114,9 +114,6 @@ fn the_lists_name_real_crates() {
         .chain(FACES)
         .chain(LEAVES)
     {
-        if *name == "scour-extract" && !edges.contains_key(*name) {
-            continue;
-        }
         assert!(edges.contains_key(*name), "{name} is not in the workspace");
     }
 }

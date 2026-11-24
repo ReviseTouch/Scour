@@ -74,7 +74,8 @@ pub fn look_at(path: &std::path::Path, is_dir: bool) -> Look {
         look.cut = !whole;
         look.len = len;
     } else if office::is_office(path)
-        && let Some((head, cut)) = ooxml::extract_text(path)
+        && let Ok(file) = open_file(path)
+        && let Some((head, cut)) = scour_extract::document_text(path, file, DOCUMENT_TEXT)
     {
         if shape == Shape::Nothing {
             look.shape = "text".to_owned();
@@ -165,3 +166,6 @@ fn looks_like_text(path: &std::path::Path) -> bool {
         Err(e) => e.valid_up_to() + 4 >= head.len(),
     }
 }
+
+/// How much of a document's text a preview shows.
+const DOCUMENT_TEXT: usize = 128 * 1024;

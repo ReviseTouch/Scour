@@ -9,7 +9,6 @@ mod ground;
 mod pattern;
 mod read;
 mod scan;
-mod xml;
 mod zip;
 
 pub use budget::Budget;

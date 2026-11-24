@@ -1,0 +1,19 @@
+[package]
+name        = "scour-extract"
+description = "The text inside a file: ZIP containers read under bounds, XML made plain."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **Nothing of Scour's**, so `scour-grep` and `scour-preview`, which know
+# nothing of Scour either, can share it: one reader of a ZIP's directory, one
+# inflater, one way of turning a document's XML into lines.
+[dependencies]
+flate2 = { workspace = true }
+memchr = { workspace = true }

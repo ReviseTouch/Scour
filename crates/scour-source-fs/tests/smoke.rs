@@ -242,7 +242,8 @@ fn capabilities_describe_this_platform_honestly() {
     let caps = src.caps();
     assert!(caps.contains(Caps::WATCH));
     // **Not `CONTENT`**: `open` refuses unconditionally, and `scour sources` prints
-    // what is claimed here. It comes back with the first `Extractor`.
+    // what is claimed here. What is inside a file is read by `scour-grep` and
+    // `scour-extract`, asked by the engine, never by a source.
     assert!(
         !caps.contains(Caps::CONTENT),
         "nothing here can open a file, so nothing here may claim it can"

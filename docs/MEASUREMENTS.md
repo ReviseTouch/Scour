@@ -799,6 +799,31 @@ SCOUR_NO_ZIP=1 ./target/release/examples/zipcost "mahkemesi" < /tmp/udf5k.txt
 ./target/release/examples/zipcost "mahkemesi" < /tmp/udf5k.txt
 ```
 
+## The ZIP reader shared with the preview (2026-11-24)
+
+`scour-grep` and `scour-preview` each read a ZIP's directory and inflated its
+entries; both now use `scour-extract`'s. The question was whether grep, whose
+reader it was, pays for the move across a crate boundary. Two release
+binaries of `zipcost`, before (A) and after (B), run alternately seven times
+each, warm cache, 1,400 documents (200 each of `.udf .docx .xlsx .pptx .odt
+.epub .zip`, 886 MiB, 429 MiB read):
+
+| | median | range | found / clean / binary |
+|---|---:|---:|---|
+| A, grep's own reader | 136.3 ms | 133.1–152.9 | 366 / 995 / 39 |
+| B, `scour-extract` | 138.9 ms | 132.3–143.5 | 366 / 995 / 39 |
+
+1.9 %, inside A's own spread of 15 %: no cost found. Every run found the same
+files. Thin LTO inlines across the crate line in a release build.
+
+```sh
+for e in udf docx xlsx pptx odt epub zip; do
+  scour --json -n 200 "ext:$e size:<64mb" | jq -r '.hits[].path'
+done > /tmp/zips.txt
+cargo build --release -p scour-grep --example zipcost   # once before, once after
+for i in 1 2 3 4 5 6 7; do A mahkeme < /tmp/zips.txt; B mahkeme < /tmp/zips.txt; done
+```
+
 ## Reproducing
 
 ```sh

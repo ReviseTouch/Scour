@@ -1,10 +1,10 @@
-//! SIMD-accelerated text extraction for UYAP `.udf` (`<![CDATA[...]]>`) and
-//! XML-based Office / OpenDocument / EPUB streams.
+//! XML made plain: tags dropped, entities decoded, block tags turned into line
+//! breaks and cells into tabs. And a UYAP `.udf`'s `<![CDATA[...]]>` body.
 
 use memchr::{memchr, memmem, memrchr_iter};
 
 /// Zero-copy slice of a UYAP `.udf` `<content><![CDATA[...]]></content>` block.
-pub(crate) fn udf_cdata(xml: &[u8]) -> Option<&[u8]> {
+pub fn udf_cdata(xml: &[u8]) -> Option<&[u8]> {
     let head = &xml[..xml.len().min(1024)];
     let start = memmem::find(head, b"<![CDATA[")? + 9;
     let body = &xml[start..];
@@ -18,7 +18,7 @@ pub(crate) fn udf_cdata(xml: &[u8]) -> Option<&[u8]> {
 
 /// Strip XML tags into `out` (reusing its capacity) up to `cap` bytes, joining
 /// split inline runs (`<w:t>...</w:t>`) and turning block tags into newlines.
-pub(crate) fn strip_xml(xml: &[u8], out: &mut Vec<u8>, cap: usize) {
+pub fn strip_xml(xml: &[u8], out: &mut Vec<u8>, cap: usize) {
     out.clear();
     let mut rest = xml;
     while !rest.is_empty() && out.len() < cap {

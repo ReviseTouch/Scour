@@ -13,7 +13,7 @@ pub mod traits;
 pub mod types;
 
 pub use text::{Catalog, DefaultFolder, Folder, Unaccented};
-pub use traits::{ChangeSink, ContentSink, EntrySink, Extractor, Flow, Index, Source, WatchHandle};
+pub use traits::{ChangeSink, EntrySink, Flow, Index, Source, WatchHandle};
 pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
     EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, FoundLine, Group, Hit,

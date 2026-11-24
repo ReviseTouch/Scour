@@ -44,6 +44,7 @@ Dependencies flow downwards and **never** upwards.
 | **storage** | `scour-index-native` | columns, trigrams, the directory table | where a query came from |
 | **search** | `scour-engine` | which rows answer, in what order | who is asking |
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
+| **reading files** | `scour-grep`, `scour-extract`, `scour-preview` | what is inside a file, under bounds | Scour: paths in, text out |
 | **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
 | **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-volumes`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
 | **faces** | `scour-web`, `scour-gui`, `scour-tui`, `scour` | drawing, keys, the pointer | the index, the filesystem, the engine |
@@ -103,7 +104,10 @@ correct on the day it is written.
 - **Reading files is not the index's job.** What is inside a file is read
   when it is asked for. The engine asks the index which files, in the order
   wanted, and hands them to `scour-grep`, which knows nothing of Scour: paths
-  and a pattern in, lines out. It asks `surefoot` what each root stands on, as
+  and a pattern in, lines out. What is inside a ZIP-based document — its
+  directory, an entry inflated, its XML made plain — is `scour-extract`'s,
+  which the preview reads a document's text with too: one reader, so a new
+  format is added once and both search and preview have it. It asks `surefoot` what each root stands on, as
   the walk does, and reads a spinning disk on one thread in path order, a
   solid one on up to eight, a network one on four.
 - **`content:` is a search like any other, answered as it is read.** A term

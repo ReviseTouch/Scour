@@ -17,6 +17,7 @@ workspace = true
 # same one the walk asks, so the two cannot disagree about a disk.
 [dependencies]
 flate2   = { workspace = true }
+scour-extract = { workspace = true }
 regex    = { workspace = true }
 memchr   = { workspace = true }
 surefoot = { workspace = true }
