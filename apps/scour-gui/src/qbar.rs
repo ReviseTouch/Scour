@@ -32,9 +32,6 @@ pub const WELL_MIN: f32 = 88.0;
 /// picture, the picture to the name, the name to the header's edge, and the
 /// edge to what the filter holds.
 pub const HEAD_LEAD: f32 = 3.0;
-/// Room every capsule keeps at its right end for its `×`: always there, so
-/// nothing moves when the pointer comes or goes.
-pub const CLOSE_W: f32 = 22.0;
 pub const HEAD_PIC: f32 = 16.0;
 pub const HEAD_JOIN: f32 = 5.0;
 pub const HEAD_TRAIL: f32 = 8.0;

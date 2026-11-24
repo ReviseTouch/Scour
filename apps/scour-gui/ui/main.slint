@@ -3430,71 +3430,6 @@ export component MainWindow inherits Window {
                     }
 
 
-                    // A capsule's `×`, in the room it always keeps at its end:
-                    // nothing moves when the pointer comes. Over the press
-                    // area, so it is the one that is pressed.
-                    for c in root.caps: Rectangle {
-                        visible: c.last && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
-                        x: field.pad + c.x + c.w - 19px;
-                        y: field.top + (c.line - root.q-first) * root.q-pitch + (root.q-pitch - 20px) / 2;
-                        width: 20px;
-                        height: 20px;
-                        border-radius: 10px;
-                        background: x-hit.has-hover ? Theme.q-bad : transparent;
-                        Text {
-                            text: "×";
-                            color: x-hit.has-hover ? Theme.panel : c.hov ? Theme.ink-2 : Theme.ink-3;
-                            font-size: 15px;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        x-hit := TouchArea {
-                            mouse-cursor: pointer;
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                    root.cap-act("drop", c.from, c.to);
-                                }
-                            }
-                        }
-                    }
-                    // Over the capsule's picture while the pointer is on it: `!`
-                    // excludes, `+` takes the exclusion off. The picture's own
-                    // place, so this too moves nothing.
-                    for c in root.caps: Rectangle {
-                        // Kept while the pointer is on it: the field under it no
-                        // longer sees the pointer, and would take it away.
-                        visible: (c.hov || n-hit.has-hover) && c.first && !c.edit
-                            && (c.icon || c.tone == 2)
-                            && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
-                        // On a picture, a round button over it; on an excluded word,
-                        // a narrow one over its `!`, the letters after it left seen.
-                        x: field.pad + c.x + (c.icon ? 1px : -3px);
-                        y: field.top + (c.line - root.q-first) * root.q-pitch + (root.q-pitch - 22px) / 2;
-                        width: c.icon ? 22px : 15px;
-                        height: 22px;
-                        border-radius: c.icon ? 11px : 6px;
-                        background: n-hit.has-hover ? Theme.q-not : Theme.panel;
-                        border-width: n-hit.has-hover ? 0px : 1px;
-                        border-color: Theme.line;
-                        Text {
-                            text: c.tone == 2 ? "+" : "!";
-                            color: n-hit.has-hover ? Theme.panel : c.tone == 2 ? Theme.q-not : Theme.ink-2;
-                            font-size: 13px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        n-hit := TouchArea {
-                            mouse-cursor: pointer;
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                    root.cap-act("neg", c.from, c.to);
-                                }
-                            }
-                        }
-                    }
-
                     // Painted last, so a letter cannot cover it.
                     Rectangle {
                         x: field.pad + root.caret-x - 1px;
@@ -3560,24 +3495,18 @@ export component MainWindow inherits Window {
                             || (root.hov-fz && self.fz-hov)
                             || pair-neg.hovered
                             || pair-drop.hovered;
-                        // A capsule has its own buttons, in it and always in their
-                        // place; this is a word's.
-                        visible: (root.hov-on || self.over || field.pair-keep) && !root.hov-cap;
-                        // A capsule's buttons are in the capsule, over the end of
-                        // what it holds, on its own tint; a word's stand above it.
-                        x: root.hov-cap
-                            ? clamp(field.pad + root.hov-x + 1px - self.width, 0px, field.width - self.width)
-                            : clamp(field.pad + root.hov-x - self.width + 5px, 0px, field.width - self.width);
-                        y: root.hov-cap
-                            ? field.top + root.hov-line * root.q-pitch + 6px
-                            : field.top + root.hov-line * root.q-pitch - 24px;
+                        // Above the term, a capsule's as a word's: nothing is laid
+                        // over what it holds, and nothing in the line moves.
+                        visible: root.hov-on || self.over || field.pair-keep;
+                        x: clamp(field.pad + root.hov-x - self.width + 5px, 0px, field.width - self.width);
+                        y: field.top + root.hov-line * root.q-pitch - 24px;
                         width: pair-row.preferred-width + 4px;
-                        height: root.hov-cap ? 24px : 26px;
-                        border-radius: root.hov-cap ? 8px : 13px;
-                        background: root.hov-cap ? (root.hov-not ? Theme.cap-neg : Theme.cap) : Theme.panel;
-                        border-width: root.hov-cap ? 0px : 1px;
+                        height: 26px;
+                        border-radius: 13px;
+                        background: Theme.panel;
+                        border-width: 1px;
                         border-color: Theme.line;
-                        drop-shadow-blur: root.hov-cap ? 0px : 4px;
+                        drop-shadow-blur: 4px;
                         drop-shadow-color: #00000030;
                         drop-shadow-offset-y: 1px;
                         pair-bridge := TouchArea {

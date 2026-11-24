@@ -327,12 +327,6 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
             c.nice = nice.into();
         }
     }
-    // Every capsule keeps room at its right end for its `×`, hovered or not:
-    // a button that made room for itself as the pointer came moved everything
-    // after it, and the line jumped under the pointer.
-    for c in caps.iter_mut().filter(|c| c.last) {
-        c.tail = if c.tail > 0.0 { c.tail } else { qbar::CAP_TAIL } + qbar::CLOSE_W;
-    }
     if qb.asked.len() != asked_before {
         let rows: Vec<crate::QMeasure> = qb
             .asked
