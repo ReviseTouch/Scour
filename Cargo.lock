@@ -5093,6 +5093,7 @@ dependencies = [
  "scour-extract",
  "surefoot",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

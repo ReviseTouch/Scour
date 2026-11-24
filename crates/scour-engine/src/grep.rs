@@ -33,6 +33,8 @@ pub struct GrepAsk {
     pub read_budget: u64,
     pub max_size: u64,
     pub timeout: Duration,
+    /// Bytes a second at most; zero is as fast as the disks go.
+    pub rate: u64,
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +50,7 @@ pub struct Grepped {
     pub header_only: u64,
     pub no_reader: u64,
     pub locked: u64,
+    pub offline: u64,
     /// The offset to go on from. None: everything the query names was read.
     pub next: Option<u32>,
     pub misread: Vec<Span>,
@@ -76,14 +79,14 @@ pub(crate) fn run(
         at: 0,
         expected: e.to_string(),
     })?;
-    let options = Options {
+    let mut options = Options {
         binary: ask.binary,
         max_size: ask.max_size,
         hits_per_file: ask.hits as usize,
         ..Options::default()
     };
     let ground = Ground::probe(roots.iter().map(|root| scour_core::path::to_path(root)));
-    let budget = Budget::new(ask.read_budget, Some(began + ask.timeout));
+    let budget = Budget::new(ask.read_budget, Some(began + ask.timeout)).paced(ask.rate);
     let mut out = Grepped::default();
     // No wider than the finds wanted need: every file of a batch is read.
     let (mut at, mut width) = (ask.offset, ask.top.clamp(8, FIRST));
@@ -109,6 +112,8 @@ pub(crate) fn run(
                 out.next = Some(start);
                 break 'pages;
             }
+            // Past the first batch the reading is a long one, and gives way.
+            options.quiet = start > ask.offset;
             if let Some(next) = read(
                 &expr,
                 &options,
@@ -166,6 +171,7 @@ fn read(
             Outcome::Skipped(Skip::HeaderOnly) => out.header_only += 1,
             Outcome::Skipped(Skip::NoReader) => out.no_reader += 1,
             Outcome::Skipped(Skip::Locked) => out.locked += 1,
+            Outcome::Skipped(Skip::Offline) => out.offline += 1,
             Outcome::Unreadable(_) => out.unreadable += 1,
             Outcome::Found { hits, more } => {
                 out.scanned += 1;

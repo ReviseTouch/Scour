@@ -240,10 +240,16 @@ enum Refused {
 /// plainly waits for a writer for ever — without following a link, whose
 /// target is a file of its own, and without touching its read time.
 fn open(path: &Path, max_size: u64) -> Result<(File, u64), Refused> {
+    if in_the_cloud_before(path) {
+        return Err(Refused::Skip(Skip::Offline));
+    }
     let file = open_quietly(path).map_err(refused)?;
     let meta = file.metadata().map_err(|e| Refused::Io(e.kind()))?;
     if !meta.is_file() {
         return Err(Refused::Skip(Skip::NotAFile));
+    }
+    if in_the_cloud(&meta) {
+        return Err(Refused::Skip(Skip::Offline));
     }
     let len = meta.len();
     if max_size != 0 && len > max_size {
@@ -279,16 +285,48 @@ fn open_quietly(path: &Path) -> std::io::Result<File> {
     with(base)
 }
 
-/// Shared for reading, writing and deletion — `std`'s default — and read
-/// front to back, which the cache manager is told.
+/// Shared for reading, writing and deletion — `std`'s default — read front
+/// to back, which the cache manager is told, and opened without fetching a
+/// cloud file's data, so that its attributes can say it is not here.
 #[cfg(windows)]
 fn open_quietly(path: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
     const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+    const FILE_FLAG_OPEN_NO_RECALL: u32 = 0x0010_0000;
     File::options()
         .read(true)
-        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_NO_RECALL)
         .open(path)
+}
+
+/// OneDrive's and other cloud providers' placeholders: offline, or recalled on
+/// open or on the first read.
+#[cfg(windows)]
+fn in_the_cloud(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    const OFFLINE: u32 = 0x1000;
+    const RECALL_ON_OPEN: u32 = 0x0004_0000;
+    const RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+    meta.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
+}
+
+#[cfg(not(windows))]
+fn in_the_cloud(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// iCloud's evicted files are `SF_DATALESS`, and reading one downloads it;
+/// asked before opening, of the name.
+#[cfg(target_os = "macos")]
+fn in_the_cloud_before(path: &Path) -> bool {
+    use std::os::macos::fs::MetadataExt as _;
+    const SF_DATALESS: u32 = 0x4000_0000;
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.st_flags() & SF_DATALESS != 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn in_the_cloud_before(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(not(any(unix, windows)))]

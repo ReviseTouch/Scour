@@ -104,6 +104,7 @@
     if (res.header_only) skips.push(T("{n} media skipped", { n: fmt(res.header_only) }));
     if (res.no_reader) skips.push(T("{n} documents not read", { n: fmt(res.no_reader) }));
     if (res.locked) skips.push(T("{n} locked", { n: fmt(res.locked) }));
+    if (res.offline) skips.push(T("{n} in the cloud", { n: fmt(res.offline) }));
     const sortBtn = (key, msgid, num) => {
       const on = sortKey === key;
       const arr = on ? ' <span class="arrow">' + (sortDesc ? "▾" : "▴") + "</span>" : "";

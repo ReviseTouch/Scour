@@ -6,12 +6,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use surefoot::Medium;
-
 use crate::budget::Budget;
 use crate::class::Class;
 use crate::excerpt::Hit;
 use crate::ground::{Ground, readers};
+use crate::order::{Order, arrange};
 use crate::pattern::Pattern;
 use crate::read::Reader;
 
@@ -45,6 +44,8 @@ pub struct Options {
     pub hits_per_file: usize,
     /// About how many bytes of a line are shown around a find.
     pub excerpt: usize,
+    /// Read at the lowest disk and CPU priority: a reading nobody waits on.
+    pub quiet: bool,
 }
 
 impl Default for Options {
@@ -54,6 +55,7 @@ impl Default for Options {
             max_size: 64 << 20,
             hits_per_file: 3,
             excerpt: 160,
+            quiet: false,
         }
     }
 }
@@ -88,6 +90,9 @@ pub enum Skip {
     NoReader,
     /// Held open by another program that shares it with nobody (Windows).
     Locked,
+    /// Its data is in the cloud and reading it would fetch it: a OneDrive or
+    /// iCloud placeholder.
+    Offline,
 }
 
 /// Called by each reading thread before its first file; what it returns is
@@ -143,10 +148,7 @@ impl Scanner {
             let mut workers = Vec::new();
             for (lane, list) in lanes.iter_mut().enumerate() {
                 let medium = self.ground.medium(lane);
-                if medium == Medium::Spinning {
-                    // Neighbours in a directory are neighbours on the platter, nearly.
-                    list.sort_by(|a, b| files[*a].path.cmp(&files[*b].path));
-                }
+                arrange(Order::of(medium, files, list), files, list);
                 let (list, next) = (&*list, Arc::new(AtomicUsize::new(0)));
                 for _ in 0..readers(medium, self.cores).min(list.len()) {
                     let next = Arc::clone(&next);
@@ -169,6 +171,9 @@ impl Scanner {
         next: &AtomicUsize,
         budget: &Budget,
     ) -> Vec<(usize, Outcome)> {
+        if self.options.quiet {
+            crate::quiet::give_way();
+        }
         let identity = self.enter.as_ref().map(|enter| enter());
         let mut reader = Reader::default();
         let mut done = Vec::new();

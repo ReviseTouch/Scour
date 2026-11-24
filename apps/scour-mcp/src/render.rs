@@ -100,6 +100,10 @@ pub fn human(r: &Response) -> String {
                     "skipped as PDF or legacy Office documents with no text reader yet (pass binary to search their raw bytes)",
                 ),
                 (g.locked, "locked by another program"),
+                (
+                    g.offline,
+                    "left in the cloud (OneDrive or iCloud placeholders; reading would download them)",
+                ),
             ] {
                 if n > 0 {
                     out.push_str(&format!(" {n} {what}."));

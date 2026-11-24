@@ -214,6 +214,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 (g.header_only, "media"),
                 (g.no_reader, "documents not read"),
                 (g.locked, "locked"),
+                (g.offline, "in the cloud"),
             ] {
                 if n > 0 {
                     said.push_str(&format!(" · {n} {}", t(what)));

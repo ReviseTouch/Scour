@@ -904,6 +904,54 @@ UTF-16LE word in a Windows executable (`CompanyName` in the version
 resource) is found with `--binary` in 1,638 of 3,000 `.exe`/`.dll`.
 Every corpus, cold and warm: `docs/bench/content-phase-1.txt`.
 
+## A spinning disk, in what order (2026-11-24)
+
+PC2 (Windows, NTFS, Seagate ST500DM002 7,200 rpm), the `scan` example over
+five disjoint random sets of 12,000 files under 1 MiB taken from the same
+442,607 on one volume — each set read once, so each run is cold without
+needing to flush the cache (no administrator there). One reader, as the
+spinning-disk rule says. The listing that made the sets had read the
+directories, so the MFT was partly warm for all five alike.
+
+| set | order | seconds | files/s |
+|---|---|---:|---:|
+| 0 | path | 217.8 | 55 |
+| 1 | physical (first extent's LCN, `FSCTL_GET_RETRIEVAL_POINTERS`) | 401.8 | 30 |
+| 2 | physical | 363.8 | 33 |
+| 3 | path | 294.0 | 41 |
+| 4 | given (random) | 318.8 | 38 |
+
+**The physical order lost** — slower than reading at random, the extra open
+and query of every file before reading it costing more than any seek it
+saved — and the plan's rule for a gain under 20 % applied: the code that
+gathered it (`FIEMAP` on Linux, retrieval pointers on Windows) was removed,
+and no column for it goes into the index. The path order stays for a
+spinning disk's large sets (≥ 2,000 files or 64 MiB); a smaller set is
+read as given.
+
+```sh
+SCOUR_GREP_ORDER=path|given scan.exe zzqqxx_absent < setN.txt
+```
+
+## Readers on a solid disk (2026-11-24)
+
+This machine, NVMe btrfs, 30,690 files (source, executables, DOCX, XLSX,
+EPUB; 2.4 GiB), each dropped from the page cache first (`--cold`; 722 would
+not leave, being mapped by running programs), two passes:
+
+| readers | 1 | 2 | 4 | 8 | 12 | 16 | 20 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| seconds, pass 1 | 11.70 | 5.94 | 3.10 | 1.72 | 1.24 | 1.01 | 0.94 |
+| seconds, pass 2 | 10.35 | 5.60 | 3.10 | 1.71 | 1.26 | 1.10 | 0.92 |
+
+It keeps gaining past eight, the old ceiling. A solid disk now gets half
+the cores up to sixteen (ten here); the other half is left to the desk, and
+past its first batch a reading runs at idle disk priority and nice 10.
+
+```sh
+SCOUR_GREP_READERS=N scan --cold zzqq < mixed.txt
+```
+
 ## Reproducing
 
 ```sh

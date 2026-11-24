@@ -160,6 +160,7 @@ fn run(
             read_budget,
             max_size,
             timeout_ms,
+            rate_mib,
         } => {
             let needle = needle_of(mode, pattern)?;
             let ask = scour_engine::GrepAsk {
@@ -175,6 +176,7 @@ fn run(
                 read_budget,
                 max_size,
                 timeout: std::time::Duration::from_millis(timeout_ms),
+                rate: u64::from(rate_mib) << 20,
             };
             // Every reading thread reads as the person asking; see `preview`.
             let enter: scour_grep::Enter = std::sync::Arc::new(crate::as_owner::for_a_read);

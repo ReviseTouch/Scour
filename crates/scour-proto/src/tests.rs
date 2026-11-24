@@ -130,6 +130,7 @@ fn every_request_round_trips() {
             read_budget: 1 << 20,
             max_size: 0,
             timeout_ms: 500,
+            rate_mib: 40,
         },
         Request::Volumes {},
         Request::Postpone {

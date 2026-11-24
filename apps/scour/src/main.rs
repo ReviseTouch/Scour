@@ -166,6 +166,10 @@ enum Command {
         /// Go on from here: the number a shorter answer ended with.
         #[arg(long, default_value_t = 0)]
         from: u32,
+        /// Read no faster than this many megabytes a second, leaving the disk
+        /// to others. Zero: as fast as it goes.
+        #[arg(long, default_value_t = 0)]
+        rate_mb: u32,
     },
     /// The same file, several times over — largest saving first.
     ///
@@ -590,6 +594,7 @@ fn build(args: &Args) -> Result<Request> {
             max_mb,
             seconds,
             from,
+            rate_mb,
         }) => Request::Grep {
             query: join(query),
             pattern: pattern.clone(),
@@ -608,6 +613,7 @@ fn build(args: &Args) -> Result<Request> {
             read_budget: budget_mb.saturating_mul(1024 * 1024),
             max_size: max_mb.saturating_mul(1024 * 1024),
             timeout_ms: seconds.saturating_mul(1000),
+            rate_mib: *rate_mb,
         },
         Some(Command::Dupes {
             under,

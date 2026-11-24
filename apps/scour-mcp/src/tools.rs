@@ -273,6 +273,7 @@ impl Scour {
             read_budget: 1 << 30,
             max_size: 64 << 20,
             timeout_ms: 10_000,
+            rate_mib: 0,
         })
     }
 

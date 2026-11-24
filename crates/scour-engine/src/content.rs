@@ -315,7 +315,7 @@ impl Contents {
                     expected: e.to_string(),
                 }
             })?;
-        let options = Options {
+        let mut options = Options {
             hits_per_file: FOUND_PER_FILE,
             ..Options::default()
         };
@@ -336,6 +336,8 @@ impl Contents {
                 if !self.wanted(reading) {
                     return Ok(false);
                 }
+                // Past the first batch nobody is waiting on this: it gives way.
+                options.quiet = reading.state.lock().at > 0;
                 let (read, holding) = holding(
                     &expr,
                     &options,

@@ -27,6 +27,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
                 "header_only": 0,
                 "no_reader": 0,
                 "locked": 0,
+                "offline": 0,
                 "next": serde_json::Value::Null,
                 "took_us": 0,
             }),
@@ -76,6 +77,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
             .and_then(|s| s.parse().ok())
             .unwrap_or(5_000)
             .min(15_000),
+        rate_mib: 0,
     };
     match call(client, request) {
         Ok(Response::Grep(r)) => {
@@ -133,6 +135,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
                     "header_only": r.header_only,
                     "no_reader": r.no_reader,
                     "locked": r.locked,
+                    "offline": r.offline,
                     "next": r.next,
                     "took_us": r.took_us,
                 }),

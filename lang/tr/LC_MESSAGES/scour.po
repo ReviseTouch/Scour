@@ -2411,6 +2411,9 @@ msgstr "belge okunmadı"
 msgid "locked"
 msgstr "kilitli"
 
+msgid "in the cloud"
+msgstr "bulutta"
+
 msgid "stopped early; go on with"
 msgstr "erken durdu; devam için"
 
@@ -2826,6 +2829,9 @@ msgstr "{n} belge okunmadı"
 
 msgid "{n} locked"
 msgstr "{n} kilitli"
+
+msgid "{n} in the cloud"
+msgstr "{n} bulutta"
 
 msgid "Scanning matching files…"
 msgstr "Eşleşen dosyalar taranıyor…"

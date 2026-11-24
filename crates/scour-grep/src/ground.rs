@@ -65,16 +65,26 @@ impl Ground {
     }
 }
 
-/// How many threads reading file contents a medium is worth. The walk's own
-/// numbers until this is measured: a spinning disk seeks for every reader it
-/// is given, a network link is round trips, and half the cores are left to
-/// whoever is at the desk.
+/// How many threads reading file contents a medium is worth. Measured
+/// (`docs/MEASUREMENTS.md`, 2026-11-24): a spinning disk reads fastest alone;
+/// a solid one keeps gaining past eight — cold NVMe, 30,690 files: 1.72 s at
+/// eight, 1.25 at twelve, 1.05 at sixteen — so half the cores, up to sixteen,
+/// the other half left to whoever is at the desk. Network and unknown stay
+/// the walk's numbers until a share is measured.
 pub fn readers(medium: Medium, cores: usize) -> usize {
+    // For measuring: every lane this wide.
+    if let Some(n) = std::env::var("SCOUR_GREP_READERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+    {
+        return n;
+    }
     match medium {
         Medium::Spinning => 1,
         Medium::Network => 4,
         Medium::Unknown => 2,
-        Medium::Solid | Medium::Memory => (cores / 2).clamp(2, 8),
+        Medium::Solid | Medium::Memory => (cores / 2).clamp(2, 16),
     }
 }
 
@@ -107,6 +117,7 @@ mod tests {
         assert_eq!(ground.medium(elsewhere), Medium::Unknown);
         assert_eq!(readers(Medium::Unknown, 20), 2);
         assert_eq!(readers(Medium::Spinning, 20), 1);
-        assert_eq!(readers(Medium::Solid, 20), 8);
+        assert_eq!(readers(Medium::Solid, 20), 10);
+        assert_eq!(readers(Medium::Solid, 64), 16);
     }
 }

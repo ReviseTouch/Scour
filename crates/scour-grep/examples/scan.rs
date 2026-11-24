@@ -83,6 +83,13 @@ fn main() {
         max_size: 0,
         ..Options::default()
     };
+    for root in &roots {
+        eprintln!(
+            "# {} {:?}",
+            root.display(),
+            surefoot::probe::medium_of(root)
+        );
+    }
     let scanner = Scanner::new(pattern, options, Ground::probe(&roots));
     let (budget, began, cpu_before) = (Budget::unlimited(), Instant::now(), usage());
     let outcomes = scanner.scan(&files, &budget);

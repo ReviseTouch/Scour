@@ -122,6 +122,10 @@ pub enum Request {
         max_size: u64,
         #[serde(default = "default_grep_timeout")]
         timeout_ms: u64,
+        /// MiB a second at most, so a long reading leaves the disk to others.
+        /// Zero, the default, is as fast as the disks go.
+        #[serde(default)]
+        rate_mib: u32,
     },
     /// What this person's frontends remember: columns, widths, order, the queries they
     /// have run. Held by the service, the only thing all the frontends talk to.

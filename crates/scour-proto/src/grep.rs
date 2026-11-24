@@ -47,6 +47,9 @@ pub struct GrepResponse {
     /// Held open by another program that shares it with nobody.
     #[serde(default)]
     pub locked: u64,
+    /// Cloud placeholders, OneDrive's or iCloud's: reading would download them.
+    #[serde(default)]
+    pub offline: u64,
     /// The `offset` to ask again with. None: every file the query names was read.
     #[serde(default)]
     pub next: Option<u32>,

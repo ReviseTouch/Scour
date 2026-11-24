@@ -572,6 +572,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 read_budget: 256 << 20,
                 max_size: 64 << 20,
                 timeout_ms: 6_000,
+                rate_mib: 0,
             },
             Ask::Export { query, to } => {
                 // Answered in pieces, so not through `call` — `Client::stream`.

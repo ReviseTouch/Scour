@@ -132,6 +132,7 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
             read_budget: 256 << 20,
             max_size: 64 << 20,
             timeout_ms: 6_000,
+            rate_mib: 0,
         },
     });
 }
@@ -158,6 +159,7 @@ pub fn answered(
         header_only,
         no_reader,
         locked,
+        offline,
         next,
         took_us,
         ..
@@ -189,6 +191,7 @@ pub fn answered(
         (header_only, "{n} media skipped"),
         (no_reader, "{n} documents not read"),
         (locked, "{n} locked"),
+        (offline, "{n} in the cloud"),
     ] {
         if n > 0 {
             summary.push_str("  ·  ");
