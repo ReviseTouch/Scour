@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# What reading file contents costs, cold and warm, for each list of paths in
+# a directory. Writes docs/bench/content-LABEL.txt; the lists stay outside the
+# repository because they name the owner's files.
+#
+#   scripts/content-bench LABEL LISTS_DIR [NEEDLE]
+#
+# LISTS_DIR holds one `NAME.txt` a corpus, a path a line (see
+# docs/PLAN-content-search.md, Phase 0). A list named `*-binary.txt` is read
+# with --binary. Build first, outside this script:
+#   derle cargo build --release -p scour-grep --example scan
+
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scan="$here/../target/release/examples/scan"
+label="${1:?label}"
+lists="${2:?directory of path lists}"
+# Nowhere, so every file is read to its end.
+needle="${3:-zzqqxx_absent_needle}"
+out="$here/../docs/bench/content-$label.txt"
+
+[ -x "$scan" ] || { echo "build it first: derle cargo build --release -p scour-grep --example scan" >&2; exit 1; }
+mkdir -p "$(dirname "$out")"
+
+keys=(files found clean binary too_big unreadable cold_kept seconds mib mib_per_s files_per_s cpu_s peak_rss_mib)
+
+{
+    echo "# content bench · $label · $(date '+%Y-%m-%d %H:%M') · $(git -C "$here/.." rev-parse --short HEAD)"
+    echo "# needle: $needle · $(nproc) threads · $(uname -r)"
+    echo
+    printf '%-18s %-5s' corpus run
+    printf ' %12s' "${keys[@]}"
+    echo
+    for list in "$lists"/*.txt; do
+        name="$(basename "$list" .txt)"
+        flags=()
+        [[ "$name" == *-binary ]] && flags+=(--binary)
+        for run in cold warm; do
+            extra=("${flags[@]}")
+            [ "$run" = cold ] && extra+=(--cold)
+            result="$("$scan" "${extra[@]}" "$needle" < "$list")"
+            printf '%-18s %-5s' "$name" "$run"
+            for k in "${keys[@]}"; do
+                printf ' %12s' "$(awk -v k="$k" '$1==k{print $2}' <<<"$result")"
+            done
+            echo
+        done
+    done
+} | tee "$out"
