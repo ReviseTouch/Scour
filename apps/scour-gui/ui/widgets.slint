@@ -1,0 +1,1141 @@
+// The small parts the window is built of: a row of the rail, a button, a
+// heading, a calendar cell. Each takes what it shows as properties.
+
+import { Theme, Fonts } from "theme.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+
+// One row of the rail: an icon, a word, a count, and a bar under them showing
+// what share of the matching set it is. Under, because a narrow rail has no lane.
+export component FacetRow inherits Rectangle {
+    in property <string> label;
+    in property <string> count;
+    in property <float> share;
+    in property <bool> on;
+    // A kind's token, the list's own icon for it; `place` or `size` for the
+    // other two sections.
+    in property <string> icon;
+    callback clicked();
+
+    height: 24px;
+    // Tinted and keeping its ink: in the light scheme the tint alone is too
+    // close to the hover to tell apart.
+    background: root.on ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    // Inset two pixels top and bottom, at full strength: half an opacity over
+    // `line` is invisible in both schemes.
+    // A hairline under the row, not a block behind it: the share is a hint.
+    if root.share > 0: Rectangle {
+        x: 12px;
+        y: parent.height - 3px;
+        height: 2px;
+        width: (parent.width - 24px) * root.share;
+        background: Theme.line;
+        border-radius: 1px;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        // The same icons the list draws beside each file, quiet here: the
+        // rail is for reading words, and the colour is the list's.
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 14px;
+                height: 14px;
+                colorize: root.on ? Theme.ink : Theme.ink-3;
+                source: root.icon == "folder" || root.icon == "place" ? @image-url("icons/folder.svg")
+                    : root.icon == "doc" ? @image-url("icons/doc.svg")
+                    : root.icon == "code" ? @image-url("icons/code.svg")
+                    : root.icon == "image" ? @image-url("icons/image.svg")
+                    : root.icon == "video" ? @image-url("icons/video.svg")
+                    : root.icon == "media" ? @image-url("icons/media.svg")
+                    : root.icon == "audio" ? @image-url("icons/audio.svg")
+                    : root.icon == "archive" ? @image-url("icons/archive.svg")
+                    : root.icon == "exec" ? @image-url("icons/exec.svg")
+                    : root.icon == "data" ? @image-url("icons/data.svg")
+                    : root.icon == "config" ? @image-url("icons/config.svg")
+                    : root.icon == "font" ? @image-url("icons/font.svg")
+                    : root.icon == "build" ? @image-url("icons/build.svg")
+                    : root.icon == "size" ? @image-url("../../../crates/scour-ui/icons/menu/weight.svg")
+                    : @image-url("icons/file.svg");
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 12.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        // A width of its own, so the name gives way to it: elide a name,
+        // never a number.
+        Text {
+            text: root.count;
+            color: Theme.ink-3;
+            font-size: 11.5px;
+            font-family: Fonts.mono;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 34px;
+        }
+    }
+}
+
+// Pasting, for every field: the clipboard is read in Rust (see `paste.rs`),
+// and a `TextInput` has no way to insert text but this.
+export global Clip {
+    callback paste-into(string, int, int, bool) -> Spliced;
+}
+
+// The report's two ramps, by index. A brush cannot travel in a model: which
+// scheme is showing is decided here, and Rust sends the step instead.
+export global Tones {
+    public pure function age(i: int) -> brush {
+        return i == 0 ? Theme.t0 : i == 1 ? Theme.t1 : i == 2 ? Theme.t2
+            : i == 3 ? Theme.t3 : i == 4 ? Theme.t4 : Theme.t5;
+    }
+
+    // Six steps of one hue, then the folded rest.
+    public pure function kind(i: int) -> brush {
+        return i == 0 ? Theme.k0 : i == 1 ? Theme.k1 : i == 2 ? Theme.k2
+            : i == 3 ? Theme.k3 : i == 4 ? Theme.k4 : i == 5 ? Theme.k5 : Theme.kx;
+    }
+
+    // A word inside a band is the hole the band is cut from. No single ink
+    // reads on both ends of a six-step ramp, and the ramps invert between
+    // the schemes.
+    out property <brush> on-band: Theme.dark ? Theme.ground : Theme.panel;
+}
+
+// A bar cut into segments, each a fraction of the whole. The segments are
+// placed, not laid out, and `min-width` is said out loud: a strip whose width
+// came from the children that read it back is the binding loop this window
+// has already paid for.
+export component Strip inherits Rectangle {
+    in property <[Seg]> segments;
+    /// Which ramp the `tone` indexes: the folder bar and the ring, or the age.
+    in property <bool> kinds;
+
+    height: 22px;
+    min-width: 0px;
+    border-radius: 3px;
+    background: Theme.line-soft;
+    clip: true;
+
+    for seg[i] in root.segments: Rectangle {
+        x: root.width * seg.start;
+        width: root.width * seg.width;
+        height: root.height;
+        background: root.kinds ? Tones.kind(seg.tone) : Tones.age(seg.tone);
+
+        // Rust leaves it empty when the segment is too narrow to read.
+        if seg.label != "": Text {
+            x: 8px;
+            width: max(0px, parent.width - 10px);
+            height: parent.height;
+            text: seg.label;
+            color: Tones.on-band;
+            font-size: 11.5px;
+            font-weight: 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A section heading: small capitals, with a quieter aside beside it.
+export component Heading inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> aside;
+
+    spacing: 8px;
+    alignment: start;
+    height: 26px;
+
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            color: Theme.ink-3;
+            font-size: 12px;
+            font-weight: 500;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.aside;
+            color: Theme.ink-3;
+            font-size: 11px;
+        }
+    }
+}
+
+// A sentence under a section, saying what the picture above it means.
+export component Note inherits Text {
+    color: Theme.ink-3;
+    font-size: 11px;
+    wrap: word-wrap;
+}
+
+// A panel over the window: help, the rules, the languages. One component,
+// because all three are a card that opens over the list, closes on Escape or
+// on a click outside, and does not move what is under it.
+// One of the window's own controls. Square, 18px, and the same shape as the
+// view switch beside it: something done to the window, not to what it shows.
+export component Tool inherits Rectangle {
+    in property <string> glyph;
+    /// Drawn instead of the glyph when given: a symbol is only as good as the
+    /// fonts of the machine, and Windows' have none of these.
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> on;
+    callback clicked();
+
+    // A header bar's button: no frame until it is on, a wash under the hand.
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border-width: root.on ? Theme.hair : 0px;
+    border-color: Theme.line;
+    background: root.on ? Theme.panel-2 : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    if !root.has-icon: Text {
+        text: root.glyph;
+        color: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+    if root.has-icon: Image {
+        source: root.icon;
+        colorize: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// A small button that says what it does in a word, for the line under the
+// query: framed, and filled while it is on.
+export component TextTool inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked();
+    height: 24px;
+    width: tt-label.preferred-width + 18px;
+    border-radius: 6px;
+    border-width: Theme.hair;
+    border-color: tt-touch.has-hover ? Theme.ink-3 : Theme.line;
+    background: root.on ? Theme.panel-2 : tt-touch.has-hover ? Theme.hover : transparent;
+    tt-label := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: root.on || tt-touch.has-hover ? Theme.ink : Theme.ink-3;
+        font-size: 12px;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    tt-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// One search tab on the strip: its query as its name, a × while it is in
+/// front or under the hand, and the middle button closes it as a browser's does.
+export component SearchTabChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    /// False for the only tab: there is always a query line.
+    in property <bool> closable: true;
+    callback picked();
+    callback closed();
+
+    height: 28px;
+    min-width: 96px;
+    max-width: 220px;
+    preferred-width: name.preferred-width + 48px;
+    border-radius: 7px;
+    border-width: root.on ? Theme.hair : 0px;
+    border-color: Theme.line;
+    background: root.on ? Theme.panel : touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.picked();
+            }
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.middle) {
+                root.closed();
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 4px;
+        spacing: 4px;
+        name := Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 12.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 5px;
+                background: x-touch.has-hover ? Theme.line : transparent;
+                visible: root.closable;
+                opacity: root.on || touch.has-hover || x-touch.has-hover ? 1 : 0;
+                x-touch := TouchArea {
+                    clicked => { root.closed(); }
+                }
+                Image {
+                    source: @image-url("icons/tools/close.svg");
+                    colorize: Theme.ink-2;
+                    width: 12px;
+                    height: 12px;
+                    x: 4px;
+                    y: 4px;
+                }
+            }
+        }
+    }
+}
+
+/// A button with a word on it, for the selection bar. Quiet until hovered; it
+/// turns the colour of a question while `asking`.
+export component Push inherits Rectangle {
+    in property <string> label;
+    in property <bool> asking;
+    /// Shown but not pressable: what it would do is out of reach just now.
+    in property <bool> enabled: true;
+    /// No frame: a way out rather than a thing to do, set apart from the rest.
+    in property <bool> plain;
+    callback clicked();
+
+    width: text.preferred-width + 24px;
+    height: 26px;
+    border-width: root.plain ? 0px : Theme.hair;
+    border-radius: 3px;
+    border-color: root.asking ? Theme.q-key : touch.has-hover && root.enabled ? Theme.ink-3 : Theme.line;
+    background: touch.has-hover && root.enabled ? Theme.hover : transparent;
+    opacity: root.enabled ? 1 : 0.45;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    text := Text {
+        text: root.label;
+        color: root.asking ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: Fonts.small;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+/// One way of running Scour, and what choosing it would do. The doing is a
+/// second press: a press arms the row, the button beside it acts.
+export component FaceRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    in property <string> aside;
+    in property <bool> here;
+    in property <bool> armed;
+    in property <bool> ready: true;
+    in property <string> go;
+    callback picked();
+    callback confirmed();
+
+    height: layout.preferred-height;
+    border-radius: 3px;
+    background: root.armed ? Theme.hover : touch.has-hover && root.ready ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            if (root.ready) {
+                root.picked();
+            }
+        }
+    }
+
+    layout := VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            height: 20px;
+
+            Text {
+                text: root.here ? "●" : "○";
+                color: root.here ? Theme.q-key : Theme.ink-3;
+                font-size: 11px;
+                vertical-alignment: center;
+                width: 12px;
+            }
+            Text {
+                text: root.label;
+                color: root.ready ? Theme.ink : Theme.ink-3;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.aside;
+                color: Theme.ink-3;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Sentence and button together: the sentence is what it asks for.
+        if root.armed: HorizontalLayout {
+            spacing: 8px;
+            padding-left: 20px;
+
+            Text {
+                text: root.note;
+                color: Theme.ink-2;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            if root.go != "": VerticalLayout {
+                alignment: center;
+                Push {
+                    label: root.go;
+                    asking: true;
+                    clicked => {
+                        root.confirmed();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component RuleRow inherits Rectangle {
+    in property <string> value;
+    in property <string> word;
+    in property <bool> off;
+    in property <bool> removable;
+    callback toggled();
+    callback dropped();
+
+    height: 24px;
+    background: touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 8px;
+
+        // The row is the target, not the box: twelve pixels is hard to hit.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-width: Theme.hair;
+                border-radius: 2px;
+                border-color: root.off ? Theme.line : Theme.q-key;
+                background: root.off ? transparent : Theme.q-key;
+
+                Text {
+                    text: root.off ? "" : "✓";
+                    color: Theme.panel;
+                    font-size: 9px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: root.off ? Theme.ink-3 : Theme.ink-2;
+            font-family: Fonts.mono;
+            font-size: 11.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.off: Text {
+            text: root.word;
+            color: Theme.q-bad;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        if root.removable: Rectangle {
+            width: 18px;
+            border-radius: 3px;
+            background: drop.has-hover ? Theme.selection : transparent;
+
+            drop := TouchArea {
+                clicked => {
+                    root.dropped();
+                }
+            }
+
+            Text {
+                text: "×";
+                color: drop.has-hover ? Theme.q-bad : Theme.ink-3;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
+    }
+}
+
+/// A disk in the disks panel: the row switches it, three lines say which.
+export component DiskRow inherits Rectangle {
+    in property <string> name;
+    in property <string> aside;
+    in property <string> roots;
+    in property <bool> on;
+    in property <bool> fixed;
+    in property <string> status;
+    in property <bool> walking;
+    callback toggled();
+    callback refresh();
+
+    height: layout.preferred-height;
+    border-radius: 3px;
+    background: touch.has-hover && !root.fixed ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            if (!root.fixed) {
+                root.toggled();
+            }
+        }
+    }
+
+    layout := HorizontalLayout {
+        padding: 4px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 3px;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-width: Theme.hair;
+                border-radius: 2px;
+                border-color: !root.on ? Theme.line : root.fixed ? Theme.ink-3 : Theme.q-key;
+                background: !root.on ? transparent : root.fixed ? Theme.ink-3 : Theme.q-key;
+
+                Text {
+                    text: root.on ? "✓" : "";
+                    color: Theme.panel;
+                    font-size: 9px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 1px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.name;
+                color: root.on ? Theme.ink : Theme.ink-2;
+                font-size: 12px;
+                overflow: elide;
+            }
+            Text {
+                text: root.aside;
+                color: Theme.ink-3;
+                font-size: 11px;
+                overflow: elide;
+            }
+            Text {
+                text: root.roots;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11px;
+                overflow: elide;
+            }
+            if root.status != "": Text {
+                text: root.status;
+                color: Theme.ink-3;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        // Walk it again now. Above the row's own touch, which switches it.
+        if root.on: VerticalLayout {
+            alignment: center;
+            Push {
+                label: "↻";
+                enabled: !root.walking;
+                clicked => { root.refresh(); }
+            }
+        }
+    }
+}
+
+/// A filter in the query, and the `×` that takes it out.
+// One of the buttons over a term: round, a glyph, pressed on the way down so
+// the field keeps the keyboard.
+export component PairButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <int> kind: 0;
+    out property <bool> hovered <=> hit.has-hover;
+    callback pressed();
+    // Big enough to hit without aiming: a miss lands in the text and selects it.
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    background: on ? Theme.q-key
+        : hit.has-hover ? (root.kind == 2 ? Theme.q-bad : root.kind == 1 ? Theme.q-not : Theme.ink-3)
+        : Theme.line-soft;
+    Text {
+        text: root.label;
+        color: root.on || hit.has-hover ? Theme.panel : Theme.ink-2;
+        font-size: 12px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.pressed();
+            }
+        }
+    }
+}
+
+export component Head inherits Rectangle {
+    in property <string> text;
+    in property <string> sort;
+    in property <string> sorted-by;
+    in property <bool> sorted-down;
+    in property <int> total-rows;
+    in property <int> window-offset;
+    in property <length> w;
+    // Which column this is, for remembering what it was dragged to. Not `id`,
+    // which Slint keeps for element names.
+    in property <string> which;
+    callback dragged(string, length);
+    /// Double-clicked: that column goes back to deciding for itself.
+    callback reset(string);
+    // `right` alone collides with the alignment enum of the same name.
+    in property <bool> align-right;
+    /// The rightmost heading, which has no line after it.
+    in property <bool> last;
+    callback clicked(string);
+
+    // A width, not a stretch: every row and this heading share one number.
+    width: root.w;
+
+    // The grip is the edge, 7px: narrower is a target people miss, wider eats
+    // the heading beside it.
+    grip := TouchArea {
+        x: parent.width - 4px;
+        width: 7px;
+        height: parent.height;
+        mouse-cursor: col-resize;
+
+        moved => {
+            if (self.pressed) {
+                root.dragged(root.which, self.mouse-x - self.pressed-x);
+            }
+        }
+        double-clicked => { root.reset(root.which); }
+    }
+
+    // The line between two headings, always drawn, and in the gap rather than
+    // inside the heading. Never after the last: there is no column beyond it.
+    if !root.last: Rectangle {
+        x: parent.width + 3px;
+        // Thickens under the hand, before the button goes down.
+        y: grip.has-hover || grip.pressed ? 0px : 5px;
+        width: grip.has-hover || grip.pressed ? 2px : 1px;
+        height: parent.height - 2 * self.y;
+        background: grip.has-hover || grip.pressed ? Theme.focus : Theme.line;
+    }
+
+    TouchArea {
+        clicked => { root.clicked(root.sort); }
+        Text {
+            width: parent.width;
+            // In the text, not beside it: a separate glyph shifts the heading
+            // sideways when it becomes the sort.
+            text: root.sorted-by != root.sort ? root.text
+                : root.sorted-down ? root.text + " ▾" : root.text + " ▴";
+            color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
+            font-size: 11.5px;
+            font-weight: 500;
+            horizontal-alignment: root.align-right ? right : left;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A name, or a line out of a file, with the match picked out.
+export component Marked inherits Rectangle {
+    in property <string> pre;
+    in property <string> hit;
+    in property <string> post;
+    in property <brush> colour: Theme.ink;
+    // A name is drawn in the face's own type; a line out of a file in the
+    // monospace it was written in.
+    in property <bool> mono: true;
+    in property <length> size: 13px;
+    in property <int> weight: 400;
+    // What the whole name would take, for the tooltip's "does it fit".
+    preferred-width: before.preferred-width + label.preferred-width + after.preferred-width;
+    // **Placed by hand and clipped**: in a layout the marked part kept its
+    // own width and a name matched whole ran over the next columns. Each
+    // part gets what is left after the ones before it, so a long name is cut
+    // from its end, the mark included.
+    clip: true;
+    property <length> pre-w: min(before.preferred-width, root.width);
+    property <length> hit-w: min(label.preferred-width, root.width - self.pre-w);
+
+    before := Text {
+        x: 0px;
+        width: root.pre-w;
+        height: root.height;
+        text: root.pre;
+        color: root.colour;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    // Not a conditional element, so a slot is never rebuilt when a match
+    // appears; an empty mark is a transparent box of no width.
+    Rectangle {
+        x: root.pre-w;
+        width: root.hit-w;
+        height: label.preferred-height;
+        y: (root.height - self.height) / 2;
+        background: root.hit == "" ? transparent : Theme.mark;
+        border-radius: 2px;
+        clip: true;
+        label := Text {
+            width: parent.width;
+            text: root.hit;
+            color: Theme.mark-ink;
+            font-family: root.mono ? Fonts.mono : "";
+            font-size: root.size;
+            font-weight: root.weight;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    after := Text {
+        x: root.pre-w + root.hit-w;
+        width: max(0px, root.width - root.pre-w - root.hit-w);
+        height: root.height;
+        text: root.post;
+        color: root.colour;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+// One of the menu's drawings, by its `scour_ui::menu` name. The files are
+// `scour-ui`'s, which hands the same ones to the page. `@image-url` is
+// resolved at build time, so every name is spelled out.
+export component MenuIcon inherits Image {
+    in property <string> name;
+    source: root.name == "open" ? @image-url("../../../crates/scour-ui/icons/menu/open.svg")
+        : root.name == "apps" ? @image-url("../../../crates/scour-ui/icons/menu/apps.svg")
+        : root.name == "folder" ? @image-url("../../../crates/scour-ui/icons/menu/folder.svg")
+        : root.name == "up" ? @image-url("../../../crates/scour-ui/icons/menu/up.svg")
+        : root.name == "search" ? @image-url("../../../crates/scour-ui/icons/menu/search.svg")
+        : root.name == "kind" ? @image-url("../../../crates/scour-ui/icons/menu/kind.svg")
+        : root.name == "dupes" ? @image-url("../../../crates/scour-ui/icons/menu/dupes.svg")
+        : root.name == "weight" ? @image-url("../../../crates/scour-ui/icons/menu/weight.svg")
+        : root.name == "skip" ? @image-url("../../../crates/scour-ui/icons/menu/skip.svg")
+        : root.name == "path" ? @image-url("../../../crates/scour-ui/icons/menu/path.svg")
+        : root.name == "name" ? @image-url("../../../crates/scour-ui/icons/menu/name.svg")
+        : root.name == "copy" ? @image-url("../../../crates/scour-ui/icons/menu/copy.svg")
+        : root.name == "drag" ? @image-url("../../../crates/scour-ui/icons/menu/drag.svg")
+        : root.name == "send" ? @image-url("../../../crates/scour-ui/icons/menu/send.svg")
+        : root.name == "rename" ? @image-url("../../../crates/scour-ui/icons/menu/rename.svg")
+        : root.name == "trash" ? @image-url("../../../crates/scour-ui/icons/menu/trash.svg")
+        : root.name == "delete" ? @image-url("../../../crates/scour-ui/icons/menu/delete.svg")
+        : root.name == "info" ? @image-url("../../../crates/scour-ui/icons/menu/info.svg")
+        : root.name == "csv" ? @image-url("../../../crates/scour-ui/icons/menu/csv.svg")
+        : root.name == "clear" ? @image-url("../../../crates/scour-ui/icons/menu/clear.svg")
+        : root.name == "stack" ? @image-url("../../../crates/scour-ui/icons/menu/stack.svg")
+        : root.name == "chevron" ? @image-url("../../../crates/scour-ui/icons/menu/chevron.svg")
+        : @image-url("");
+}
+
+// A kind's drawing, by its `scour_ui` token. `@image-url` is resolved at
+// build time, so every token is spelled out.
+export component KindIcon inherits Image {
+    in property <string> ktoken;
+    source: root.ktoken == "folder" ? @image-url("icons/folder.svg")
+        : root.ktoken == "doc" ? @image-url("icons/doc.svg")
+        : root.ktoken == "code" ? @image-url("icons/code.svg")
+        : root.ktoken == "image" ? @image-url("icons/image.svg")
+        : root.ktoken == "video" ? @image-url("icons/video.svg")
+        : root.ktoken == "media" ? @image-url("icons/media.svg")
+        : root.ktoken == "audio" ? @image-url("icons/audio.svg")
+        : root.ktoken == "archive" ? @image-url("icons/archive.svg")
+        : root.ktoken == "exec" ? @image-url("icons/exec.svg")
+        : root.ktoken == "data" ? @image-url("icons/data.svg")
+        : root.ktoken == "config" ? @image-url("icons/config.svg")
+        : root.ktoken == "font" ? @image-url("icons/font.svg")
+        : root.ktoken == "build" ? @image-url("icons/build.svg")
+        : @image-url("icons/file.svg");
+}
+
+// A file's icon is its extension, written in the kind's colour on a tag:
+// `PDF` and `DOCX` are told apart at a glance, and the type needs no column.
+// A folder, or a name with no extension, keeps the kind's drawing.
+export component FileBadge inherits Rectangle {
+    in property <string> ktoken;
+    in property <brush> tint;
+    in property <string> ext;
+    width: 34px;
+    height: 18px;
+
+    if root.ext == "": KindIcon {
+        x: 9px;
+        y: 1px;
+        width: 16px;
+        height: 16px;
+        ktoken: root.ktoken;
+        colorize: root.tint;
+    }
+    if root.ext != "": Rectangle {
+        width: min(root.width, max(24px, label.preferred-width + 8px));
+        x: 0px;
+        border-radius: 4px;
+        background: root.tint.with-alpha(Theme.dark ? 0.16 : 0.10);
+        border-width: Theme.hair;
+        border-color: root.tint.with-alpha(0.45);
+        label := Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.ext;
+            color: root.tint;
+            font-size: root.ext.character-count > 4 ? 9px : 10px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// One section in the settings' side list.
+export component NavRow inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> on;
+    in property <string> badge;
+    callback clicked();
+    height: 34px;
+    border-radius: 6px;
+    background: root.on ? (Theme.dark ? Theme.line : Theme.hover)
+        : nav-hit.has-hover ? (Theme.dark ? Theme.line-soft : Theme.hover) : transparent;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 16px;
+                height: 16px;
+                source: root.icon;
+                colorize: root.on || nav-hit.has-hover ? Theme.ink : Theme.ink-2;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 13.5px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.badge != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                width: max(18px, badge-text.preferred-width + 10px);
+                border-radius: 9px;
+                background: Theme.focus;
+                badge-text := Text {
+                    text: root.badge;
+                    color: Theme.ground;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    nav-hit := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A choice of a few, side by side: the one in force is raised.
+export component Choice inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> values;
+    in property <string> value;
+    callback picked(string);
+    height: 32px;
+    border-radius: 7px;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    background: Theme.dark ? Theme.ground : Theme.panel-2;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for l[i] in root.labels: Rectangle {
+            border-radius: 5px;
+            background: root.values[i] == root.value ? (Theme.dark ? Theme.line : Theme.panel)
+                : seg-hit.has-hover ? Theme.hover : transparent;
+            min-width: seg-label.preferred-width + 22px;
+            seg-label := Text {
+                text: l;
+                color: root.values[i] == root.value || seg-hit.has-hover ? Theme.ink : Theme.ink-2;
+                font-size: 12.5px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            seg-hit := TouchArea {
+                clicked => { root.picked(root.values[i]); }
+            }
+        }
+    }
+}
+
+// One setting: what it is and a line on what it does, the control at the right.
+export component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    min-height: 54px;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 14px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: root.label;
+                color: Theme.ink;
+                font-size: 13.5px;
+            }
+            if root.note != "": Text {
+                text: root.note;
+                color: Theme.ink-3;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+// A group of settings on a raised card, a hairline between rows.
+export component Card inherits Rectangle {
+    background: Theme.dark ? Theme.panel : Theme.panel;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    border-radius: 8px;
+    VerticalLayout {
+        padding: 2px;
+        @children
+    }
+}
+
+// Small capitals over a group of settings.
+export component SectionHead inherits Text {
+    color: Theme.ink-3;
+    font-size: 11px;
+    height: 26px;
+    vertical-alignment: bottom;
+}
+
+// A field somebody types into. Slint matches its editing keys in lower case
+// only: with Caps Lock on, Ctrl+V arrives as `V` and pasted nothing. The four
+// that matter are answered here for either case, and a paste goes through
+// `Clip` rather than Slint's own clipboard.
+export component Field inherits TextInput {
+    function paste-here() {
+        let r = Clip.paste-into(self.text, self.anchor-position-byte-offset,
+            self.cursor-position-byte-offset, self.single-line);
+        if (!r.ok) {
+            self.paste();
+            return;
+        }
+        self.text = r.text;
+        self.set-selection-offsets(r.caret, r.caret);
+        self.edited();
+    }
+    key-pressed(e) => {
+        if (e.modifiers.control && !e.modifiers.shift) {
+            if (e.text == "v" || e.text == "V") { self.paste-here(); return accept; }
+            if (e.text == "C") { self.copy(); return accept; }
+            if (e.text == "X") { self.cut(); return accept; }
+            if (e.text == "A") { self.select-all(); return accept; }
+        }
+        return reject;
+    }
+}
+
+// A month back or forward in the time lens's calendar.
+export component CalArrow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: arrow-hit.has-hover ? Theme.hover : transparent;
+    Text {
+        text: root.label;
+        color: arrow-hit.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    arrow-hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A day in the calendar. Lit between the first day picked and the one under
+// the pointer, or the last picked; the two ends filled.
+export component CalCell inherits Rectangle {
+    in property <CalDay> day;
+    in property <int> from;
+    in property <int> to;
+    in property <int> hover;
+    callback entered(int);
+    callback left(int);
+    callback picked(int);
+    property <int> other: root.to >= 0 ? root.to : root.hover >= 0 ? root.hover : root.from;
+    property <int> lo: min(root.from, root.other);
+    property <int> hi: max(root.from, root.other);
+    property <bool> picking: root.from >= 0;
+    property <bool> end: root.picking && (root.day.n == root.lo || root.day.n == root.hi);
+    property <bool> inside: root.picking && root.day.n > root.lo && root.day.n < root.hi;
+    width: 28px;
+    height: 26px;
+    // The band between the ends, square so the days join into one stretch.
+    Rectangle {
+        y: 2px;
+        height: parent.height - 4px;
+        background: root.inside ? Theme.cap : transparent;
+    }
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 6px;
+        background: root.end ? Theme.q-key : cell-hit.has-hover ? Theme.hover : transparent;
+        border-width: root.day.today && !root.end ? 1px : 0px;
+        border-color: Theme.q-key;
+        Text {
+            text: root.day.label;
+            color: root.end ? Theme.panel
+                : !root.day.here || root.day.future ? Theme.ink-3
+                : root.day.today ? Theme.q-key : Theme.ink;
+            opacity: root.day.here ? 1 : 0.55;
+            font-size: 11.5px;
+            font-weight: root.day.today || root.end ? 700 : 400;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    cell-hit := TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => {
+            if (self.has-hover) {
+                root.entered(root.day.n);
+            } else {
+                root.left(root.day.n);
+            }
+        }
+        clicked => { root.picked(root.day.n); }
+    }
+}

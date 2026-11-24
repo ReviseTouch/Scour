@@ -1,0 +1,1342 @@
+// The settings page: its sections on the left, the chosen one on the right.
+// Everything it shows and every change it makes passes through its own
+// properties and callbacks, bound to the window's in main.slint.
+
+import { Theme, Fonts } from "theme.slint";
+import { DragTray } from "tray.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+
+/// The settings page, over the whole window.
+export component SettingsPage inherits Rectangle {
+    in-out property <string> panel;
+    in property <string> settings-title;
+    in property <[string]> section-labels;
+    in-out property <string> settings-section;
+    callback settings-picked(string);
+    in property <string> disk-question;
+    in-out property <string> armed-face;
+    in property <string> restart-as;
+    in property <string> face-tui;
+    in property <string> face-web;
+    in property <string> word-restart;
+    callback face-picked(string);
+    in property <string> settings-foot;
+    in property <int> section-at;
+    in property <[string]> section-leads;
+    in property <bool> service-offered;
+    in property <string> service-state;
+    in property <string> service-note;
+    in property <string> service-push;
+    in property <bool> service-busy;
+    callback service-switch();
+    in property <bool> service-active;
+    in property <string> set-autostart;
+    in property <string> set-autostart-note;
+    in property <[string]> grid-labels;
+    in property <bool> autostart-on;
+    callback autostart-picked(bool);
+    in property <string> set-language;
+    in property <string> set-language-note;
+    in property <[string]> lang-labels;
+    in property <[string]> lang-tokens;
+    in property <string> language-choice;
+    callback language-picked(string);
+    in property <string> set-face;
+    in property <string> set-face-note;
+    in property <[string]> face-labels;
+    in property <string> face-default;
+    callback face-default-picked(string);
+    in property <string> set-theme;
+    in property <string> set-theme-note;
+    in property <[string]> theme-labels;
+    callback theme-picked(string);
+    in property <string> set-zoom;
+    in property <string> set-zoom-note;
+    in property <[string]> zoom-labels;
+    in property <string> zoom-choice;
+    callback zoom-picked(string);
+    in property <string> set-switch;
+    in property <string> face-window;
+    in property <string> face-window-aside;
+    in property <string> face-tui-note;
+    in property <bool> face-tui-ready;
+    in property <string> face-tui-aside;
+    in property <string> face-web-note;
+    in property <string> set-layout;
+    in property <[string]> layout-labels;
+    in-out property <string> view-mode;
+    callback view-clicked(string);
+    in property <string> set-columns;
+    in property <string> set-columns-note;
+    in property <string> set-columns-push;
+    callback columns-clicked(length, length);
+    in property <string> set-preview;
+    in property <string> set-preview-note;
+    in property <bool> preview-on;
+    callback peek-toggled();
+    in property <string> set-refresh;
+    in property <string> set-refresh-note;
+    in property <[string]> refresh-labels;
+    in property <string> refresh-choice;
+    callback refresh-picked(string);
+    in property <string> set-system-icons;
+    in property <string> set-system-icons-note;
+    in property <bool> system-icons;
+    callback system-icons-picked(bool);
+    in property <string> set-rail;
+    in property <string> set-rail-note;
+    in-out property <bool> rail-shown;
+    callback panes-changed();
+    in property <string> set-ribbon;
+    in property <string> set-ribbon-note;
+    in-out property <bool> ribbon-shown;
+    in property <string> set-grid;
+    in property <string> set-grid-note;
+    in property <bool> grid-lines;
+    callback grid-picked(bool);
+    in property <string> set-grid-columns;
+    in property <string> set-grid-columns-note;
+    in property <bool> grid-columns;
+    callback grid-columns-picked(bool);
+    in property <string> set-accents;
+    in property <string> set-accents-note;
+    in property <bool> accents-ignored;
+    callback accents-picked(bool);
+    in property <string> set-typos;
+    in property <string> set-typos-note;
+    in property <[string]> typos-labels;
+    in property <string> typos-choice;
+    callback typos-picked(string);
+    in property <string> set-typos-rule;
+    in property <string> set-typos-rule-note;
+    in property <[string]> typos-rule-labels;
+    in property <bool> typos-strict;
+    callback typos-strict-picked(bool);
+    in property <string> set-field-words;
+    in property <string> set-field-words-note;
+    in property <[string]> field-words-labels;
+    in property <bool> field-words;
+    callback field-words-picked(bool);
+    in property <string> set-tabs;
+    in property <string> set-tabs-note;
+    in property <bool> tabs-on;
+    callback tabs-picked(bool);
+    in property <string> set-search-hint;
+    in property <string> disk-later;
+    callback disk-answered(string);
+    in property <string> disk-never;
+    in property <string> disk-yes;
+    in property <string> disks-note;
+    in property <[Disk]> disks;
+    callback disk-toggled(string, bool);
+    callback rescan-root(string);
+    in property <string> disks-none;
+    in property <string> disks-after;
+    in property <string> set-later;
+    in property <string> set-removable;
+    in property <string> set-removable-note;
+    in property <[string]> removable-labels;
+    in property <string> removable-choice;
+    callback policy-picked(string, string);
+    in property <string> set-network;
+    in property <string> set-network-note;
+    in property <[string]> network-labels;
+    in property <string> network-choice;
+    in property <string> set-folders;
+    in property <string> set-folders-note;
+    in property <[FolderRow]> folder-rows;
+    in property <[string]> folder-on-labels;
+    callback folder-switched(string, bool);
+    in property <[string]> folder-watch-labels;
+    callback folder-watched(string, bool);
+    callback folder-dropped(string);
+    in-out property <string> folder-typed;
+    callback folder-added(string);
+    in property <string> folder-hint;
+    in property <string> folder-add;
+    in property <string> folder-error;
+    in property <string> set-every;
+    in property <string> set-every-note;
+    in property <[string]> every-labels;
+    in property <string> every-choice;
+    in property <string> rules-added-title;
+    in property <string> rules-added-note;
+    in property <[Rule]> rules-added;
+    in property <string> rules-off-word;
+    callback rule-toggled(string);
+    callback rule-dropped(string, string);
+    in-out property <string> rule-kept;
+    callback rule-added(string);
+    in property <string> rules-hint;
+    in property <string> rules-add;
+    in property <string> rules-config-title;
+    in property <string> rules-config-note;
+    in property <[Rule]> rules-config;
+    in property <string> rules-builtin-title;
+    in property <string> rules-builtin-note;
+    in property <[Rule]> rules-builtin;
+    in property <string> key-title;
+    in property <bool> key-bound;
+    in property <string> key-state;
+    in property <string> key-command;
+    in property <string> key-copy;
+    callback key-command-copied();
+    in property <bool> key-can-bind;
+    in-out property <string> key-typed;
+    in-out property <string> key-kept;
+    callback key-typed-changed(string);
+    callback key-bind-pressed();
+    in property <string> key-hint;
+    in property <string> key-bind;
+    in property <string> key-remove;
+    callback key-remove-pressed();
+    in property <string> key-error;
+    in property <string> key-preview;
+    in property <string> key-later;
+    in property <string> set-help;
+    in property <string> help-body;
+    in property <string> set-memory;
+    in property <string> set-memory-note;
+    in property <[string]> memory-labels;
+    in property <string> memory-choice;
+    callback perf-picked(/* kind */ string, /* value */ string);
+    in property <string> set-narrow;
+    in property <string> set-narrow-note;
+    in property <bool> narrow-on;
+    in property <string> set-threads;
+    in property <string> set-threads-note;
+    in property <[string]> threads-labels;
+    in property <string> threads-choice;
+    in property <string> set-fresh;
+    in property <string> set-fresh-note;
+    in property <[string]> fresh-labels;
+    in property <string> fresh-choice;
+    in property <string> set-index-where;
+    in property <string> index-dir;
+    in property <string> index-facts;
+    in property <string> set-index-open;
+    callback index-open();
+    in property <string> set-index-tidy;
+    in property <string> set-index-tidy-note;
+    in property <string> set-index-tidy-push;
+    callback index-tidy();
+    in property <string> set-index-reset;
+    in property <string> set-index-reset-sure;
+    in property <string> set-index-reset-note;
+    in property <string> set-index-reset-push;
+    in property <string> set-index-cancel;
+    in property <string> set-index-reset-yes;
+    callback index-reset();
+    in property <string> index-said;
+    in property <string> about-body;
+
+    background: #00000066;
+
+    TouchArea {
+        clicked => { root.panel = ""; }
+    }
+
+    Rectangle {
+        width: min(880px, root.width - 40px);
+        height: min(640px, root.height - 40px);
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        background: Theme.dark ? Theme.panel-2 : Theme.panel;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+        border-radius: 10px;
+        clip: true;
+        drop-shadow-blur: 48px;
+        drop-shadow-color: Theme.dark ? #000000a0 : #00000033;
+        drop-shadow-offset-y: 18px;
+
+        // Presses inside are the page's, not the scrim's.
+        TouchArea { }
+
+        HorizontalLayout {
+            Rectangle {
+                width: 210px;
+                background: Theme.dark ? Theme.panel : Theme.panel-2;
+                VerticalLayout {
+                    padding-top: 18px;
+                    padding-bottom: 16px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 2px;
+                    Text {
+                        text: root.settings-title;
+                        color: Theme.ink;
+                        font-size: 16px;
+                        font-weight: 600;
+                        height: 34px;
+                        x: 10px;
+                    }
+                    NavRow {
+                        label: root.section-labels[0];
+                        icon: @image-url("icons/tools/settings-general.svg");
+                        on: root.settings-section == "general";
+                        clicked => { root.settings-picked("general"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[1];
+                        icon: @image-url("icons/tools/search.svg");
+                        on: root.settings-section == "search";
+                        clicked => { root.settings-picked("search"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[2];
+                        icon: @image-url("icons/tools/detail.svg");
+                        on: root.settings-section == "view";
+                        clicked => { root.settings-picked("view"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[3];
+                        icon: @image-url("icons/tools/disks.svg");
+                        on: root.settings-section == "disks";
+                        badge: root.disk-question != "" ? "1" : "";
+                        clicked => { root.settings-picked("disks"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[4];
+                        icon: @image-url("icons/tools/rules.svg");
+                        on: root.settings-section == "rules";
+                        clicked => { root.settings-picked("rules"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[5];
+                        icon: @image-url("icons/tools/settings-keys.svg");
+                        on: root.settings-section == "keys";
+                        clicked => { root.settings-picked("keys"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[6];
+                        icon: @image-url("icons/tools/index.svg");
+                        on: root.settings-section == "index";
+                        clicked => { root.settings-picked("index"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[7];
+                        icon: @image-url("icons/tools/settings-performance.svg");
+                        on: root.settings-section == "performance";
+                        clicked => { root.settings-picked("performance"); }
+                    }
+                    NavRow {
+                        label: root.section-labels[8];
+                        icon: @image-url("icons/tools/settings-about.svg");
+                        on: root.settings-section == "about";
+                        clicked => { root.settings-picked("about"); }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    // A face chosen in General is started from here.
+                    if root.armed-face != "": VerticalLayout {
+                        spacing: 6px;
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-bottom: 4px;
+                        Text {
+                            text: root.restart-as + " " + (root.armed-face == "tui" ? root.face-tui : root.face-web);
+                            color: Theme.ink-2;
+                            font-size: 11.5px;
+                            wrap: word-wrap;
+                        }
+                        Push {
+                            label: root.word-restart;
+                            asking: true;
+                            clicked => { root.face-picked(root.armed-face); }
+                        }
+                    }
+                    Text {
+                        visible: root.armed-face == "";
+                        text: root.settings-foot;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        wrap: word-wrap;
+                        x: 10px;
+                        width: parent.width - 20px;
+                    }
+                }
+            }
+            Rectangle {
+                width: Theme.hair;
+                background: Theme.line;
+            }
+
+            VerticalLayout {
+                padding-top: 20px;
+                padding-left: 26px;
+                padding-right: 26px;
+                padding-bottom: 16px;
+                spacing: 4px;
+
+                Text {
+                    text: root.section-labels[root.section-at];
+                    color: Theme.ink;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.section-leads[
+                        root.section-at];
+                    color: Theme.ink-2;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 8px; }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    viewport-height: page-body.preferred-height;
+                    page-body := VerticalLayout {
+                        spacing: 6px;
+                        padding-right: 8px;
+                        alignment: start;
+
+                        if root.settings-section == "general": VerticalLayout {
+                            spacing: 6px;
+                            // How Scour runs on Windows: first, since it decides
+                            // how fast the index is and whether it stays current.
+                            if root.service-offered: Card {
+                                SettingRow {
+                                    label: root.service-state;
+                                    note: root.service-note;
+                                    Push {
+                                        label: root.service-push;
+                                        asking: root.service-busy;
+                                        clicked => {
+                                            if (!root.service-busy) {
+                                                root.service-switch();
+                                            }
+                                        }
+                                    }
+                                }
+                                // A service starts with Windows anyway.
+                                if !root.service-active: Rectangle { height: Theme.hair; background: Theme.line; }
+                                if !root.service-active: SettingRow {
+                                    label: root.set-autostart;
+                                    note: root.set-autostart-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.autostart-on ? "on" : "off";
+                                        picked(v) => { root.autostart-picked(v == "on"); }
+                                    }
+                                }
+                            }
+                            Card {
+                                SettingRow {
+                                    label: root.set-language;
+                                    note: root.set-language-note;
+                                    Choice {
+                                        labels: root.lang-labels;
+                                        values: root.lang-tokens;
+                                        value: root.language-choice;
+                                        picked(v) => { root.language-picked(v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-face;
+                                    note: root.set-face-note;
+                                    Choice {
+                                        labels: root.face-labels;
+                                        values: ["window", "browser", "tui"];
+                                        value: root.face-default;
+                                        picked(v) => {
+                                            root.face-default-picked(v);
+                                            // Another face chosen: the foot offers to start it now.
+                                            root.armed-face = v == "window" ? "" : v;
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-theme;
+                                    note: root.set-theme-note;
+                                    Choice {
+                                        labels: root.theme-labels;
+                                        values: ["", "light", "dark"];
+                                        value: Theme.chosen;
+                                        picked(v) => { root.theme-picked(v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-zoom;
+                                    note: root.set-zoom-note;
+                                    Choice {
+                                        labels: root.zoom-labels;
+                                        values: ["0.9", "1", "1.1", "1.25", "1.5"];
+                                        value: root.zoom-choice;
+                                        picked(v) => { root.zoom-picked(v); }
+                                    }
+                                }
+                            }
+                            SectionHead { text: root.set-switch; }
+        VerticalLayout {
+            spacing: 2px;
+            alignment: start;
+
+            FaceRow {
+                label: root.face-window;
+                aside: root.face-window-aside;
+                here: true;
+                ready: false;
+            }
+            FaceRow {
+                label: root.face-tui;
+                note: root.face-tui-note;
+                aside: root.face-tui-ready ? "" : root.face-tui-aside;
+                ready: root.face-tui-ready;
+                armed: root.armed-face == "tui";
+                picked => { root.armed-face = "tui"; }
+                confirmed => { root.face-picked("tui"); }
+            }
+            FaceRow {
+                label: root.face-web;
+                note: root.face-web-note;
+                armed: root.armed-face == "browser";
+                picked => { root.armed-face = "browser"; }
+                confirmed => { root.face-picked("browser"); }
+            }
+
+        }
+    
+                        }
+
+                        if root.settings-section == "view": VerticalLayout {
+                            spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-layout;
+                                    Choice {
+                                        labels: root.layout-labels;
+                                        values: ["detail", "icons", "large"];
+                                        value: root.view-mode;
+                                        picked(v) => { root.view-clicked(v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-columns;
+                                    note: root.set-columns-note;
+                                    cols-push := Push {
+                                        label: root.set-columns-push;
+                                        clicked => {
+                                            root.columns-clicked(
+                                                self.absolute-position.x,
+                                                self.absolute-position.y + self.height + 4px);
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-preview;
+                                    note: root.set-preview-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.preview-on ? "on" : "off";
+                                        picked(v) => {
+                                            if ((v == "on") != root.preview-on) {
+                                                root.peek-toggled();
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-refresh;
+                                    note: root.set-refresh-note;
+                                    Choice {
+                                        labels: root.refresh-labels;
+                                        values: ["1", "2", "5", "15", "60"];
+                                        value: root.refresh-choice;
+                                        picked(v) => { root.refresh-picked(v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-system-icons;
+                                    note: root.set-system-icons-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.system-icons ? "on" : "off";
+                                        picked(v) => { root.system-icons-picked(v == "on"); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-rail;
+                                    note: root.set-rail-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.rail-shown ? "on" : "off";
+                                        picked(v) => {
+                                            root.rail-shown = v == "on";
+                                            root.panes-changed();
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-ribbon;
+                                    note: root.set-ribbon-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.ribbon-shown ? "on" : "off";
+                                        picked(v) => {
+                                            root.ribbon-shown = v == "on";
+                                            root.panes-changed();
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-grid;
+                                    note: root.set-grid-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.grid-lines ? "on" : "off";
+                                        picked(v) => { root.grid-picked(v == "on"); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-grid-columns;
+                                    note: root.set-grid-columns-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.grid-columns ? "on" : "off";
+                                        picked(v) => { root.grid-columns-picked(v == "on"); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.settings-section == "search": VerticalLayout {
+                            spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-accents;
+                                    note: root.set-accents-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.accents-ignored ? "on" : "off";
+                                        picked(v) => { root.accents-picked(v == "on"); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-typos;
+                                    note: root.set-typos-note;
+                                    Choice {
+                                        labels: root.typos-labels;
+                                        values: ["off", "", "always"];
+                                        value: root.typos-choice;
+                                        picked(v) => { root.typos-picked(v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-typos-rule;
+                                    note: root.set-typos-rule-note;
+                                    Choice {
+                                        labels: root.typos-rule-labels;
+                                        values: ["word", "strict"];
+                                        value: root.typos-strict ? "strict" : "word";
+                                        picked(v) => { root.typos-strict-picked(v == "strict"); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-field-words;
+                                    note: root.set-field-words-note;
+                                    Choice {
+                                        labels: root.field-words-labels;
+                                        values: ["icons", "words"];
+                                        value: root.field-words ? "words" : "icons";
+                                        picked(v) => { root.field-words-picked(v == "words"); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-tabs;
+                                    note: root.set-tabs-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.tabs-on ? "on" : "off";
+                                        picked(v) => { root.tabs-picked(v == "on"); }
+                                    }
+                                }
+                            }
+                            Rectangle { height: 6px; }
+                            Text {
+                                text: root.set-search-hint;
+                                color: Theme.ink-3;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        if root.settings-section == "disks": VerticalLayout {
+                            spacing: 6px;
+                            if root.disk-question != "": Rectangle {
+                                border-radius: 8px;
+                                border-width: Theme.hair;
+                                border-color: Theme.focus;
+                                background: Theme.focus.transparentize(0.9);
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: root.disk-question;
+                                        color: Theme.ink;
+                                        font-size: 12.5px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        wrap: word-wrap;
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Push { label: root.disk-later; clicked => { root.disk-answered("later"); } }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Push { label: root.disk-never; clicked => { root.disk-answered("leave"); } }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Push { label: root.disk-yes; asking: true; clicked => { root.disk-answered("index"); } }
+                                    }
+                                }
+                            }
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+
+            Note { text: root.disks-note; }
+            for d[i] in root.disks: DiskRow {
+                name: d.name;
+                aside: d.aside;
+                roots: d.roots;
+                on: d.on;
+                fixed: d.fixed;
+                status: d.status;
+                walking: d.walking;
+                toggled => { root.disk-toggled(d.id, !d.on); }
+                refresh => { root.rescan-root(d.root); }
+            }
+            if root.disks.length == 0: Note { text: root.disks-none; }
+            Note { text: root.disks-after; }
+        }
+    
+                            SectionHead { text: root.set-later; }
+                            Card {
+                                SettingRow {
+                                    label: root.set-removable;
+                                    note: root.set-removable-note;
+                                    Choice {
+                                        labels: root.removable-labels;
+                                        values: ["", "always", "never"];
+                                        value: root.removable-choice;
+                                        picked(v) => { root.policy-picked("removable", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-network;
+                                    note: root.set-network-note;
+                                    Choice {
+                                        labels: root.network-labels;
+                                        values: ["", "never"];
+                                        value: root.network-choice;
+                                        picked(v) => { root.policy-picked("network", v); }
+                                    }
+                                }
+                            }
+                            SectionHead { text: root.set-folders; }
+                            Text {
+                                text: root.set-folders-note;
+                                color: Theme.ink-3;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            for f in root.folder-rows: Card {
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 10px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        horizontal-stretch: 1;
+                                        spacing: 3px;
+                                        Text {
+                                            text: f.path;
+                                            color: f.on ? Theme.ink : Theme.ink-3;
+                                            font-family: Fonts.mono;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                        }
+                                        // How its last walk went; a share nobody may
+                                        // read says so here instead of staying empty.
+                                        Text {
+                                            text: f.status;
+                                            color: f.problem ? Theme.q-not : Theme.ink-3;
+                                            font-size: 11.5px;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Choice {
+                                            height: 28px;
+                                            labels: root.folder-on-labels;
+                                            values: ["on", "off"];
+                                            value: f.on ? "on" : "off";
+                                            picked(v) => { root.folder-switched(f.path, v == "on"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Choice {
+                                            height: 28px;
+                                            labels: root.folder-watch-labels;
+                                            values: ["on", "off"];
+                                            value: f.watched ? "on" : "off";
+                                            picked(v) => { root.folder-watched(f.path, v == "on"); }
+                                        }
+                                    }
+                                    if f.walkable: VerticalLayout {
+                                        alignment: center;
+                                        Push {
+                                            label: "↻";
+                                            enabled: !f.walking;
+                                            clicked => { root.rescan-root(f.path); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Push { label: "×"; clicked => { root.folder-dropped(f.path); } }
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                height: 28px;
+                                Rectangle {
+                                    border-width: Theme.hair;
+                                    border-radius: 4px;
+                                    border-color: Theme.line;
+                                    background: Theme.panel;
+                                    clip: true;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        folder-field := Field {
+                                            text <=> root.folder-typed;
+                                            color: Theme.ink;
+                                            font-family: Fonts.mono;
+                                            font-size: 12px;
+                                            single-line: true;
+                                            vertical-alignment: center;
+                                            selection-background-color: Theme.selection;
+                                            selection-foreground-color: Theme.ink;
+                                            edited => {
+                                                if (self.text.character-count > 400) {
+                                                    self.text = "";
+                                                }
+                                            }
+                                            accepted => { root.folder-added(self.text); }
+                                        }
+                                    }
+                                    if folder-field.text == "": Text {
+                                        text: root.folder-hint;
+                                        color: Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        x: 8px;
+                                        width: parent.width - 16px;
+                                        height: parent.height;
+                                    }
+                                }
+                                Push {
+                                    label: root.folder-add;
+                                    clicked => { root.folder-added(root.folder-typed); }
+                                }
+                            }
+                            if root.folder-error != "": Text {
+                                text: root.folder-error;
+                                color: Theme.q-not;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            // How often a folder that reports no changes is
+                            // walked again: a share whose server sends none,
+                            // one switched to "walk only".
+                            Card {
+                                SettingRow {
+                                    label: root.set-every;
+                                    note: root.set-every-note;
+                                    Choice {
+                                        labels: root.every-labels;
+                                        values: ["1", "5", "10", "30", "60"];
+                                        value: root.every-choice;
+                                        picked(v) => { root.policy-picked("every", v); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.settings-section == "rules": VerticalLayout {
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+
+            // Three groups: what somebody added here, what a file says, and
+            // what the program skips. Only the first can be deleted.
+            Text {
+                text: root.rules-added-title;
+                color: Theme.ink;
+                font-size: 11px;
+                font-weight: 650;
+            }
+            Text {
+                text: root.rules-added-note;
+                color: Theme.ink-3;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            for r[i] in root.rules-added: RuleRow {
+                value: r.value;
+                off: r.off;
+                word: root.rules-off-word;
+                removable: true;
+                toggled => {
+                    root.rule-toggled(r.id);
+                }
+                dropped => {
+                    root.rule-dropped(r.kind, r.value);
+                }
+            }
+
+            // A rule is added as a name unless it starts with a slash, in
+            // which case it is a path. Nothing subtler is guessed at.
+            Rectangle { height: 4px; }
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 26px;
+
+                Rectangle {
+                    border-width: Theme.hair;
+                    border-radius: 3px;
+                    border-color: Theme.line;
+                    background: Theme.panel;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        fresh := Field {
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            single-line: true;
+                            vertical-alignment: center;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                            edited => {
+                                if (self.text.character-count > 400) {
+                                    self.text = root.rule-kept;
+                                } else {
+                                    root.rule-kept = self.text;
+                                }
+                            }
+                            accepted => {
+                                root.rule-added(self.text);
+                                self.text = "";
+                                root.rule-kept = "";
+                            }
+                        }
+                    }
+
+                    // Under the field, not beside it: a layout owns its
+                    // children's positions, and this starts where the text does.
+                    if fresh.text == "": Text {
+                        text: root.rules-hint;
+                        color: Theme.ink-3;
+                        font-family: Fonts.mono;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        x: 8px;
+                        height: parent.height;
+                    }
+                }
+
+                Push {
+                    label: root.rules-add;
+                    clicked => {
+                        root.rule-added(fresh.text);
+                        fresh.text = "";
+                    }
+                }
+            }
+
+            Rectangle { height: 10px; }
+
+            Text {
+                text: root.rules-config-title;
+                color: Theme.ink;
+                font-size: 11px;
+                font-weight: 650;
+            }
+            Text {
+                text: root.rules-config-note;
+                color: Theme.ink-3;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            for r[i] in root.rules-config: RuleRow {
+                value: r.value;
+                off: r.off;
+                word: root.rules-off-word;
+                toggled => {
+                    root.rule-toggled(r.id);
+                }
+            }
+
+            Rectangle { height: 10px; }
+
+            Text {
+                text: root.rules-builtin-title;
+                color: Theme.ink;
+                font-size: 11px;
+                font-weight: 650;
+            }
+            Text {
+                text: root.rules-builtin-note;
+                color: Theme.ink-3;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            for r[i] in root.rules-builtin: RuleRow {
+                value: r.value;
+                off: r.off;
+                word: root.rules-off-word;
+                toggled => {
+                    root.rule-toggled(r.id);
+                }
+            }
+        }
+    
+                        }
+
+                        if root.settings-section == "keys": VerticalLayout {
+                            spacing: 6px;
+                            SectionHead { text: root.key-title; }
+                            Card {
+                                VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 6px;
+            if root.key-bound: Text {
+                text: root.key-state;
+                color: Theme.q-key;
+                font-family: Fonts.mono;
+                font-size: 11.5px;
+            }
+            if !root.key-bound: Text {
+                text: root.key-state;
+                color: Theme.ink-3;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            // Nothing here can write the binding, so the command is handed
+            // over instead: one line, selectable, and a button that copies.
+            if root.key-command != "": HorizontalLayout {
+                spacing: 6px;
+                height: 26px;
+
+                Rectangle {
+                    border-width: Theme.hair;
+                    border-radius: 3px;
+                    border-color: Theme.line;
+                    background: Theme.panel;
+                    clip: true;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        TextInput {
+                            text: root.key-command;
+                            read-only: true;
+                            color: Theme.ink-2;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            single-line: true;
+                            vertical-alignment: center;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                        }
+                    }
+                }
+
+                Push {
+                    label: root.key-copy;
+                    clicked => { root.key-command-copied(); }
+                }
+            }
+
+            if root.key-can-bind: HorizontalLayout {
+                spacing: 6px;
+                height: 26px;
+
+                Rectangle {
+                    border-width: Theme.hair;
+                    border-radius: 3px;
+                    border-color: Theme.line;
+                    background: Theme.panel;
+                    // A combination is short, but the placeholder is a
+                    // sentence and a layout does not clip its children.
+                    clip: true;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        combo := Field {
+                            text <=> root.key-typed;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            single-line: true;
+                            vertical-alignment: center;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                            // Capped like the rule field, and for the same
+                            // reason: the software renderer places glyphs
+                            // at `i16`. A combination is a dozen characters.
+                            edited => {
+                                if (self.text.character-count > 64) {
+                                    self.text = root.key-kept;
+                                } else {
+                                    root.key-kept = self.text;
+                                    root.key-typed-changed(self.text);
+                                }
+                            }
+                            accepted => { root.key-bind-pressed(); }
+                        }
+                    }
+
+                    if combo.text == "": Text {
+                        text: root.key-hint;
+                        color: Theme.ink-3;
+                        font-family: Fonts.mono;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        x: 8px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                    }
+                }
+
+                Push {
+                    label: root.key-bind;
+                    clicked => { root.key-bind-pressed(); }
+                }
+
+                if root.key-bound: Push {
+                    label: root.key-remove;
+                    clicked => { root.key-remove-pressed(); }
+                }
+            }
+
+            if root.key-error != "": Text {
+                text: root.key-error;
+                color: Theme.q-not;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            if root.key-preview != "": Text {
+                text: "→ " + root.key-preview;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11.5px;
+            }
+
+            if root.key-later != "": Text {
+                text: root.key-later;
+                color: Theme.ink-3;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+                                }
+                            }
+                            SectionHead { text: root.set-help; }
+        Text {
+            text: root.help-body;
+            color: Theme.ink-2;
+            font-size: 12.5px;
+            wrap: word-wrap;
+            vertical-alignment: top;
+        }
+    
+                        }
+
+                        if root.settings-section == "performance": VerticalLayout {
+                            spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-memory;
+                                    note: root.set-memory-note;
+                                    Choice {
+                                        labels: root.memory-labels;
+                                        values: ["", "now", "1m", "5m"];
+                                        value: root.memory-choice;
+                                        picked(v) => { root.perf-picked("memory", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-narrow;
+                                    note: root.set-narrow-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.narrow-on ? "on" : "off";
+                                        picked(v) => { root.perf-picked("narrow", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-threads;
+                                    note: root.set-threads-note;
+                                    Choice {
+                                        labels: root.threads-labels;
+                                        values: ["0", "1", "2", "4", "8"];
+                                        value: root.threads-choice;
+                                        picked(v) => { root.perf-picked("threads", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-fresh;
+                                    note: root.set-fresh-note;
+                                    Choice {
+                                        labels: root.fresh-labels;
+                                        values: ["0", "1", "5", "15", "60"];
+                                        value: root.fresh-choice;
+                                        picked(v) => { root.perf-picked("fresh", v); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.settings-section == "index": VerticalLayout {
+                            spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-index-where;
+                                    note: root.index-dir + (root.index-facts != "" ? "\n" + root.index-facts : "");
+                                    Push {
+                                        label: root.set-index-open;
+                                        enabled: root.index-dir != "";
+                                        clicked => { root.index-open(); }
+                                    }
+                                }
+                            }
+                            Card {
+                                SettingRow {
+                                    label: root.set-index-tidy;
+                                    note: root.set-index-tidy-note;
+                                    Push {
+                                        label: root.set-index-tidy-push;
+                                        clicked => { root.index-tidy(); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                index-reset-row := SettingRow {
+                                    property <bool> sure;
+                                    label: root.set-index-reset;
+                                    note: self.sure ? root.set-index-reset-sure : root.set-index-reset-note;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        if !index-reset-row.sure: Push {
+                                            label: root.set-index-reset-push;
+                                            clicked => { index-reset-row.sure = true; }
+                                        }
+                                        if index-reset-row.sure: Push {
+                                            label: root.set-index-cancel;
+                                            plain: true;
+                                            clicked => { index-reset-row.sure = false; }
+                                        }
+                                        if index-reset-row.sure: Push {
+                                            label: root.set-index-reset-yes;
+                                            asking: true;
+                                            clicked => {
+                                                index-reset-row.sure = false;
+                                                root.index-reset();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.index-said != "": Text {
+                                text: root.index-said;
+                                color: Theme.ink-3;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        if root.settings-section == "about": VerticalLayout {
+                            Text {
+                                text: root.about-body;
+                                color: Theme.ink-2;
+                                font-size: 12.5px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The way out, over the layout.
+        close-hit := TouchArea {
+            x: parent.width - 40px;
+            y: 12px;
+            width: 28px;
+            height: 28px;
+            mouse-cursor: pointer;
+            clicked => { root.panel = ""; }
+            Rectangle {
+                border-radius: 6px;
+                background: close-hit.has-hover ? Theme.hover : transparent;
+                Text {
+                    text: "×";
+                    color: close-hit.has-hover ? Theme.ink : Theme.ink-3;
+                    font-size: 18px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

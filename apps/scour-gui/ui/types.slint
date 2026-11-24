@@ -1,0 +1,426 @@
+// Every structure the window and Rust hand each other, row by row and
+// panel by panel. Exported from main.slint for the generated Rust API.
+
+/// One cell of one row, already formatted by Rust: text plus what is needed to
+/// draw it — an alignment, a colour band, the three pieces of a name.
+export struct Cell {
+    // Which column this is. The name and its icon are found by this rather
+    // than by position, which somebody chooses.
+    id: string,
+    text: string,
+    // Before the match, the match, after it. Empty for every column but `name`.
+    pre: string,
+    hit: string,
+    post: string,
+    // Age band of a time column, 0 (minutes) to 5 (older); -1 means no colour.
+    age: int,
+    // Numbers read right-aligned; words do not.
+    right: bool,
+    // A monospaced column: sizes, dates, modes, owners.
+    mono: bool,
+    // Drawn in the quiet ink: a value the volume does not record.
+    dim: bool,
+    // Hover text, where the column has more to say than fits.
+    hint: string,
+}
+
+/// One column heading, in the order the table shows them.
+export struct HeadInfo {
+    id: string,
+    label: string,
+    // What `sort:` this heading asks for. Empty means it cannot be sorted by.
+    sort: string,
+    right: bool,
+}
+
+/// One place a `content:` query found its text in a file: the line's number
+/// and the line cut in three at the find. See `scour_core::FoundLine`.
+export struct Found {
+    line: string,
+    pre: string,
+    hit: string,
+    post: string,
+}
+
+export struct PlaceLeft {
+    group: string,
+    label: string,
+    sub: string,
+    target: string,
+    ask-disk: bool,
+    active: bool,
+}
+
+export struct PlaceCrumb {
+    label: string,
+    path: string,
+}
+
+export struct PlaceDir {
+    name: string,
+    path: string,
+    meta: string,
+    bar: float,
+}
+
+export struct GrepItem {
+    header: bool,
+    file-idx: int,
+    cells: [Cell],
+    ktoken: string,
+    tint: brush,
+    // The extension as the icon spells it, `PDF`; empty when it has none.
+    ext: string,
+    name: string,
+    dir: string,
+    count: string,
+    line: string,
+    pre: string,
+    hit: string,
+    post: string,
+}
+
+export struct Row {
+    // One per shown column, in the order they are shown. Rebuilt only when the
+    // chosen columns change; widths travel separately in `cw`.
+    cells: [Cell],
+    // Where a `content:` query found its text in this file; empty otherwise.
+    found: [Found],
+    // The whole name, whether or not the name column is shown: the tiles have
+    // no columns, so what they draw cannot come out of the cell list.
+    name: string,
+    // The whole path. Not drawn; it is what opening and copying the row read.
+    path: string,
+    // Arrived since the last answer. Marks the event, not the row: it is shown
+    // arriving and then stops being shown.
+    fresh: bool,
+    // The kind's own token — `folder`, `code`, `build` — never translated; it
+    // picks the icon and its colour.
+    ktoken: string,
+    tint: brush,
+    // The extension as the icon spells it, `PDF`, or empty: a folder, a name
+    // with none, or one too long to fit on the icon.
+    ext: string,
+    is-dir: bool,
+    // Which age band the row falls in, 0 (minutes) to 5 (older).
+    age: int,
+    // In the selection; several rows can be, and an action takes all of them.
+    picked: bool,
+    // The desktop's own thumbnail, when one has been made. Filled in after the
+    // row lands, not with it: a page is two hundred rows and the eye is on thirty.
+    thumb: image,
+    // Whether `thumb` holds one, said as a flag: asking the `image` its width
+    // once per glyph condition per row took an idle window from 22% to 49%.
+    shot: bool,
+    // The desktop's native file or folder icon, when `system-icons` is on.
+    sys-icon: image,
+    has-sys-icon: bool,
+    // Opening it would start a program (`scour_core::runs_when_opened`): a
+    // double-click shows it in its folder instead.
+    runs: bool,
+}
+
+/// A slot of the detail list and the row it is showing; `i` is -1 past the
+/// end. See `Slots` in `rows.rs`.
+export struct Slot {
+    i: int,
+    row: Row,
+}
+
+/// One line of the preview panel's fact list: a label and a value, both already
+/// formatted. Which facts, and in what order, is `scour_ui::preview::FACTS`.
+export struct Fact {
+    label: string,
+    value: string,
+}
+
+/// One page of a scrollable document preview (PDF or Office).
+export struct PeekPage {
+    number: int,
+    ready: bool,
+    shot: image,
+}
+
+// One bar of the time ribbon: how many files fall in it, and which of the six
+// age bands it is — the same band the rows' dates are painted with.
+export struct Bar {
+    count: int,
+    // Upper bound in days; `0` for the oldest, which has none.
+    days: int,
+    band: int,
+    // What the bar covers, already worded.
+    about: string,
+}
+
+// One line of the right-click menu, as `scour_ui::menu` holds it. The window
+// does not know what any of these mean: it draws them and sends `id` back.
+export struct MenuItem {
+    // Sent back on press. Never translated.
+    id: string,
+    // Already translated, and carrying the count where there is one.
+    label: string,
+    // Printed at the right, quietly.
+    key: string,
+    // Draw a rule above this one: it starts a new group.
+    rule: bool,
+    // Reversible, but it changes something — drawn in the danger colour.
+    careful: bool,
+    // Starts more programs than there are hands, and asks first — drawn dim.
+    heavy: bool,
+    // Shown with a tick: a switch rather than an action.
+    on: bool,
+    // Cannot be pressed — the last column standing is this.
+    off: bool,
+    // Which drawing stands beside it, by `scour_ui::menu` name; empty for none.
+    icon: string,
+}
+
+// One skip rule. Off is a note kept beside the index, not a deletion, so the
+// groups this window cannot edit can still be switched off.
+export struct Rule {
+    id: string,
+    value: string,
+    kind: string,
+    off: bool,
+    removable: bool,
+}
+
+// One disk: whether it is indexed, what it is, and where it is mounted. A disk
+// `config.toml` names is `fixed`: only the file changes it.
+export struct Disk {
+    id: string,
+    name: string,
+    aside: string,
+    roots: string,
+    on: bool,
+    fixed: bool,
+    // How it is kept up to date: files, watched live or last walked, last change.
+    status: string,
+    walking: bool,
+    // The root a refresh walks again.
+    root: string,
+}
+
+// One folder in the report: what it weighs, what share of its parent that is,
+// and how those bytes are spread over the six age bands.
+export struct Kid {
+    name: string,
+    path: string,
+    size: string,
+    share: string,
+    files: string,
+    // The bar behind the name: this folder against the heaviest one. Computed
+    // in Rust, as `Facet.share` is, and for the same reason.
+    bar: float,
+    // The last row — everything not given a row of its own. It has no age
+    // strip, no file count and nothing to descend into.
+    rest: bool,
+    a0: float,
+    a1: float,
+    a2: float,
+    a3: float,
+    a4: float,
+    a5: float,
+}
+
+// One piece of a segmented bar, as fractions of the bar's whole length, with
+// the tone to paint it and the word it is wide enough to carry. Which tones
+// the index means is the strip's own business: the age strip reads `t0..t5`,
+// the folder strip `k0..k5` and 6 for the folded rest.
+export struct Seg {
+    start: float,
+    width: float,
+    tone: int,
+    // Empty unless the segment is wide enough — decided in Rust against the
+    // strip's own width, because a text measuring itself inside a box whose
+    // width comes from the parent is the binding loop this window has hit.
+    label: string,
+}
+
+// One slice of the report's ring: the arc as SVG commands in the ring's own
+// 150-unit box, and the legend line beside it. The commands are built in Rust
+// so the arithmetic lives with the rest of the shares.
+export struct Slice {
+    commands: string,
+    tone: int,
+    label: string,
+    count: string,
+    percent: string,
+    // The query term a press adds. Empty for the folded rest, which is not one.
+    token: string,
+}
+
+// One of the heaviest files: its name, the folder it sits in under the scope,
+// what it weighs, and the bar behind it against the largest.
+export struct Big {
+    name: string,
+    dir: string,
+    size: string,
+    share: float,
+    path: string,
+}
+
+// One group of files that might be the same file. `proven` is whether the
+// checking got as far as reading them: only then is "duplicate" the word.
+export struct Dupe {
+    size: string,
+    times: string,
+    certainty: string,
+    proven: bool,
+    paths: string,
+}
+
+// One coloured run of the query, as `Request::Explain` cut it. A window that
+// tokenised the query itself would be a second parser.
+export struct Span {
+    text: string,
+    // 0 nothing in particular · 1 field, comparison, `or` · 2 value or phrase
+    // 3 wildcard · 4 exclusion · 5 read as text · 6 the word being looked for
+    // 7 the syntax between terms, said quietly
+    role: int,
+    // Part of a term that must NOT match. The role does not say: `pdf` in
+    // `!ext:pdf` is a value, and the exclusion role covers the `!` alone.
+    not: bool,
+    // The column it starts at, in CHARACTERS, on its `line`.
+    at: int,
+    // Which drawn line of the query it is on, counted from the first.
+    line: int,
+    // Where it is drawn, from the field's padding: columns are not all one
+    // width, a filter's header is narrower. Rust places it.
+    x: length,
+    // Part of a header: drawn small and close.
+    small: bool,
+}
+
+// A capsule behind a filter in the query, one per line it is drawn on.
+export struct Cap {
+    line: int,
+    at: int,
+    len: int,
+    // Characters of the locked `field:` header on this line.
+    head: int,
+    // 0 a filter · 1 `content:`, which reads files · 2 excluded
+    tone: int,
+    // The pointer is on it.
+    hov: bool,
+    // The filter's field, by its canonical name: `dm`, `under`, `fuzzy`…
+    field: string,
+    // Its header drawn as what it does — a clock, a folder, ≈ — when the
+    // caret is not in it and the settings ask for drawings.
+    icon: bool,
+    // What the drawing stands for, under the pointer.
+    tip: string,
+    // Where it starts, how wide, and how wide its header, from the padding.
+    x: length,
+    w: length,
+    hw: length,
+    // The caret is in it: its value as typed, in a well to type in.
+    edit: bool,
+    // This piece holds the term's start, or its end: the `!` goes over the
+    // one, the `×` in the other.
+    first: bool,
+    last: bool,
+    // The whole term is on this line, and where the term is in the query.
+    whole: bool,
+    from: int,
+    to: int,
+    // What it holds as typed; in words, when its lens has words for it; and
+    // what an empty one asks for.
+    raw: string,
+    nice: string,
+    hint: string,
+    // The name beside the header's picture.
+    label: string,
+    // How wide Rust wants the header, the words, and the room after the
+    // last letter. Its own numbers, on their way to the columns.
+    head-w: length,
+    nice-w: length,
+    tail: length,
+}
+
+// A word a capsule shows in the window's own face, for the window to measure:
+// a header's name, or `big`, what a filter holds said in words.
+export struct QMeasure {
+    text: string,
+    big: bool,
+}
+
+// Part of the query's selection, on one line.
+export struct Sel {
+    line: int,
+    at: int,
+    len: int,
+    x: length,
+    w: length,
+}
+
+// Byte offsets into the query, from and to.
+export struct Reach {
+    from: int,
+    to: int,
+}
+
+// One line of the lens under a term.
+// A day of the time lens's calendar, counted from the epoch so two compare.
+export struct CalDay {
+    n: int,
+    label: string,
+    // In the month shown, not the edge of the one before or after.
+    here: bool,
+    today: bool,
+    future: bool,
+}
+
+export struct CalMonth {
+    title: string,
+    days: [CalDay],
+}
+
+export struct LensRow {
+    label: string,
+    hint: string,
+    // A heading drawn above it; one space is a rule alone.
+    group: string,
+    // What choosing it would leave, said; empty when not counted.
+    n: string,
+    // That number against the largest in the lens.
+    bar: float,
+    zero: bool,
+    // Waiting for an answer: not a choice yet.
+    wait: bool,
+    // Choosing it reads files, so it has no number.
+    reads: bool,
+    // Tab writes it and keeps the lens open.
+    stays: bool,
+}
+
+export struct FolderRow {
+    path: string,
+    on: bool,
+    watched: bool,
+    status: string,
+    problem: bool,
+    walking: bool,
+    // A source of its own, so a refresh means something.
+    walkable: bool,
+}
+
+export struct Facet {
+    // Bar height, 0..1 of the largest count in the section. Computed in Rust:
+    // a max over a model is a loop per row per frame.
+    share: float,
+    label: string,
+    token: string,
+    count: string,
+    // A kind's own token, which picks its icon; empty elsewhere.
+    icon: string,
+}
+
+// What a paste makes of a field: its new text and where the caret goes. `ok`
+// false means the clipboard could not be read this way, and the field asks
+// Slint's own.
+export struct Spliced {
+    ok: bool,
+    text: string,
+    caret: int,
+}
