@@ -128,7 +128,7 @@ settings `texts_off`, `texts_max_mb`, `texts_dir`, `texts_ahead` for every
 face. `texts_ahead`, off unless chosen, reads documents before they are
 asked for once nobody has searched for five minutes and the load is under a
 quarter of the cores: a background reading that gives way from its first
-file, paced at 16 MiB/s, a minute at a time.
+file, paced at 4 MiB/s, a minute at a time.
 
 ### MCP — `scour-mcp`
 

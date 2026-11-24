@@ -13,8 +13,10 @@ const EVERY: Duration = Duration::from_secs(300);
 const IDLE: Duration = Duration::from_secs(300);
 /// One round: then it looks again before going on.
 const ROUND: Duration = Duration::from_secs(60);
-/// Its pace, so a spinning disk is not taken from the desk.
-const PACE: u64 = 16 << 20;
+/// Its pace. On a 5,400 rpm disk a small read beside it took 11.4 ms at
+/// 4 MiB/s, as with nothing reading, and 13.3 ms at 16; the lowest I/O
+/// priority alone changed nothing there.
+const PACE: u64 = 4 << 20;
 /// The documents it reads ahead: those `scour-grep` hands over.
 const QUERY: &str = "ext:pdf;doc;dot;xls;xlt;ppt;pps;pot;eml";
 

@@ -1045,6 +1045,50 @@ cold again and again; normal and lowest priority alternated:
 
 Nothing to feel here, either way. A spinning disk is where it would show.
 
+## A 5,400 rpm disk, every cache dropped (2026-11-24)
+
+A 1 TB 2.5" disk (ST1000LM024) on USB, NTFS through `ntfs3`, BFQ. 10,000
+files under 1 MiB taken at random from one partition, 1.1 GiB; the partition
+unmounted and mounted again before each run, so nothing of it — data or MFT
+— is in memory. The `scan` example, `SCAN_ROOTS` naming the mount:
+
+| order | readers | round 1 | round 2 |
+|---|---:|---:|---:|
+| **where each file lies (`FIEMAP`)** | 1 | **31.7 s** (7.2 s of it asking) | **31.7 s** (7.2 s) |
+| by path | 1 | 60.5 s | 60.7 s |
+| as given (random) | 1 | 65.3 s | 65.2 s |
+| by path | 2 | 61.5 s | 61.4 s |
+| by path | 4 | 64.6 s | 80.5 s |
+
+The physical order is **1.9× faster**, its cost included, so it is back for
+a spinning disk on Linux — the plan's 20 % rule, applied the other way from
+PC2's. That measurement read each order on a different set with the MFT
+already warm from listing them, and Windows' retrieval pointers are another
+code path; Windows reads by path until it is repeated with the cache truly
+cold. One reader stays right: two gain nothing, four lose.
+
+**The desk beside it.** A probe reading 4 KiB of other cold files on the
+same disk every 100 ms, while the set is read cold over and over:
+
+| reading | small read, median / p95 |
+|---|---:|
+| nothing | 11.0 / 16.1 ms |
+| normal priority | 20.2 / 32.2 ms, 20.0 / 31.1 ms |
+| idle I/O class, nice 10 | 19.4 / 33.3 ms, 18.5 / 32.1 ms |
+| idle class, 16 MiB/s | 13.3 / 26.8 ms |
+| idle class, 8 MiB/s | 12.3 / 23.1 ms |
+| idle class, 4 MiB/s | 11.4 / 17.2 ms |
+
+The idle I/O class changed nothing even under BFQ; a pace does. Reading
+ahead, which nobody waits on, now goes at 4 MiB/s. Every run had a stall of
+about 1.7 s, with nothing of ours reading too: the disk's or its bridge's.
+
+```sh
+udisksctl unmount -b /dev/sdX5; udisksctl mount -b /dev/sdX5
+SCAN_ROOTS=/run/media/$USER/LABEL SCOUR_GREP_ORDER=physical|path|given \
+  SCOUR_GREP_READERS=1 scan zzqq < set.txt
+```
+
 ## Reproducing
 
 ```sh

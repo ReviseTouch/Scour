@@ -82,6 +82,11 @@ fn main() {
         .collect();
     roots.sort();
     roots.dedup();
+    // `SCAN_ROOTS=/a:/b` names the mounts outright; the top directory of a
+    // path is not one under `/run/media`.
+    if let Some(given) = std::env::var_os("SCAN_ROOTS") {
+        roots = std::env::split_paths(&given).collect();
+    }
     let options = Options {
         binary: args.binary,
         quiet: args.quiet,
@@ -96,7 +101,13 @@ fn main() {
         );
     }
     let scanner = Scanner::new(pattern, options, Ground::probe(&roots));
-    let (budget, began, cpu_before) = (Budget::unlimited(), Instant::now(), usage());
+    // `SCAN_RATE_MIB` paces the reading, as `rate_mib` does a service's.
+    let pace = std::env::var("SCAN_RATE_MIB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let budget = Budget::unlimited().paced(pace << 20);
+    let (began, cpu_before) = (Instant::now(), usage());
     let outcomes = scanner.scan(&files, &budget);
     let took = began.elapsed().as_secs_f64();
     let (cpu_after, peak_kib) = (usage(), peak_rss_kib());

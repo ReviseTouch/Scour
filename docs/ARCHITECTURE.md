@@ -110,8 +110,8 @@ correct on the day it is written.
   directory, an entry inflated, its XML made plain — is `scour-extract`'s,
   which the preview reads a document's text with too: one reader, so a new
   format is added once and both search and preview have it. It asks `surefoot` what each root stands on, as
-  the walk does, and reads a spinning disk on one thread (a large set in path
-  order), a solid one on half the cores up to sixteen, a network one on
+  the walk does, and reads a spinning disk on one thread (a large set where each
+  file lies on the platter, by `FIEMAP`, on Linux; by path elsewhere), a solid one on half the cores up to sixteen, a network one on
   eight, an unnamed one on four; a FUSE or ZFS volume on four at most.
 - **Documents it cannot stream go to another process.** PDF, `.doc`, `.xls`,
   `.ppt` and `.eml` are handed to `scour_grep::Texts`, which `scourd` answers
