@@ -824,6 +824,29 @@ cargo build --release -p scour-grep --example zipcost   # once before, once afte
 for i in 1 2 3 4 5 6 7; do A mahkeme < /tmp/zips.txt; B mahkeme < /tmp/zips.txt; done
 ```
 
+## The index split by subject, before and after (2026-11-24)
+
+`index.rs` and `search.rs` were cut into modules and five trait methods became
+a call each into an inherent method holding the body. One codegen unit a
+crate, so no move should show; measured anyway. `searchcost` from
+`2532805` (A) and from the split (B), release, alternately five times each,
+on a reflink copy of this machine's index (7,170,522 rows, 7 segments); the
+median of each cell, thirteen orders at offsets 0, 2,000 and 19,800:
+
+| query | A, all cells | B, all cells | |
+|---|---:|---:|---:|
+| `""` | 584.4 ms | 577.9 ms | −1.1 % |
+| `rapor` | 432.5 ms | 433.7 ms | +0.3 % |
+
+No cell moved outside its own run-to-run spread.
+
+```sh
+cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
+git checkout 2532805 -- crates/scour-index-native   # A; then HEAD for B
+cargo build --release -p scour-index-native --example searchcost
+for i in 1 2 3 4 5; do A /var/tmp/idx/native "$q"; B /var/tmp/idx/native "$q"; done
+```
+
 ## Reproducing
 
 ```sh
