@@ -63,6 +63,8 @@ fn the_cut_falls_on_a_character_boundary() {
 }
 
 use super::*;
+use scour_core::Catalog;
+use scour_i18n::Catalogue;
 
 /// The window's palette is the browser page's. What this checks is the
 /// conversion: Slint takes alpha first and the browser takes it last.
