@@ -28,23 +28,22 @@ cargo fmt --check
 step "lint"
 cargo clippy --workspace --all-targets -- -D warnings
 
-# `page.html` is compiled into the bridge as a string, so nothing in the Rust
-# toolchain parses its JavaScript: one duplicate declaration ships, the browser
-# refuses the whole script, and the window comes up blank with nothing reported.
+# The page's script is parsed by `node` in scour-web's own tests, on the page
+# as served (`the_page_script_parses`), since a duplicate declaration means the
+# browser refuses the whole script and the window comes up blank. Here: the
+# installer and the Shell extension, which no Rust test reads.
 step "the page"
 bash -n packaging/install-service.sh
 if command -v node >/dev/null; then
-    python3 scripts/page-script.py > "$tmp"
-    node --check "$tmp"
     node --test packaging/tests/service-policy.test.cjs
     # The Shell extension is a module, so node reads it as one; `gi://` imports
     # are only resolved by GNOME's shell, and a syntax check does not resolve.
     cp platform/gnome/scour@scour.local/extension.js "$tmp.mjs"
     node --check "$tmp.mjs"
     rm -f "$tmp.mjs"
-    echo "  page.html: the script parses"
+    echo "  the installer and the Shell extension parse"
 else
-    echo "  node is missing, so the page's script was not parsed" >&2
+    echo "  node is missing, so the Shell extension was not parsed" >&2
 fi
 
 step "tests"

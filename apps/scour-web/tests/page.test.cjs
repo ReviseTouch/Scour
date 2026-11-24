@@ -1,11 +1,13 @@
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 
 // Execute the shipped functions, with a deterministic clock and transport.
-const html = readFileSync(process.env.SCOUR_PAGE || join(__dirname, '../src/page.html'), 'utf8');
+// The page as served, joined from `src/page/` by the build script; `tests/smoke.rs`
+// says where. `cargo test -p scour-web --test smoke` runs this.
+assert.ok(process.env.SCOUR_PAGE, 'SCOUR_PAGE names the joined page');
+const html = readFileSync(process.env.SCOUR_PAGE, 'utf8');
 function section(from, until) {
   const start = html.indexOf(from);
   assert.ok(start >= 0, `missing ${from}`);

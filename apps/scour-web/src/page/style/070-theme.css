@@ -1,0 +1,201 @@
+  /* ---------------- theme switch ---------------- */
+  .tabs {
+    display: flex; gap: 2px; padding: 2px; flex: none;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+  }
+  .tabs button {
+    background: none; border: 0; border-radius: 5px;
+    padding: 6px 12px;
+    font: 500 12.5px/1 var(--sans); 
+    color: var(--ink-3); cursor: pointer;
+  }
+  .tabs button:hover { color: var(--ink-2); }
+  .tabs button[aria-selected="true"] { color: var(--ink); background: var(--panel); }
+  .tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+  /* The report: the same last row as the list, so it scrolls inside. */
+  .report {
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .crumb { font: 500 12.5px/1 var(--mono); color: var(--ink-3); margin-bottom: calc(var(--u) * 3); }
+  .crumb button {
+    background: none; border: 0; padding: 0 2px; font: inherit;
+    color: var(--ink-2); cursor: pointer; border-radius: 2px;
+  }
+  .crumb button:hover { color: var(--ink); text-decoration: underline; }
+  .crumb button:last-child { color: var(--ink); font-weight: 650; }
+  .crumb .s { color: var(--line); padding: 0 1px; }
+  /* The filter, said where the scope is: together they are what the numbers
+     below are about. */
+  .crumb .filt {
+    display: inline-flex; align-items: center; gap: 3px;
+    margin-left: calc(var(--u) * 2); padding: 2px 3px 2px 6px;
+    border-radius: 3px; background: var(--mark); color: var(--ink-2);
+  }
+  .crumb .filt b { color: var(--ink); font-weight: 650; }
+  .crumb .filt button { color: var(--ink-3); padding: 0 3px; }
+  .crumb .filt button:hover { color: var(--ink); text-decoration: none; }
+
+  /* The number is the headline: large and light, not loud. */
+  .headline { display: flex; align-items: baseline; flex-wrap: wrap;
+              gap: calc(var(--u) * 1.5) calc(var(--u) * 5); margin-bottom: calc(var(--u) * 3); }
+  .headline .b {
+    font: 300 34px/1 var(--sans); letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .headline .m { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .headline .m b { color: var(--ink); font-weight: 650; }
+  .headline .ms { font: 400 12px/1 var(--mono); color: var(--ink-3); }
+
+  /* The report's own headings; `.panel h4` and the duplicates keep theirs. */
+  .report h4.sec {
+    margin: calc(var(--u) * 6) 0 calc(var(--u) * 2); font-size: 12px;  color: var(--ink-3); font-weight: 650;
+  }
+  .report h4.sec small {
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    margin-left: calc(var(--u) * 2); font-size: 11px;
+  }
+  .report .note { margin: calc(var(--u) * 2) 0 0; font-size: 11px;
+                  line-height: 1.5; color: var(--ink-3); }
+
+  /* One bar cut into segments; `tall` is a whole line and carries its labels.
+     `content-box` because inside a row the cell's own padding would eat the
+     height, leaving the segments nothing to be 100% of. */
+  .report .strip { display: flex; height: 10px; box-sizing: content-box;
+                   border-radius: 2px; overflow: hidden; background: var(--line-soft); }
+  .report .strip i { display: block; height: 100%; }
+  .report .strip.tall { height: 22px; border-radius: 3px; }
+  .report .strip.tall i { position: relative; }
+  /* `--ground` rather than white: the label has to read on a dark segment in
+     the light scheme and on a light one in the dark scheme. */
+  .report .strip.tall i span {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    padding-left: calc(var(--u) * 2); font: 500 11px/1 var(--sans);
+    color: var(--ground); overflow: hidden; white-space: nowrap;
+  }
+
+  .report .key { display: flex; flex-wrap: wrap; gap: var(--u) calc(var(--u) * 4);
+                 margin-top: calc(var(--u) * 2); font-size: 11.5px; color: var(--ink-2); }
+  .report .key span { display: inline-flex; align-items: center; gap: 5px; }
+  .report .key i { width: 9px; height: 9px; border-radius: 1px; display: block; }
+  .report .key b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  /* One folder a row: its share as a bar behind the name, as the rail draws one. */
+  .report .rows {
+    display: grid; align-items: center; gap: 0 calc(var(--u) * 3);
+    grid-template-columns: minmax(130px, 1.2fr) minmax(110px, 1fr) 84px 54px 74px;
+    margin-top: calc(var(--u) * 3);
+  }
+  .report .rows > div { padding: calc(var(--u) * 1.5) 0; font-size: 12px;
+                        border-bottom: 1px solid var(--line-soft);
+                        font-variant-numeric: tabular-nums; }
+  .report .rows .hd {
+    color: var(--ink-3); font-size: 12px;  font-weight: 650;  border-bottom: 1px solid var(--line);
+  }
+  .report .rows .nm { position: relative; padding-left: calc(var(--u) * 2); min-width: 0; }
+  .report .rows .nm i {
+    position: absolute; left: 0; top: 3px; bottom: 3px;
+    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+  }
+  .report .rows .nm button {
+    position: relative; z-index: 1; max-width: 100%; background: none; border: 0;
+    padding: 0; cursor: pointer; text-align: left; color: var(--ink);
+    font: 500 12.5px/1.2 var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .report .rows .nm button:hover { text-decoration: underline; }
+  .report .rows .nm button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .report .rows .nm .go { color: var(--ink-3); margin-left: 4px; }
+  .report .rows .r { text-align: right; font-family: var(--mono); white-space: nowrap; }
+  .report .rows .r.big { color: var(--ink); font-weight: 600; }
+  .report .rows .mute { color: var(--ink-3); }
+  .report .rows .hollow { grid-column: 1 / -1; padding: calc(var(--u) * 6) calc(var(--u) * 2);
+                          color: var(--ink-3); font-size: 12.5px; border-bottom: 0; }
+
+  /* `minmax(0, …)`: a long file name would otherwise push its own column wider
+     than half and shove the ring out of the other. */
+  .report .two { display: grid; gap: calc(var(--u) * 7);
+                 grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) {
+    .report .two { grid-template-columns: 1fr; }
+    .report .rows { grid-template-columns: 1fr 1fr 70px 46px 58px; }
+  }
+
+  .report .ring { display: flex; align-items: center; gap: calc(var(--u) * 5); flex-wrap: wrap; }
+  .report .ring svg { flex: none; }
+  .report .ring circle[data-kind] { cursor: pointer; }
+  .report .ring .mid { font: 300 20px/1 var(--sans); fill: var(--ink); }
+  .report .ring .mid2 { font: 650 9.5px/1 var(--sans); fill: var(--ink-3);  }
+
+  /* `gap: 0` on purpose: the help sheet's `.legend` sets one, and a report row
+     is a row, not a paragraph. */
+  .report .legend { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 0; }
+  .report .legend button {
+    display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 46px;
+    align-items: center; gap: calc(var(--u) * 2); width: 100%;
+    background: none; border: 0; border-radius: 2px; padding: 3px var(--u);
+    cursor: pointer; text-align: left; color: var(--ink-2);
+    font: inherit; font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .report .legend button:hover { background: var(--hover); color: var(--ink); }
+  .report .legend button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .report .legend button[disabled] { cursor: default; }
+  .report .legend i { width: 10px; height: 10px; border-radius: 2px; display: block; }
+  .report .legend .w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .report .legend .n { text-align: right; }
+  .report .legend .p { text-align: right; color: var(--ink-3); }
+
+  /* The largest files: the same bar behind a name, the size on the right. */
+  .report .files button {
+    position: relative; display: flex; align-items: baseline; justify-content: space-between;
+    gap: calc(var(--u) * 3); width: 100%; background: none; border: 0; border-radius: 2px;
+    padding: 4px calc(var(--u) * 2); cursor: pointer; text-align: left; color: var(--ink);
+    font: inherit; font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .report .files button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .report .files i {
+    position: absolute; left: 0; top: 2px; bottom: 2px;
+    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+  }
+  .report .files .nm { position: relative; z-index: 1; min-width: 0;
+                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .report .files .nm small { color: var(--ink-3); margin-left: 6px; }
+  .report .files .v { position: relative; z-index: 1; flex: none; color: var(--ink-2); }
+
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+            gap: calc(var(--u) * 4); margin-top: calc(var(--u) * 5); }
+  .panel {
+    border: 1px solid var(--line-soft); border-radius: 3px;
+    background: var(--panel-2); padding: calc(var(--u) * 3);
+  }
+  .panel h4 {
+    margin: 0 0 calc(var(--u) * 2); font-size: 12px;  color: var(--ink-3); font-weight: 650;
+  }
+  .panel .line {
+    display: flex; justify-content: space-between; gap: calc(var(--u) * 2);
+    font: 400 11.5px/1.7 var(--mono); color: var(--ink-2);
+  }
+  .panel .line span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .panel .line em { font-style: normal; color: var(--ink-3); }
+  .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+
+  /* One `margin-left: auto`, on the group: a second one does nothing. */
+  .tools { display: flex; gap: 2px; align-items: center; flex: none; }
+  .about {
+    background: none; border: 1px solid transparent; color: var(--ink-2);
+    width: 28px; height: 28px; border-radius: 7px; cursor: pointer;
+    font: 600 11px/1 var(--sans); padding: 0;
+  }
+  .about:hover { color: var(--ink); background: var(--hover); }
+  .about[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+  .about[aria-expanded="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+  .about:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* Left of the line is about the window, right of it about the list's shape. */
+  .tools + .views {
+    margin-left: calc(var(--u) * 3);
+    padding-left: calc(var(--u) * 3);
+    border-left: 1px solid var(--line);
+  }
+

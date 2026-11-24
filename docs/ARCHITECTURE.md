@@ -147,7 +147,7 @@ cannot.
 
 | face | drawing | its own |
 |---|---|---|
-| **page** (`scour-web`) | HTML/CSS/JS in one file (`page.html`), served by the bridge | runs in a browser; `POST` routes are fenced by a token, the origin and `--no-launch` |
+| **page** (`scour-web`) | HTML/CSS/JS in parts under `src/page/`, joined by `build.rs` into one document the bridge serves | runs in a browser; `POST` routes are fenced by a token, the origin and `--no-launch` |
 | **window** (`scour-gui`) | Slint, software renderer | the model is built once and updated in place |
 | **terminal** (`scour-tui`) | ratatui, immediate mode | `--once`, `--press`, `--click`: the only way to check the screen and a click |
 | **command line** (`scour`) | text and `--json` | one question, one answer; no paging |

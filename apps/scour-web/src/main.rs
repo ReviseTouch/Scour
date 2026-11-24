@@ -25,7 +25,7 @@ use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
 /// The page, built in, so that the binary is the whole of the program.
-const PAGE: &str = include_str!("page.html");
+const PAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/page.html"));
 
 /// The application's icon, the one the desktop shows. Written into the page as
 /// a data URL: every other path asks for the token, and a tab icon cannot.

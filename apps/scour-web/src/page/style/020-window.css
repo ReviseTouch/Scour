@@ -1,0 +1,629 @@
+  /* ---------------- the application window ---------------- */
+  .app {
+    background: var(--panel);
+    overflow: hidden;
+    /* Header, a disk question, the list, the status bar. Every row but the
+       list is `auto`, so leftover height lands on the list. */
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    /* The one column is the window's width, not what its widest row would like. */
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    height: 100%;
+  }
+
+  /* The header bar: the name over the sidebar, the field, then the switches. */
+  .query {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    background: var(--ground);
+    /* Its own layer, above the list's sticky header: the suggestion box that
+       drops out of it must not be drawn under the column names. */
+    position: relative;
+    z-index: 50;
+    gap: calc(var(--u) * 2.5);
+    padding: 12px 12px 10px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .query .brand { display: flex; align-items: center; }
+  /* The filters a query can take: the same list as `:` and Ctrl+Space. */
+  .qtriggers {
+    flex: none; align-self: flex-start; display: flex; align-items: center; gap: 4px;
+  }
+  .qtrig, .qfilter {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    height: 34px; padding: 0 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    color: var(--ink-2); font: 500 12.5px/1 var(--sans); cursor: pointer;
+    transition: border-color .12s, background .12s, color .12s;
+  }
+  .qtrig .gi { font: 600 13px/1 var(--mono); color: var(--ink-3); }
+  .qtrig:hover, .qfilter:hover, .qfilter[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
+  .qtrig.on { color: var(--q-key); border-color: var(--cap-ring); background: var(--cap); }
+  .qtrig.on .gi { color: var(--q-key); }
+  .qtrig.grep-on { color: var(--q-bad); border-color: var(--cap-read-ring); background: var(--cap-read); }
+  .qtrig.grep-on .gi { color: var(--q-bad); }
+  @media (max-width: 980px) { .qtrig .qlab { display: none; } .qtrig { padding: 0 8px; } }
+  /* The field, and under it — in the same box — the line that searches what
+     the files hold: written, not chosen, so it is a field and not a capsule. */
+  .qbox { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .qbox:has(.grep-bar:not([hidden])) .qline { border-radius: 8px 8px 0 0; }
+  .grep-bar {
+    display: flex; align-items: center; gap: 6px;
+    height: 36px; padding: 0 6px 0 0; box-sizing: border-box;
+    background: var(--cap-read); border: 1px solid var(--cap-read-ring); border-top: 0;
+    border-radius: 0 0 8px 8px; overflow: hidden;
+  }
+  .grep-bar[hidden] { display: none; }
+  .grep-bar:focus-within { border-color: var(--q-bad); }
+  .grep-bar .ghead {
+    flex: none; align-self: stretch; display: flex; align-items: center; gap: 6px;
+    padding: 0 11px; margin-right: 4px; user-select: none;
+    background: color-mix(in srgb, var(--cap-read-ring) 55%, transparent);
+    color: var(--q-bad); font: 600 12px/1 var(--sans);
+  }
+  .grep-bar .gmeter { flex: none; color: var(--q-bad); font: 400 12px/1 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 760px) { .grep-bar .gmeter { display: none; } }
+  .grep-bar .gp { flex: none; font: 700 13px/1 var(--mono); color: var(--q-bad); user-select: none; }
+  .grep-bar input {
+    flex: 1; min-width: 80px; border: 0; outline: 0; background: none;
+    color: var(--ink); font: 500 14px/1 var(--mono); padding: 0;
+  }
+  .grep-bar input::placeholder { color: var(--ink-3); }
+  .grep-seg { display: inline-flex; border: 1px solid var(--cap-read-ring); border-radius: 6px; overflow: hidden; flex: none; }
+  .grep-seg button, .grep-flag {
+    border: 0; background: none; color: var(--ink-2); font: 600 11px/1 var(--mono);
+    height: 22px; padding: 0 6px; cursor: pointer;
+  }
+  .grep-seg button:hover, .grep-flag:hover { color: var(--ink); background: var(--hover); }
+  .grep-seg button[aria-pressed="true"], .grep-flag[aria-pressed="true"] {
+    color: var(--ink); background: var(--cap-read-ring);
+  }
+  .grep-flag { border: 1px solid var(--cap-read-ring); border-radius: 6px; flex: none; }
+  .grep-x {
+    border: 0; background: none; color: var(--ink-3); width: 22px; height: 22px;
+    border-radius: 5px; font: 600 14px/1 var(--sans); cursor: pointer; padding: 0; flex: none;
+  }
+  .grep-x:hover { color: var(--ink); background: var(--hover); }
+  /* One line when needed; hidden on an untouched empty query so the window stays calm. */
+  .ctxrow {
+    flex-basis: 100%; display: flex; align-items: center; gap: 10px;
+    margin: 0 -12px -10px -16px; padding: 5px 12px 5px 16px;
+    border-top: 1px solid var(--line); min-width: 0;
+  }
+  .ctxrow[hidden] { display: none; }
+  .ctxrow .ctx-x {
+    flex: none; border: 0; background: none; color: var(--ink-3); cursor: pointer;
+    font: 600 13px/1 var(--sans); padding: 2px 5px; border-radius: 4px;
+  }
+  .ctxrow .ctx-x:hover { color: var(--ink); background: var(--hover); }
+  .narrow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+  .narrow .qread { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .narrow .qread:empty, .narrow .qread[hidden] { display: none; }
+  .narrow .nlbl { flex: none; font: 500 12px var(--sans); color: var(--ink-3); }
+  .narrow .nlbl[hidden] { display: none; }
+  /* One line of one-click narrowings, a group of them to a kind of thing, a
+     picture where each begins. More than the window holds: the wheel moves it. */
+  .chips { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips .cg { flex: none; display: inline-flex; align-items: center; color: var(--ink-3); margin: 0 2px 0 8px; padding-left: 8px; border-left: 1px solid var(--line); height: 16px; }
+  .chips .cg:first-child { margin-left: 0; padding-left: 0; border-left: 0; }
+  .chips .cg svg { width: 16px; height: 16px; }
+  .chips button {
+    flex: none; border: 1px solid var(--line); border-radius: 6px; background: none;
+    padding: 2px 8px; font: 500 12px/1.5 var(--sans); color: var(--ink-2); cursor: pointer;
+  }
+  .chips button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .chips button b { font-weight: 500; color: var(--ink-3); margin-left: 5px; font-variant-numeric: tabular-nums; }
+
+  .brand {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    flex: none;
+    padding-top: 3px;
+  }
+  /* Inline, so the word's baseline stays the row's. */
+  .brand .logo {
+    width: 20px;
+    height: 20px;
+    margin-right: calc(var(--u) * 2);
+    vertical-align: middle;
+  }
+  /* With an empty query: a prompt glyph, an underline, a focus colour. */
+  .qline {
+    display: flex;
+    align-items: flex-start;
+    gap: calc(var(--u) * 3);
+    min-width: 0;
+    /* A field, as a desktop draws one: a box, not an underline. */
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 12px;
+  }
+  .qline:focus-within { border-color: var(--focus); }
+  .prompt {
+    flex: none;
+    font: 500 15px/36px var(--mono);
+    color: var(--ink-3);
+    user-select: none;
+  }
+  .qline:focus-within .prompt { color: var(--ink-2); }
+
+  /* Up to three lines of 36px, then the box scrolls inside itself. The
+     coloured layer wraps by the same rules at the same width, so a term is
+     drawn where its letters are. */
+  .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; --q-lh: 36px; }
+  /* The textarea owns the text, the keys, the clipboard and the input method,
+     and shows nothing: no letters, no caret, no selection. What is seen is the
+     layer under it, drawn by the page, so a capsule can hold a picture and a
+     word that are not as wide as the letters they stand for. */
+  .qfield textarea {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    resize: none;
+    overflow: hidden;
+    background: none;
+    border: 0;
+    outline: 0;
+    color: transparent;
+    caret-color: transparent;
+    font: 500 16px/var(--q-lh) var(--mono);
+    letter-spacing: -.01em;
+    white-space: pre;
+    padding: 0 22px 0 0;
+    margin: 0;
+    z-index: 2;
+  }
+  .qfield textarea::selection { background: transparent; color: transparent; }
+  .qfield textarea::-webkit-scrollbar { display: none; }
+  /* The drawn query: the browser lays it out and wraps it, so a capsule is as
+     wide as what it holds. Every character of the query is a character here,
+     in order, hidden or not, which is how a caret is found for an offset. */
+  .qshadow {
+    position: relative;
+    display: block;
+    min-height: var(--q-lh);
+    max-height: calc(var(--q-lh) * 3);
+    overflow-y: auto;
+    scrollbar-width: none;
+    font: 500 16px/var(--q-lh) var(--mono);
+    letter-spacing: -.01em;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 0 22px 0 0;
+    pointer-events: none;
+    /* A bare term: blue for wanted, red for `!`. See `scour_ui::Palette`. */
+    color: var(--q-term);
+    z-index: 1;
+  }
+  .qshadow::-webkit-scrollbar { display: none; }
+  /* The caret and the selection, drawn over the layer, under the textarea. */
+  .qdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+  .qdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }
+  .qdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--q-key); border-radius: 1px; animation: qblink 1.06s steps(1) infinite; }
+  @keyframes qblink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .qdecor .qcaret { animation: none; } }
+  /* Role → colour is the frontend's only job; the engine sends the spans. */
+  .qshadow .r-field { color: var(--q-key); font-weight: 700; }
+  .qshadow .r-value { color: var(--q-val); }
+  .qshadow .r-cmp   { color: var(--q-key); }
+  .qshadow .r-colon,
+  .qshadow .r-sep,
+  /* A `;` typed instead of a space carries this role. */
+  .qshadow .r-space,
+  .qshadow .r-quote { color: var(--ink-3); }
+  .qshadow .r-phrase{ color: var(--q-val); }
+  .qshadow .r-glob  { color: var(--q-glob); }
+  .qshadow .r-not   { color: var(--q-not); font-weight: 700; }
+  /* `|` is structure, not exclusion: it says how terms combine. */
+  .qshadow .r-or    { color: var(--q-key); font-weight: 700; }
+
+  /* The whole excluded term (`Span::not`): after the roles, before the warnings. */
+  .qshadow .excluded { color: var(--q-not); }
+
+  /* A term the parser cannot read is searched for as its own text. */
+  .qshadow .r-bad_value,
+  .qshadow .r-unknown_field {
+    color: var(--q-bad);
+    text-decoration: underline wavy var(--q-bad);
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1px;
+  }
+
+  /* The syntax the caret touches: `ext:pdf` less its `:` searches for "extpdf". */
+  .qshadow .caret-touch {
+    border-radius: 2px;
+    background: var(--q-not);
+    color: var(--panel);
+    box-shadow: 0 0 0 1px var(--q-not);
+  }
+
+  .qfield textarea::placeholder { color: var(--ink-3); font-weight: 500; }
+
+  /* A filter is a capsule: a header, and what it holds. 32px in a 36px line,
+     so the line keeps its height. A plain word stays bare; an excluded one is
+     tinted red; `content:` amber, because it reads files. */
+  .qshadow .term.cap {
+    display: inline-flex;
+    align-items: stretch;
+    vertical-align: top;
+    height: 32px;
+    margin: 2px 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    background: var(--cap);
+    box-shadow: inset 0 0 0 1px var(--cap-ring);
+    letter-spacing: 0;
+    --art: var(--q-key);
+  }
+  .qshadow .term.cap.read { --cap: var(--cap-read); --cap-ring: var(--cap-read-ring); --art: var(--q-bad); }
+  .qshadow .term.cap.neg { --cap: var(--cap-neg); --cap-ring: var(--cap-neg-ring); --art: var(--q-not); }
+  .qshadow .term.cap.idle { --cap: transparent; --cap-ring: var(--line); --art: var(--ink-3); }
+  .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
+  /* The filter the caret is in is being written: the field's own focus. */
+  .qshadow .term.cap.edit { box-shadow: inset 0 0 0 2px var(--focus); }
+  /* The header: a picture and a name, over its own tint. Its letters stay in
+     the text, at no width, so every offset has a place. */
+  .qshadow .term.cap .cap-head {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    padding: 0 9px 0 7px;
+    border-radius: 8px 0 0 8px;
+    background: color-mix(in srgb, var(--cap-ring) 55%, transparent);
+    box-shadow: inset 0 0 0 1px var(--cap-ring);
+    font-size: 0;
+  }
+  .qshadow .term.cap .cap-head > :not(.art) { font-size: 0; }
+  .qshadow .term.cap .art { font: 600 12px/1 var(--sans); letter-spacing: 0; color: var(--art); }
+  .qshadow .term.cap .head-art { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .qshadow .term.cap .head-art svg { width: 16px; height: 16px; flex: none; }
+  .qshadow .term.cap .head-art .bang { font: 700 13px/1 var(--sans); color: var(--q-not); }
+  /* A header the page has no picture for keeps its letters, small and close. */
+  .qshadow .term.cap .cap-head.letters { font-size: 12.5px; letter-spacing: -.5px; padding: 0 6px 0 8px; }
+  .qshadow .term.cap .cap-head.letters > * { font-size: 12.5px; }
+  /* What it holds. */
+  .qshadow .term.cap .val {
+    display: block;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0 11px 0 10px;
+    line-height: 32px;
+    border-radius: 0 8px 8px 0;
+    overflow-wrap: anywhere;
+  }
+  .qshadow .term.cap.edit .val {
+    background: var(--panel);
+    margin: 2px 2px 2px 0;
+    padding: 0 9px;
+    line-height: 28px;
+    min-width: 88px;
+    border-radius: 0 6px 6px 0;
+  }
+  .qshadow .term.cap.idle .val { min-width: 88px; background: var(--panel); margin: 1px 1px 1px 0; border-radius: 0 7px 7px 0; line-height: 30px; }
+  .qshadow .term.cap .val:empty::before {
+    content: attr(data-hint); color: var(--ink-3); font: 400 14px var(--sans); line-height: inherit; letter-spacing: 0;
+  }
+  /* What it holds, said in words: `7d` is "last 7 days". The letters stay. */
+  .qshadow .term.cap.said:not(.edit) .val { display: none; }
+  .qshadow .term.cap .said-art {
+    display: block; padding: 0 11px 0 10px; line-height: 32px; font: 600 15px/32px var(--sans);
+    color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .qshadow .term.cap.neg .said-art { color: var(--q-not); text-decoration: line-through; }
+  .qshadow .term.cap.neg:not(.edit):not(.said) .val { text-decoration: line-through; text-decoration-color: var(--q-not); }
+  .qshadow .term.cap.said.edit .said-art { display: none; }
+  .qshadow .term.cap .r-colon, .qshadow .term.cap .r-quote { color: var(--q-key); font-weight: 700; }
+  .qshadow .term.cap.neg .r-colon, .qshadow .term.cap.neg .r-quote,
+  .qshadow .term.cap.neg .r-field { color: var(--q-not); }
+  .qshadow .term.word.hov {
+    border-radius: 5px;
+    background: var(--line-soft);
+    box-shadow: 0 0 0 2px var(--line-soft);
+  }
+
+  /* No node per term: the face is monospace, so the caret index is
+     `x / charWidth`. No z-index here, or the layer hides what it points at. */
+  #qpast {
+    position: absolute;
+    right: 0;
+    top: 1px;
+    z-index: 3;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: none;
+    color: var(--ink-3);
+    font: 600 11px/1 var(--sans);
+    cursor: pointer;
+  }
+  #qpast[hidden] { display: none; }
+  #qpast:hover { color: var(--ink); background: var(--line-soft); }
+  #qpast[aria-expanded="true"] { color: var(--ink); background: var(--line-soft); }
+  #qpast:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  .qacts {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .qacts button {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--line-soft);
+    color: var(--ink-2);
+    font: 700 10px/1 var(--sans);
+    cursor: pointer;
+    pointer-events: auto;
+    display: grid;
+    place-items: center;
+  }
+  /* Compact pill over the term's top-right edge, within the header's headroom
+     and bridged downward so moving to it never crosses a dead gap. */
+  .qacts .pair {
+    position: absolute;
+    top: -15px;
+    display: flex;
+    gap: 2px;
+    padding: 1px 2px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+    pointer-events: auto;
+    z-index: 4;
+  }
+  .qacts .pair::after {
+    content: "";
+    position: absolute;
+    left: -6px;
+    right: -6px;
+    top: 100%;
+    height: 10px;
+  }
+  .qacts button:hover { background: var(--ink-3); color: var(--panel); }
+  .qacts button.drop:hover { background: var(--q-bad); color: #fff; }
+  .qacts button.neg:hover { background: var(--q-not); color: #fff; }
+  .qacts button.fz[aria-pressed="true"] { background: var(--q-key); color: var(--panel); }
+  .qacts button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* The query as a sentence: `explain`'s `description`, red when misread. */
+  .qread {
+    margin: calc(var(--u) * 2) 0 0;
+    min-height: 15px;
+    font: 500 11.5px/1.3 var(--sans);
+    color: var(--ink-3);
+    letter-spacing: .01em;
+  }
+  .qread b { color: var(--ink-2); font-weight: 600; }
+  .qread.warn { color: var(--q-bad); }
+
+  /* The lens: opaque, under its term, expanding for Miller places and sparklines. */
+  .lens {
+    position: absolute;
+    width: 430px;
+    max-width: min(720px, calc(100vw - 28px));
+    max-height: min(440px, calc(100vh - 130px));
+    overflow-y: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 22px 48px -20px rgba(0,0,0,.78);
+    padding: 4px 0;
+    z-index: 65;
+    font: 500 12.5px/1.3 var(--sans);
+  }
+  .lens.lens-place { width: min(680px, calc(100vw - 28px)); overflow: hidden; display: flex; flex-direction: column; padding: 0; }
+  .lens.lens-band { width: min(470px, calc(100vw - 28px)); }
+  .lens[hidden] { display: none; }
+  .lens .lhead { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px 6px; color: var(--ink-3); font-size: 11.5px; }
+  .lens .lhead b { color: var(--ink-2); font-weight: 600; }
+  .lens .lgroup { padding: 7px 12px 2px; color: var(--ink-3); font-size: 11px; font-weight: 600; }
+  .lens .lgroup:empty { padding: 2px 0 0; border-top: 1px solid var(--line); margin-top: 4px; }
+  .lens .lopt {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 56px 72px;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 12px;
+    cursor: pointer;
+    color: var(--ink);
+  }
+  .lens .lopt:hover { background: var(--line-soft); }
+  .lens .lopt.on { background: var(--pick); }
+  .lens .lopt.zero .l, .lens .lopt.zero .c, .lens .lopt.wait { color: var(--ink-3); }
+  .lens .lopt .l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lens .lopt .l small { margin-left: 7px; color: var(--ink-3); font: 500 11.5px var(--mono); }
+  .lens .lopt .b { height: 5px; border-radius: 3px; background: var(--line-soft); overflow: hidden; }
+  .lens .lopt .b i { display: block; height: 100%; background: var(--k3); }
+  .lens .lopt .c { text-align: right; font: 500 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .lens .lopt .r { grid-column: 2 / 4; text-align: right; color: var(--q-bad); font-size: 11.5px; }
+  .lens .lfoot { margin-top: 4px; padding: 7px 12px 5px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 11.5px; }
+  /* 2-column Miller Place Explorer inside `#lens` */
+  .lp-grid { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 250px; max-height: 360px; }
+  @media (max-width: 620px) { .lp-grid { grid-template-columns: 1fr; } }
+  .lp-left { border-right: 1px solid var(--line); overflow-y: auto; padding: 6px 0; background: var(--ground); display: flex; flex-direction: column; }
+  .lp-right { overflow-y: auto; padding: 6px 0; display: flex; flex-direction: column; min-width: 0; }
+  .lp-sec { padding: 4px 12px 3px; font: 600 10.5px/1.2 var(--sans); color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+  .lp-item {
+    display: flex; align-items: center; gap: 7px; width: 100%; border: 0; background: none;
+    padding: 5px 12px; color: var(--ink-2); font: 500 12px/1.3 var(--sans); text-align: left; cursor: pointer;
+  }
+  .lp-item:hover, .lp-item.active { background: var(--line-soft); color: var(--ink); }
+  .lp-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lp-item .sub { font: 500 10.5px var(--mono); color: var(--ink-3); flex: none; }
+  .lp-item .ask-tag { font: 600 10.5px var(--sans); color: var(--q-key); border: 1px solid var(--cap-ring); border-radius: 4px; padding: 1px 5px; }
+  .lp-pick {
+    margin: auto 10px 4px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 6px;
+    background: var(--panel); color: var(--ink-2); font: 500 12px/1.2 var(--sans); cursor: pointer; text-align: center;
+  }
+  .lp-pick:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
+  .lp-crumb {
+    display: flex; align-items: center; gap: 3px; padding: 4px 10px 6px;
+    border-bottom: 1px solid var(--line-soft); font: 500 11.5px/1.2 var(--mono); overflow-x: auto; scrollbar-width: none;
+  }
+  .lp-crumb button {
+    border: 0; background: none; color: var(--ink-2); font: inherit; padding: 2px 4px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  }
+  .lp-crumb button:hover { background: var(--line-soft); color: var(--ink); }
+  .lp-crumb button.cur { color: var(--ink); font-weight: 650; }
+  .lp-crumb .direct {
+    margin-left: auto; border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+    font: 500 10.5px var(--sans); color: var(--ink-3);
+  }
+  .lp-crumb .direct.on { color: var(--q-key); border-color: var(--cap-ring); background: var(--cap); }
+  .lp-dir {
+    position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+    cursor: pointer; color: var(--ink); min-width: 0;
+  }
+  .lp-dir:hover, .lp-dir.on { background: var(--pick); }
+  .lp-dir .wbar {
+    position: absolute; left: 8px; top: 3px; bottom: 3px; border-radius: 3px;
+    background: var(--line-soft); pointer-events: none; z-index: 0;
+  }
+  .lp-dir > :not(.wbar) { position: relative; z-index: 1; }
+  .lp-dir .dn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12.5px var(--mono); }
+  .lp-dir .dm { font: 500 11px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+  .lp-dir .da { display: inline-flex; gap: 3px; opacity: .55; transition: opacity .1s; flex: none; }
+  .lp-dir:hover .da, .lp-dir.on .da { opacity: 1; }
+  .lp-dir .da button {
+    width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink-2); font: 700 11px/1 var(--mono); cursor: pointer; padding: 0;
+  }
+  .lp-dir .da button.inc:hover { border-color: var(--q-key); color: var(--q-key); }
+  .lp-dir .da button.exc:hover { border-color: var(--q-not); color: var(--q-not); }
+  /* Sparkline inside Time & Size lenses */
+  .lspark-wrap { padding: 6px 12px 8px; border-bottom: 1px solid var(--line-soft); user-select: none; }
+  .lspark { display: flex; align-items: flex-end; gap: 5px; height: 52px; padding-top: 6px; cursor: crosshair; }
+  .lspark .sbar {
+    flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch;
+    gap: 3px; border-radius: 4px; padding: 2px 2px 0; cursor: pointer;
+  }
+  .lspark .sbar:hover { background: var(--line-soft); }
+  .lspark .sbar i {
+    display: block; width: 100%; min-height: 3px; border-radius: 3px 3px 1px 1px;
+    background: var(--k3); opacity: .65; transition: height .14s, background .12s, opacity .12s;
+  }
+  .lspark .sbar.in i, .lspark .sbar:hover i { background: var(--q-key); opacity: 1; }
+  .lspark-lbls { display: flex; gap: 5px; margin-top: 4px; font: 500 10px/1.1 var(--mono); color: var(--ink-3); text-align: center; }
+  .lspark-lbls span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lspark-note { margin-top: 4px; font-size: 10.5px; color: var(--ink-3); text-align: right; }
+  /* Word lens global switches */
+  .lw-global {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 6px 12px; border-top: 1px solid var(--line-soft); background: var(--ground); font-size: 11.5px; color: var(--ink-2);
+  }
+  .lw-pills { display: inline-flex; gap: 2px; border: 1px solid var(--line); border-radius: 6px; padding: 1px; background: var(--panel); }
+  .lw-pills button {
+    border: 0; background: none; color: var(--ink-3); font: 500 11px/1.3 var(--sans);
+    padding: 2px 7px; border-radius: 4px; cursor: pointer;
+  }
+  .lw-pills button.on { background: var(--line-soft); color: var(--ink); font-weight: 600; }
+
+  /* Completions, from the engine's field table. */
+  .hints {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    min-width: 280px;
+    max-height: 232px;
+    overflow-y: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 20px 44px -24px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 1);
+    z-index: 30;
+  }
+  .hints.past { left: auto; right: 0; width: min(320px, 100%); max-height: 168px; }
+  .hints[hidden] { display: none; }
+  .hints button {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--u) * 3);
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 5px;
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
+    text-align: left;
+    cursor: pointer;
+    color: var(--ink-2);
+    font: 500 12px/1.3 var(--sans);
+  }
+  .hints button code {
+    font: 700 12.5px/1.3 var(--mono);
+    color: var(--q-key);
+    flex: none;
+  }
+  .hints button[aria-selected="true"] { background: var(--line-soft); color: var(--ink); }
+  .hints button:hover { background: var(--line-soft); }
+
+  .meter {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 3);
+    height: 28px;
+    padding: 0 16px;
+    background: var(--ground);
+    border-top: 1px solid var(--line);
+    font: 500 11.5px/1 var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-3);
+    letter-spacing: .02em;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .meter > span { white-space: nowrap; flex: none; }
+  .meter > .tools, .meter > .views { flex: none; }
+  .meter .mright { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; }
+  .meter .mchip {
+    border: 1px solid var(--line); border-radius: 6px; background: none; padding: 1px 8px;
+    font: 500 11.5px/1.5 var(--sans); color: var(--ink-2); cursor: pointer; letter-spacing: 0;
+  }
+  .meter .mchip:hover { color: var(--ink); border-color: var(--ink-3); }
+  .meter .mchip.warn { color: var(--q-bad); border-color: var(--q-bad); }
+  .meter .mchip[hidden] { display: none; }
+  .meter .mkeys { font: 500 11.5px var(--sans); color: var(--ink-3); letter-spacing: 0; }
+  .meter kbd {
+    font: 500 10.5px var(--mono); padding: 0 4px; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 4px; color: var(--ink-2);
+  }
+  .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
+  .meter .ms  { color: var(--ink-3); font-weight: 600; }
+  .meter .sep { color: var(--line); }
+  .meter #rows.reading { color: var(--q-key); font-weight: 600; }
+  /* The one thing on the line that turns: files are being read. */
+  .meter #rows.reading::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    vertical-align: -1px; border: 2px solid var(--line); border-top-color: var(--q-key);
+    border-radius: 50%; animation: reading-turns .8s linear infinite;
+  }
+  @keyframes reading-turns { to { transform: rotate(360deg); } }
+  .meter .reread {
+    flex: none; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px;
+    background: none; color: var(--ink-2); font: inherit; cursor: pointer;
+  }
+  .meter .reread:hover { color: var(--ink); border-color: var(--ink-3); }
+  /* What the meter has shed for want of width — see `fitMeter`. */
+  .meter[data-drop~="note"] #path-note, .meter[data-drop~="note"] #path-note-sep,
+  .meter[data-drop~="rows"] #rows, .meter[data-drop~="rows"] #rows-sep,
+  .meter[data-drop~="stale"] #stale, .meter[data-drop~="stale"] #stale-sep { display: none; }
+  .meter #stale .short { display: none; }
+  .meter[data-stale="short"] #stale .long { display: none; }
+  .meter[data-stale="short"] #stale .short { display: inline; }
+

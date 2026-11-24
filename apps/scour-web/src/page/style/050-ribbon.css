@@ -1,0 +1,58 @@
+  /* ---------------- the time ribbon ---------------- */
+  /* The rail and the ribbon, put away: kept in the settings for every face.
+     The rail stays a grid item, emptied, so the columns do not shift. */
+  /* Away means away: no edge is left. Settings → List brings it back. */
+  .body.no-rail { grid-template-columns: 0 minmax(0, 1fr); }
+  .body.no-rail.peeking { grid-template-columns: 0 minmax(0, 1fr) var(--peek-w); }
+  .body.no-rail .rail { padding: 0; overflow: hidden; }
+  .body.no-rail .rail > :not(.rail-back) { display: none; }
+  /* The rail put away leaves its edge, which brings it back. */
+  .rail-back { display: none; }
+  .body.no-rail .rail-back {
+    display: none; align-items: center; justify-content: center;
+    width: 100%; height: 100%; border: 0; background: none; padding: 0;
+    color: var(--ink-3); font-size: 15px; cursor: pointer;
+  }
+  .body.no-rail .rail-back:hover { color: var(--ink); background: var(--hover); }
+  .body.no-ribbon .ribbon { display: none; }
+  .pane-x {
+    float: right; border: 0; background: none; color: var(--ink-3); cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0 2px; margin-left: 8px;
+  }
+  .pane-x:hover { color: var(--ink); }
+  .ribbon-head .grow { flex: 1; }
+  .restore { display: flex; gap: 12px; padding: 4px 16px; border-top: 1px solid var(--line); background: var(--ground); }
+  .restore[hidden] { display: none; }
+  .restore button { border: 0; background: none; color: var(--ink-3); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 0; }
+  .restore button:hover { color: var(--ink); }
+  .ribbon {
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    padding: 6px 16px 6px;
+  }
+  .ribbon-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12px; 
+    color: var(--ink-3); font-weight: 650; margin-bottom: calc(var(--u) * 2);
+  }
+  .ribbon-head span { letter-spacing: .02em; text-transform: none; font-weight: 500;
+                      font-family: var(--mono); font-size: 12px; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 24px; }
+  .bars button {
+    flex: 1; border: 0; padding: 0; background: none; cursor: pointer;
+    display: flex; align-items: flex-end; height: 100%;
+    border-radius: 1px;
+  }
+  .bars button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* One ink: the axis says how old, not the colour. */
+  .bars i { display: block; width: 100%; border-radius: 1px 1px 0 0; opacity: .9; background: var(--ink-3) !important; }
+  .bars button:hover i { opacity: 1; }
+  .bars button[aria-pressed="true"] i { opacity: 1; box-shadow: 0 0 0 1px var(--ink) inset; }
+  .scale {
+    display: flex; justify-content: space-between;
+    margin-top: 5px;
+    font: 500 9.5px/1 var(--mono);
+    letter-spacing: .04em;
+    color: var(--ink-3);
+  }
+

@@ -1,0 +1,109 @@
+  /* ---------------- the settings page ---------------- */
+  /* One page for what were four panels; the panels themselves are moved in,
+     so everything that fills them keeps working. */
+  .settings {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--sans);
+  }
+  .settings[hidden] { display: none; }
+  .set-sheet {
+    width: min(880px, calc(100vw - 40px)); height: min(640px, calc(100vh - 40px));
+    display: flex; overflow: hidden; position: relative;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(0,0,0,.5);
+  }
+  .set-nav {
+    width: 210px; flex: none; box-sizing: border-box;
+    padding: 18px 10px 16px; display: flex; flex-direction: column; gap: 2px;
+    background: var(--panel); border-right: 1px solid var(--line);
+  }
+  .set-nav h2 { margin: 0 10px 12px; font-size: 16px; font-weight: 600; color: var(--ink); }
+  .set-nav button {
+    display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px;
+    border: 0; border-radius: 6px; background: none; cursor: pointer;
+    font: inherit; font-size: 13.5px; color: var(--ink-2); text-align: left;
+  }
+  .set-nav button svg { width: 16px; height: 16px; flex: none; }
+  .set-nav button:hover { background: var(--line-soft); color: var(--ink); }
+  .set-nav button.on { background: var(--line); color: var(--ink); }
+  .set-nav .badge {
+    margin-left: auto; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px;
+    box-sizing: border-box; background: var(--q-key); color: var(--ground);
+    font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+  }
+  .set-nav .badge[hidden] { display: none; }
+  .set-foot { margin: auto 10px 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+  /* A face chosen in General: started from here, at the foot of the list. */
+  .set-restart { margin: auto 10px 0; display: flex; flex-direction: column; gap: 6px; }
+  .set-restart[hidden] { display: none; }
+  .set-restart p { margin: 0; font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+  .set-restart[hidden] + .set-foot, .set-restart:not([hidden]) + .set-foot { margin-top: 10px; }
+  .set-restart:not([hidden]) + .set-foot { display: none; }
+  .set-main { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 26px 22px; box-sizing: border-box; }
+  .set-main h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; color: var(--ink); }
+  .set-lead { margin: 0 0 16px; font-size: 12.5px; color: var(--ink-2); }
+  .set-x {
+    position: absolute; top: 12px; right: 12px; width: 28px; height: 28px;
+    border: 0; border-radius: 6px; background: none; color: var(--ink-3);
+    font-size: 18px; cursor: pointer;
+  }
+  .set-x:hover { background: var(--hover); color: var(--ink); }
+  .settings section[hidden] { display: none; }
+  .set-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .srow {
+    display: flex; align-items: center; gap: 14px; min-height: 54px;
+    padding: 8px 14px; box-sizing: border-box;
+  }
+  .srow + .srow { border-top: 1px solid var(--line); }
+  .srow .t { flex: 1; min-width: 0; }
+  .srow .lab { font-size: 13.5px; color: var(--ink); }
+  .srow .desc { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .seg {
+    display: flex; gap: 2px; padding: 2px; height: 32px; box-sizing: border-box; flex: none;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--ground);
+  }
+  .seg button {
+    border: 0; border-radius: 5px; background: none; padding: 0 11px;
+    font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+  }
+  .seg button:hover { background: var(--hover); color: var(--ink); }
+  .seg button.on { background: var(--line); color: var(--ink); }
+  .set-push {
+    height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .set-push:hover { border-color: var(--q-key); }
+  .set-push.asking { color: var(--q-key); border-color: var(--q-key); }
+  .set-push:disabled { opacity: .45; }
+  .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+  .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
+  .set-hint { margin-top: 12px; }
+  .set-pad { padding: 12px 14px; }
+  /* The help was a dialog of its own: here the section is its title. */
+  #set-keys .help-head { display: none; }
+  ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
+  ul.folders li { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+  ul.folders .fw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  ul.folders .fst { font-size: 11.5px; color: var(--ink-3); }
+  ul.folders .fst.bad { color: var(--q-not); }
+  .seg.mini button { font-size: 11.5px; padding: 3px 8px; }
+  ul.folders code { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  form.folder { display: flex; gap: 6px; }
+  form.folder input {
+    flex: 1; height: 30px; box-sizing: border-box; padding: 0 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--ground);
+    color: var(--ink); font-family: var(--mono); font-size: 12px;
+  }
+  .folder-err { margin: 6px 2px 0; font-size: 12px; color: var(--q-not); }
+  .folder-err:empty { display: none; }
+  #set-about { margin: 0; font: 12.5px/1.7 var(--sans); color: var(--ink-2); white-space: pre-wrap; }
+  /* The panels moved in: no longer floating, and the page gives the title. */
+  .settings .sheet, .settings .help {
+    position: static; width: auto; max-height: none; overflow: visible;
+    background: none; border: 0; box-shadow: none; padding: 0;
+  }
+  .settings .sheet > h2, .settings .help > header { display: none; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

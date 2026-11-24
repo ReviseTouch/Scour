@@ -1,0 +1,30 @@
+  /* One loud voice: freshness. */
+  /* @THEME@ — see `scour-ui`; the bridge writes this block when it serves
+     the page, so that the window and this page cannot drift apart. */
+
+  * { box-sizing: border-box; }
+
+  /* Only the results list scrolls; the query line must never leave the screen. */
+  html, body { height: 100%; overflow: hidden; margin: 0; }
+
+  .wrap {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    padding: 0;
+    height: 100%;
+    box-sizing: border-box;
+    display: grid;
+    /* One column: the help is an overlay and re-lays out nothing. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .app  { grid-column: 1; grid-row: 1; }
+
+  /* The `<b>` in the help panel's "permission" paragraph depends on this. */
+  .help b { color: var(--ink); font-weight: 620; }
+

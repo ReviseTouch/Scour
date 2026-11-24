@@ -6,6 +6,8 @@ fn paging_and_refresh_behaviour() {
     let output = match std::process::Command::new("node")
         .arg("--test")
         .arg(script)
+        // The page as served: its parts joined by the build script.
+        .env("SCOUR_PAGE", concat!(env!("OUT_DIR"), "/page.html"))
         .output()
     {
         Ok(output) => output,

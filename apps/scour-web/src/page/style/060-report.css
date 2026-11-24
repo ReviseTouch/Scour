@@ -1,0 +1,448 @@
+  /* ---------------- duplicates ---------------- */
+  .dupes { margin-top: calc(var(--u) * 7); }
+  .dupes-head {
+    display: flex; align-items: baseline; gap: calc(var(--u) * 3);
+    border-top: 2px solid var(--line); padding-top: calc(var(--u) * 3);
+  }
+  .dupes-head h4 {
+    margin: 0; flex: none;
+    font-size: 11px; 
+    color: var(--ink); font-weight: 650;
+  }
+  .dupes-sum {
+    flex: 1; min-width: 0;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-2);
+  }
+  .floors { flex: none; display: flex; gap: 1px; }
+  .floors button {
+    font: inherit; font-size: 11px; font-family: var(--mono);
+    background: none; color: var(--ink-3);
+    border: 1px solid var(--line); border-right-width: 0;
+    padding: 2px calc(var(--u) * 1.5); cursor: pointer;
+  }
+  .floors button:first-child { border-radius: 3px 0 0 3px; }
+  .floors button:last-child { border-radius: 0 3px 3px 0; border-right-width: 1px; }
+  .floors button:hover { color: var(--ink); }
+  .floors button[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--ink-3); }
+  .floors button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  #d-open {
+    flex: none; font: inherit; font-size: 11.5px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 3px calc(var(--u) * 2.5); cursor: pointer;
+  }
+  #d-open:hover { color: var(--ink); border-color: var(--ink-3); }
+  #d-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupes-head button {
+    flex: none; font: inherit; font-size: 11.5px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 3px calc(var(--u) * 2.5); cursor: pointer;
+  }
+  .dupes-head button:hover:enabled { color: var(--ink); border-color: var(--ink-3); }
+  .dupes-head button:disabled { opacity: .5; cursor: default; }
+  .dupes-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe {
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2) 0;
+  }
+  .dupe .top {
+    display: flex; align-items: baseline; gap: calc(var(--u) * 2.5);
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .dupe .save { color: var(--ink); font-weight: 650; }
+  .dupe .of { color: var(--ink-3); }
+  /* Proven and same-length-only are different claims, so this is coloured. */
+  .dupe .sure { margin-left: auto; font-size: 12px; letter-spacing: .04em; }
+  /* Read and compared is calm; not-yet-read must catch the eye. */
+  .dupe .sure.content { color: var(--ink-2); }
+  .dupe .sure.size, .dupe .sure.edges { color: var(--t1); font-weight: 650; }
+  .dupe ul { margin: 3px 0 0; padding: 0 0 0 calc(var(--u) * 3); list-style: none; }
+  .dupe li {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+    overflow-wrap: anywhere; line-height: 1.5;
+    display: flex; align-items: baseline; gap: calc(var(--u) * 1.5);
+  }
+  /* The mark, in the pressed shape the rest of the page uses. */
+  .dupe .mark {
+    flex: none; align-self: center; width: 11px; height: 11px; padding: 0;
+    background: none; border: 1px solid var(--line); border-radius: 50%;
+    cursor: pointer;
+  }
+  .dupe .mark:hover { border-color: var(--ink-3); }
+  .dupe .mark[aria-pressed="true"] { border-color: var(--q-key); box-shadow: 0 0 0 2px var(--q-key) inset; }
+  .dupe .mark:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* The path is a button so the row menu is a keystroke away, drawn flat. */
+  .dupe .path {
+    flex: 1; min-width: 0; text-align: left; padding: 0;
+    font: inherit; background: none; border: 0; color: inherit;
+    overflow-wrap: anywhere; cursor: pointer;
+  }
+  .dupe .path:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe li.kept .path { color: var(--ink); font-weight: 650; }
+  .dupe .when { flex: none; color: var(--ink-3); font-size: 12px; }
+  .dupe .rest {
+    font: inherit; background: none; border: 0; padding: 0;
+    color: var(--ink-3); cursor: pointer; text-align: left;
+  }
+  .dupe .rest:hover { color: var(--ink-2); }
+  .dupe .rest:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe .deeds { margin: calc(var(--u) * 1.5) 0 0 calc(var(--u) * 3); }
+  .dupe .deeds button {
+    font: inherit; font-size: 11px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 2px calc(var(--u) * 2); cursor: pointer;
+  }
+  .dupe .deeds button:hover:enabled { color: var(--ink); border-color: var(--ink-3); }
+  .dupe .deeds button:disabled { opacity: .5; cursor: default; }
+  .dupe .deeds button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* This face has handed over to another one, so the server is going. */
+  .handover {
+    position: fixed; inset: auto 0 0 0; z-index: 40;
+    padding: calc(var(--u) * 3);
+    background: var(--panel-2);
+    border-top: 1px solid var(--line);
+    font: 500 12.5px/1.4 var(--sans); color: var(--ink-2);
+    text-align: center;
+  }
+
+  /* The preview: a third column, shut by default, a third of the width open. */
+  .body { --peek-w: 380px; }
+  .body.peeking { grid-template-columns: 180px minmax(0, 1fr) var(--peek-w); }
+  /* Under 900px collapse the rail so the list and preview both fit; under 560px
+     the preview takes the single column. */
+  @media (max-width: 900px) {
+    .body.peeking { grid-template-columns: minmax(0, 1fr) minmax(220px, 42%); }
+    .body.peeking .rail { display: none; }
+  }
+  @media (max-width: 560px) {
+    .body.peeking { grid-template-columns: minmax(0, 1fr); }
+    .body.peeking .main { display: none; }
+  }
+  /* The edge that sets the preview's width; the panel clips, so it sits inside. */
+  .peek-grip {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+    cursor: col-resize; z-index: 5;
+  }
+  .peek-grip:hover, .peek-grip.dragging { background: var(--line); }
+  .peek {
+    position: relative;
+    border-left: 1px solid var(--line-soft);
+    background: var(--panel-2);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0; overflow: hidden;
+  }
+  .peek[hidden] { display: none; }
+  .peek-head {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 3);
+    border-bottom: 1px solid var(--line-soft);
+    flex: none;
+  }
+  .peek-head .nm {
+    flex: 1; min-width: 0;
+    font-size: 12.5px; font-weight: 600; color: var(--ink);
+    /* It wraps: an rtl clip renders `2023 NTP.pdf` as `NTP.pdf 2023`. */
+    overflow-wrap: anywhere;
+    max-height: 2.8em; overflow: hidden;
+    line-height: 1.35;
+  }
+  .peek-head button {
+    flex: none; background: none; border: 0; cursor: pointer;
+    color: var(--ink-3); font-size: 15px; line-height: 1;
+    padding: 2px 6px; border-radius: 3px;
+  }
+  .peek-head button:hover { color: var(--ink); background: var(--line-soft); }
+  .peek-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  .peek-body {
+    flex: 1; min-height: 0; overflow: auto;
+    display: flex; align-items: center; justify-content: center;
+    padding: calc(var(--u) * 3);
+  }
+  /* Text fills the panel; a picture is centred in it. */
+  .peek-body.text { display: block; padding: 0; }
+  .peek-body pre {
+    margin: 0; padding: calc(var(--u) * 3);
+    font: 400 11.5px/1.55 var(--mono);
+    color: var(--ink-2);
+    white-space: pre-wrap; word-break: break-word;
+    tab-size: 4;
+  }
+  .peek-body pre mark {
+    background: var(--mark); color: inherit;
+    padding: 1px 0; border-radius: 2px;
+  }
+  .peek-body img, .peek-body video {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain;
+    /* A transparent PNG on a dark panel is a picture of nothing. */
+    background:
+      repeating-conic-gradient(var(--line-soft) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    border-radius: 2px;
+  }
+  .peek-body audio { width: 100%; }
+  .peek-body embed { width: 100%; height: 100%; border: 0; }
+  .peek-body .none {
+    text-align: center; color: var(--ink-3); font-size: 12px; line-height: 1.6;
+  }
+  .peek-body .none img {
+    display: block; margin: 0 auto calc(var(--u) * 2);
+    max-width: 128px; max-height: 128px; background: none;
+  }
+  .peek-cut {
+    flex: none;
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 3);
+    border-top: 1px solid var(--line-soft);
+    font: 500 10.5px var(--mono); color: var(--ink-3);
+  }
+  .peek-found {
+    flex: none;
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    font: 11.5px var(--mono); color: var(--ink-2);
+    max-height: 30%; overflow: auto;
+  }
+  .peek-found h4 { margin: 0 0 4px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .peek-found div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.7; }
+  .peek-facts {
+    flex: none; margin: 0;
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 3);
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 3px calc(var(--u) * 3);
+    font-size: 11.5px;
+    max-height: 42%; overflow: auto;
+  }
+  .peek-facts dt { color: var(--ink-3); white-space: nowrap; }
+  .peek-facts dd {
+    margin: 0; color: var(--ink-2);
+    font-family: var(--mono); font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  /* The help panel is `fixed`, anchored by measurement (`placeHelp`), and not
+   * modal — the box still takes keystrokes. */
+  .help {
+    position: fixed;
+    z-index: 60;
+    width: min(430px, calc(100vw - 40px));
+    max-height: min(560px, calc(100vh - 120px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .help[hidden] { display: none; }
+
+  /* What is skipped: an overlay, so its switches do not push the table down. */
+  .sheet {
+    position: fixed;
+    top: 64px; right: 20px;
+    z-index: 60;
+    width: min(400px, calc(100vw - 40px));
+    max-height: min(620px, calc(100vh - 120px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .sheet[hidden] { display: none; }
+  /* One face per row: a dot for the running one, and once armed a button. */
+  .face { border-radius: 3px; }
+  .face.armed { background: var(--hover); }
+  .face .pick {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 6px; background: none; border: 0; color: var(--ink);
+    font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  }
+  .face .pick:hover:not(:disabled) { background: var(--hover); border-radius: 3px; }
+  .face .pick:disabled { color: var(--ink-3); cursor: default; }
+  .face .dot { width: 12px; color: var(--ink-3); }
+  .face .pick:disabled .dot { color: var(--q-key); }
+  .face .name { flex: 1; }
+  .face .aside { color: var(--ink-3); font-size: 11px; }
+  .face .say {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 6px 8px 26px;
+  }
+  .face .say p { flex: 1; margin: 0; color: var(--ink-2); font-size: 11px; }
+  .face .say .go {
+    padding: 5px 12px; border: 1px solid var(--q-key); border-radius: 3px;
+    background: none; color: var(--q-key); font: inherit; font-size: 11px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .sheet h2 {
+    font-size: 13px; 
+    font-weight: 650; color: var(--ink); margin: 0 0 calc(var(--u) * 3);
+  }
+  .sheet h3 {
+    font-size: 12px; 
+    font-weight: 650; color: var(--ink-3);
+    margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+  }
+  .sheet .why { margin: 0 0 calc(var(--u) * 2); font-size: 12px; color: var(--ink-3); }
+  ul.rules { list-style: none; margin: 0; padding: 0; }
+  ul.rules li {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: 2px 0;
+  }
+  /* The label is the hit target: a 13px checkbox is hard to aim at. */
+  ul.rules label {
+    flex: 1; display: flex; align-items: center; gap: calc(var(--u) * 2);
+    cursor: pointer; min-width: 0;
+  }
+  ul.rules code {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  /* In a list of forty, the checkbox alone does not read as off. */
+  ul.rules li.off code { color: var(--ink-3); text-decoration: line-through; }
+  ul.rules .drop {
+    background: none; border: 0; padding: 0 calc(var(--u));
+    color: var(--ink-3); font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  ul.rules .drop:hover { color: var(--q-bad, var(--ink)); }
+  form.add { display: flex; gap: calc(var(--u) * 2); margin-top: calc(var(--u) * 3); }
+  form.add input {
+    flex: 1; min-width: 0;
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 6px; font: inherit; font-size: 12px;
+  }
+  form.add button {
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  form.add button:hover { border-color: var(--ink-3); }
+
+  /* A disk: its name, then what it is, then where it is mounted. */
+  ul.disks .disk { display: flex; flex-direction: column; min-width: 0; }
+  ul.disks .disk .name { color: var(--ink); }
+  ul.disks .disk .aside { color: var(--ink-3); font-size: 11px; }
+  ul.disks li { padding: 4px 0; }
+  .about.asking { color: var(--q-key); }
+  .disk-ask {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: 6px 12px; border-bottom: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-size: 12px;
+  }
+  .disk-ask[hidden] { display: none; }
+  .disk-ask .said { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .disk-ask button {
+    background: none; color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .disk-ask button.yes { border-color: var(--q-key); color: var(--q-key); }
+  .disk-ask button:hover { border-color: var(--ink-3); }
+
+  /* The desktop's key. The field and its buttons are `form.add`'s, so the two
+     places in this sheet that take typing look like one. */
+  .hk-now { margin: 0 0 calc(var(--u) * 2); }
+  .hk-now code { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+  .hk-none { color: var(--ink-3); }
+  /* Nothing here can bind: the command is shown to be bound by hand. */
+  .hk-cmd {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    margin-top: calc(var(--u) * 2);
+  }
+  .hk-cmd code {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .hk-cmd button {
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .hk-cmd button:hover { border-color: var(--ink-3); }
+  /* One line for both what went wrong and what is merely waiting. */
+  .hk-said { margin: calc(var(--u) * 2) 0 0; font-size: 11px; color: var(--ink-3); }
+  .hk-said.bad { color: var(--q-bad); }
+
+  .help-head { display: flex; align-items: baseline; gap: calc(var(--u) * 3); }
+  .help h1 {
+    flex: 1;
+    font-size: 13px; 
+    font-weight: 650; color: var(--ink); margin: 0;
+  }
+  .help-head button {
+    background: none; border: 0; padding: 0 calc(var(--u));
+    color: var(--ink-3); font-size: 17px; line-height: 1; cursor: pointer;
+  }
+  .help-head button:hover { color: var(--ink); }
+  .help-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .help h2 {
+    font-size: 12px; 
+    font-weight: 650; color: var(--ink-3);
+    margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+  }
+  .help-lead { margin: 0 0 calc(var(--u) * 3); font-size: 12.5px; }
+  .help code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); background: var(--panel-2);
+    padding: 1px 4px; border-radius: 2px;
+  }
+  /* `grid`, so descriptions line up against the longest term. */
+  .help-fields, .help-keys {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: calc(var(--u) * 1.5) calc(var(--u) * 4);
+    margin: 0;
+    align-items: baseline;
+  }
+  .help-fields dt, .help-keys dt {
+    font: 500 11.5px/1.4 var(--mono);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .help-fields dd, .help-keys dd {
+    margin: 0; font-size: 12.5px; color: var(--ink-2);
+  }
+
+  /* The design notes: one column, in a panel narrower than any track minimum. */
+  .legend { display: flex; flex-direction: column; gap: calc(var(--u) * 4); }
+  .legend section { padding-top: 0; }
+  .legend h3 {
+    margin: 0 0 calc(var(--u) * 1.5);
+    font-size: 11px; 
+    color: var(--ink); font-weight: 650;
+  }
+  .legend p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+  /* The maker, at the foot of the panel: a colophon, not a banner. */
+  .made {
+    margin: calc(var(--u) * 5) 0 0;
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--ink-3);
+  }
+  .made a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .made a:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
+  .legend code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); background: var(--panel-2);
+    padding: 1px 4px; border-radius: 2px;
+  }
+

@@ -1,0 +1,199 @@
+  /* ---------------- the row menu ---------------- */
+  tbody tr { cursor: default; }
+  tbody tr.spacer, tbody tr.ghost { pointer-events: none; }
+  tbody tr.spacer td, tbody tr.ghost td { padding: 0; border: 0; }
+  tbody tr.ghost { height: 31px; }
+  /* A row on its way: two bars, unanimated — a shimmer is compositor work
+   * every frame for as long as a list fills. */
+  tbody tr.ghost td:nth-child(2)::after,
+  tbody tr.ghost td:nth-child(3)::after {
+    content: ""; display: block; height: 8px; border-radius: 2px;
+    margin: 11px calc(var(--u) * 3); background: var(--line);
+  }
+  tbody tr.ghost td:nth-child(3)::after { background: var(--line-soft); }
+  tbody tr.far td {
+    padding: calc(var(--u) * 4) calc(var(--u) * 5);
+    color: var(--ink-3); font-size: 12px;
+    border-top: 1px solid var(--line);
+  }
+  tbody tr.far:hover { background: none; }
+  tbody tr.spacer:hover, tbody tr.ghost:hover { background: none; }
+  tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
+
+  /* Fading over 1.6 s, as an overlay's opacity and never the row's
+     `background`: animating that costs 36.2% of a core against 22.4%. The
+     delay is inherited, so a repaint carries a half-finished fade. */
+  tbody tr.fresh { position: relative; z-index: 0; }
+  tbody tr.fresh::after {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--t0) 22%, transparent);
+    will-change: opacity;
+    animation: arrived 1.6s ease-out forwards;
+    animation-delay: inherit;
+  }
+  tbody tr.fresh td:first-child { box-shadow: inset 2px 0 0 var(--t0); }
+  @keyframes arrived {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+  }
+  /* No tint at all: `animation: none` would park the overlay at full opacity. */
+  @media (prefers-reduced-motion: reduce) {
+    tbody tr.fresh::after { display: none; }
+  }
+
+  /* A popover: a step off the ground, a soft far shadow, 32 px rows and
+     13.5 px labels — the window's menu, measure for measure. */
+  .rowmenu {
+    position: fixed; z-index: 60;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.45);
+    display: flex; flex-direction: column; min-width: 168px;
+    /* Hung on `body`, outside the frame that sets the face. */
+    font-family: var(--sans); color: var(--ink);
+  }
+  :root[data-theme="light"] .rowmenu { background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .rowmenu { background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+  }
+  .rowmenu.row { width: 300px; box-sizing: border-box; }
+  .rowmenu[hidden] { display: none; }
+  .rowmenu button {
+    background: none; border: 0; text-align: left;
+    font: inherit; font-size: 13.5px; color: var(--ink);
+    height: 32px; padding: 0 12px 0 10px; flex: none;
+    border-radius: 5px; cursor: pointer;
+  }
+  .rowmenu button { display: flex; align-items: center; gap: 10px; }
+  .rowmenu .mi { width: 16px; height: 16px; flex: none; color: var(--ink-2); display: flex; }
+  .rowmenu .mi svg { width: 16px; height: 16px; }
+  .rowmenu button:hover .mi, .rowmenu button:focus-visible .mi { color: var(--ink); }
+  /* The shortcut, quieter than the label: it is there to be learned, not read. */
+  .mkey {
+    margin-left: auto; font-size: 12px; color: var(--ink-3);
+  }
+  /* A rule between groups: a hand must not reach the delete by momentum. */
+  .mline { height: 1px; background: var(--line); margin: 4px 8px; flex: none; }
+  /* What the menu is about: the row's name, where it is, what it weighs. */
+  .mhead { display: flex; align-items: center; gap: 10px; padding: 6px 10px 10px; min-width: 0; }
+  .mhead .mk {
+    width: 28px; height: 28px; border-radius: 6px; flex: none;
+    background: var(--line); display: flex; align-items: center; justify-content: center;
+  }
+  .mhead .mk .ico {
+    display: block; width: 18px; height: 18px;
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / 18px 18px no-repeat;
+    mask: var(--g) center / 18px 18px no-repeat;
+  }
+  .mhead .mk .mi { width: 18px; height: 18px; color: var(--q-key); }
+  .mhead .mk .mi svg { width: 18px; height: 18px; }
+  .mhead .mt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mhead b { font-size: 13.5px; font-weight: 600; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mhead small { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The strip: the few wanted most, a word each under a drawing. */
+  .mstrip { display: flex; gap: 2px; padding-bottom: 4px; }
+  .rowmenu .mstrip button {
+    flex: 1 1 0; min-width: 0; height: 56px; padding: 0 2px;
+    flex-direction: column; justify-content: center; gap: 5px;
+    font-size: 11.5px; color: var(--ink-2); text-align: center;
+  }
+  .rowmenu .mstrip button .mi { width: 18px; height: 18px; }
+  .rowmenu .mstrip button .mi svg { width: 18px; height: 18px; }
+  .rowmenu .mstrip button:hover, .rowmenu .mstrip button:focus-visible { color: var(--ink); }
+  /* Reversible, but it changes something: red only under the pointer. */
+  .rowmenu button.w-careful:hover, .rowmenu button.w-careful:focus-visible,
+  .rowmenu button.w-careful:hover .mi, .rowmenu button.w-careful:focus-visible .mi { color: var(--danger); }
+  .rowmenu button.w-careful:hover, .rowmenu button.w-careful:focus-visible {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+  }
+  /* It starts more programs or takes long enough to notice, and asks first. */
+  .rowmenu button.w-heavy { color: var(--ink-2); }
+  .rowmenu.cols { max-height: 60vh; overflow-y: auto; }
+  .rowmenu.cols .tick {
+    display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
+  }
+  .rowmenu.cols button[disabled] { opacity: .4; cursor: default; }
+  /* The language menu borrows the column picker's tick: one entry is in force. */
+  .rowmenu.langs { min-width: 132px; }
+  .rowmenu.langs .tick {
+    display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
+  }
+  .rowmenu.cols .reset {
+    border-top: 1px solid var(--line); margin-top: 3px; padding-top: 6px;
+    color: var(--ink-3);
+  }
+  thead th.pick { width: 30px; padding: 0; }
+  thead th.pick button {
+    background: none; border: 0; cursor: pointer; color: var(--ink-3);
+    width: 28px; height: 100%; font-size: 15px; line-height: 1;
+  }
+  thead th.pick button:hover { color: var(--ink); }
+  thead th[data-sort] { cursor: pointer; }
+  thead th:not([data-sort]):not(.pick) { cursor: default; }
+  tbody td.mono { font: 400 11.5px/1 var(--mono); color: var(--ink-2); }
+
+  /* 18px in a 31px row; `display: block`, so the cell centres it. */
+  tbody td.age .ico {
+    width: 18px; height: 18px;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto;
+    flex: none;
+  }
+
+  /* Drawn here, not taken from the desktop: XDG icon lookup is a Linux answer.
+   * A mask and not an `<img>`, so a type change fetches nothing. */
+  tbody td.age span.ico {
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / 18px 18px no-repeat;
+    mask: var(--g) center / 18px 18px no-repeat;
+  }
+
+  /* The glyph switch, in a heading that gives up its 24px of padding. */
+  thead th.mark { width: 30px; padding: 0; text-align: center; }
+  thead th.mark button {
+    background: none; border: 1px solid transparent; border-radius: 3px;
+    width: 20px; height: 20px; padding: 0; cursor: pointer;
+    color: var(--ink-3); font: 600 11px/1 var(--sans);
+    vertical-align: middle;
+  }
+  thead th.mark button:hover { color: var(--ink); border-color: var(--line); }
+  thead th.mark button[aria-pressed="true"] { color: var(--q-key); }
+  thead th.mark button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .k-folder { --k: #7d9bc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 4.4c0-.5.4-1 1-1h3l1.3 1.5H13c.6 0 1 .4 1 1v5.7c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z'/%3E%3C/svg%3E"); }
+  .k-file { --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M4 2.2h4.6L12 5.6v8.2H4z'/%3E%3Cpath d='M8.5 2.4v3.3h3.3'/%3E%3C/svg%3E"); }
+  .k-doc { --k: #9aa5b1;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M4 2.2h4.6L12 5.6v8.2H4z'/%3E%3Cpath d='M8.5 2.4v3.3h3.3'/%3E%3Cpath d='M6 8.4h4M6 10.6h4'/%3E%3C/svg%3E"); }
+  .k-code { --k: #7fbfa8;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.6 4.8 2.4 8l3.2 3.2M10.4 4.8 13.6 8l-3.2 3.2M9.2 3.6 6.8 12.4'/%3E%3C/svg%3E"); }
+  .k-image { --k: #b98fc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Crect x='2.2' y='3.2' width='11.6' height='9.6' rx='1.2'/%3E%3Ccircle cx='5.8' cy='6.5' r='1.1'/%3E%3Cpath d='M2.6 11.6 6.2 8.4l2.3 2.1 2.3-2.6 2.6 2.9'/%3E%3C/svg%3E"); }
+  .k-video { --k: #c48f9b;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' d='M2.2 3.6h11.6v8.8H2.2z'/%3E%3Cpath d='M6.7 6.1 10 8l-3.3 1.9z'/%3E%3C/svg%3E"); }
+  .k-media { --k: #c48f9b;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' d='M2.2 3.6h11.6v8.8H2.2z'/%3E%3Cpath d='M6.7 6.1 10 8l-3.3 1.9z'/%3E%3C/svg%3E"); }
+  .k-audio { --k: #8f9dc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round' d='M6 11.4V4.1l5.4-1.3v7.1'/%3E%3Ccircle cx='4.6' cy='11.6' r='1.5'/%3E%3Ccircle cx='10' cy='10.1' r='1.5'/%3E%3C/svg%3E"); }
+  .k-archive { --k: #c4a87f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M2.4 5.6h11.2v7.2H2.4zM2.4 3.2h11.2v2.4H2.4z'/%3E%3Cpath d='M6.6 8.4h2.8'/%3E%3C/svg%3E"); }
+  .k-exec { --k: #c49a7f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' stroke-linecap='round'%3E%3Crect x='2.2' y='3' width='11.6' height='10' rx='1.2'/%3E%3Cpath d='M4.8 6.9 6.6 8.6 4.8 10.3M8.4 10.4h3'/%3E%3C/svg%3E"); }
+  .k-data { --k: #7fb3c4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3'%3E%3Cellipse cx='8' cy='4.3' rx='5' ry='1.9'/%3E%3Cpath d='M3 4.3v7.4c0 1 2.2 1.9 5 1.9s5-.9 5-1.9V4.3M3 8c0 1 2.2 1.9 5 1.9s5-.9 5-1.9'/%3E%3C/svg%3E"); }
+  .k-config { --k: #a3a97f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M2.6 5.4h10.8M2.6 10.6h10.8'/%3E%3Ccircle cx='6' cy='5.4' r='1.7' fill='%23000' stroke='none'/%3E%3Ccircle cx='10.2' cy='10.6' r='1.7' fill='%23000' stroke='none'/%3E%3C/svg%3E"); }
+  .k-font { --k: #c4b87f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 12.8 8 3.2l4.4 9.6M5.4 9.4h5.2'/%3E%3C/svg%3E"); }
+  .k-build { --k: #8a8f99;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M8 2.4 13.4 5.2 8 8l-5.4-2.8z'/%3E%3Cpath d='M2.6 5.2v5.6L8 13.6l5.4-2.8V5.2M8 8v5.6'/%3E%3C/svg%3E"); }
+
+  .rowmenu button:hover, .rowmenu button:focus-visible {
+    background: var(--line); color: var(--ink); outline: none;
+  }
+
+

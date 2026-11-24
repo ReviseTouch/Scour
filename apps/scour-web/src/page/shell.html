@@ -1,0 +1,497 @@
+<!doctype html>
+<!-- Without the doctype the `height: 100%` chain from `html` to the results
+     list does not connect. `lang` is the source language, rewritten by
+     `applyLanguage` when the catalogue lands. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Scour</title>
+<link rel="icon" href="@LOGO@">
+</head>
+<body>
+
+<style>
+@STYLE@
+</style>
+
+<div class="wrap">
+
+  <!-- The elements are empty and `data-t` is the catalogue's key. `-html`
+       where the sentence has markup, `-title`/`-aria`/`-ph` for attributes. -->
+  <div class="help" id="help" hidden role="dialog" data-t-aria="Help">
+    <div class="help-head">
+      <h1 data-t="Scour · the interface"></h1>
+      <button type="button" id="help-x" data-t-title="close" data-t-aria="close">×</button>
+    </div>
+
+    <h2 data-t="What you can type"></h2>
+    <p class="help-lead" data-t-html="A word on its own matches the name. Put &lt;code&gt;!&lt;/code&gt; in front of any term to exclude it, and write several to mean all of them at once."></p>
+    <!-- Built from `FIELDS`, so the completions and this are one list. -->
+    <dl class="help-fields" id="help-fields"></dl>
+
+    <h2 data-t="Keys"></h2>
+    <dl class="help-keys">
+      <dt>Enter</dt><dd data-t="open what is selected"></dd>
+      <dt>↑ ↓</dt><dd data-t="move through the list"></dd>
+      <dt>Alt + ↓</dt><dd data-t="past searches"></dd>
+      <dt>Ctrl + A</dt><dd data-t="select everything"></dd>
+      <dt>Esc</dt><dd data-t="clear the selection"></dd>
+    </dl>
+
+    <h2 data-t="Why it looks like this"></h2>
+    <!-- The link is inside the msgid: word order is the language's. -->
+    <p class="made" data-t-html="Made by &lt;a href=&quot;https://revisetouch.com&quot; target=&quot;_blank&quot; rel=&quot;noreferrer&quot;&gt;revisetouch.com&lt;/a&gt;"></p>
+  </div>
+
+  <div class="app">
+    <div class="query">
+      <div class="brand"><img class="logo" src="@LOGO@" alt="">Scour</div>
+      <div class="qbox">
+      <div class="qline">
+        <span class="prompt" aria-hidden="true">⌕</span>
+        <div class="qfield">
+          <div class="qshadow" id="shadow"></div>
+          <div class="qdecor" id="qdecor" aria-hidden="true"></div>
+          <!-- A text area, so a long query wraps onto a second and third line
+               instead of scrolling out of sight. Enter never breaks a line. -->
+          <textarea id="q" rows="1" spellcheck="false" autocomplete="off"
+                 data-t-aria="Query" role="combobox" aria-expanded="false"
+                 aria-autocomplete="list" aria-controls="hints"
+                 data-t-ph="file name  ·  : starts a filter  ·  ext:pdf  ·  dm:7d"></textarea>
+          <div class="qacts" id="qacts" aria-hidden="true"></div>
+          <!-- `Alt+↓` is the gesture; hidden until there is a past. -->
+          <button type="button" id="qpast" tabindex="-1" hidden
+                  data-t-title="past searches (Alt+↓)" data-t-aria="past searches">▾</button>
+          <div class="hints" id="hints" role="listbox" data-t-aria="Suggestions" hidden></div>
+          <!-- The lens: what the term under the caret can become, each with how
+               many results it would leave. Opened by the term, never in the middle. -->
+          <div class="lens" id="lens" role="listbox" data-t-aria="Choices" hidden></div>
+        </div>
+      </div>
+      <!-- What the files hold: a line of its own under the field, in the
+           same box. Hidden until asked for. -->
+      <div class="grep-bar" id="grep-bar" hidden>
+        <span class="ghead"><span aria-hidden="true">≣</span><span data-t="Inside"></span></span>
+        <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
+               data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
+        <div class="grep-seg" role="group">
+          <button type="button" data-gmode="text" aria-pressed="true" data-t="Text"></button>
+          <button type="button" data-gmode="regex" aria-pressed="false" data-t="Regex"></button>
+          <button type="button" data-gmode="hex" aria-pressed="false" data-t="Hex"></button>
+        </div>
+        <button type="button" class="grep-flag" id="grep-case" aria-pressed="false"
+                data-t-title="Exact case" data-t-aria="Exact case">Aa</button>
+        <button type="button" class="grep-flag" id="grep-bin" aria-pressed="false"
+                data-t-title="Include binary files" data-t-aria="Include binary files">01</button>
+        <span class="gmeter" id="grep-meter"></span>
+        <button type="button" class="grep-x" id="grep-close"
+                data-t-title="Close grep" data-t-aria="Close grep">×</button>
+      </div>
+      </div>
+      <!-- Quiet on-demand lenses and filters: unfold only when asked. -->
+      <div class="qtriggers" id="qtriggers">
+        <button type="button" class="qtrig" id="q-loc" data-lens-field="under"
+                data-t-title="Open location lens" data-t-aria="Open location lens">
+          <span class="gi" aria-hidden="true">⛁</span><span class="qlab" data-t="Location"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-time" data-lens-field="dm"
+                data-t-title="Open time lens" data-t-aria="Open time lens">
+          <span class="gi" aria-hidden="true">◷</span><span class="qlab" data-t="Modified"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-fuzzy"
+                data-t-title="Word matching" data-t-aria="Word matching">
+          <span class="gi" aria-hidden="true">≈</span><span class="qlab" data-t="Fuzzy"></span>
+        </button>
+        <button type="button" class="qtrig" id="q-grep"
+                data-t-title="Search inside files (Ctrl+G)" data-t-aria="Search inside files (Ctrl+G)">
+          <span class="gi" aria-hidden="true">≣</span><span class="qlab" data-t="Grep"></span>
+        </button>
+        <button type="button" id="qadd" class="qfilter" aria-haspopup="listbox"
+                data-t-title="add a filter (:)" data-t-aria="add a filter"><span data-t="Filter"></span> ▾</button>
+      </div>
+      <!-- Under the bar: calm and hidden on an empty query, unfolding as the user types or asks. -->
+      <div class="ctxrow" id="ctxrow" hidden>
+        <div class="narrow" id="narrow">
+          <p class="qread" id="qread"></p>
+          <span class="nlbl" id="narrow-lbl" data-t="Narrow:" hidden></span>
+          <span class="chips" id="chips"></span>
+        </div>
+        <button type="button" class="ctx-x" id="ctx-close" data-t-title="Hide narrowing suggestions" data-t-aria="Hide narrowing suggestions">×</button>
+      </div>
+    </div>
+
+    <!-- The search tabs. Hidden only while the report is shown. -->
+    <!-- The tabs on the left; on the right what is about the window and the
+         list's shape, here because the strip has the room. Always shown. -->
+    <div class="tabstrip" id="tabstrip">
+      <div class="stabs" id="stabs" role="tablist" data-t-aria="Search tabs"></div>
+      <div class="tbar">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
+        <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
+      </div>
+      <!-- One group: each of these is about the window, not the results. -->
+      <div class="tools" role="group" data-t-aria="window controls">
+        <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="how to run it"
+                data-t-aria="switch between the window, the terminal and the browser">⇄</button>
+        <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
+                aria-expanded="false" data-t-title="language"
+                data-t-aria="choose the language">文</button>
+        <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="what is skipped"
+                data-t-aria="the rules that keep files out of the index">⊘</button>
+        <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="disks"
+                data-t-aria="the disks this machine has, and which are indexed">⛁</button>
+        <button type="button" id="tab-new" class="about"
+                data-t-title="New tab (Alt+T)" data-t-aria="New tab (Alt+T)"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M8 8.5v3M6.5 10h3"/></svg></button>
+        <button type="button" id="csv" class="about"
+                data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
+        <button type="button" id="about" class="about" aria-pressed="false" hidden
+                data-t-title="help" data-t-aria="show the help">?</button>
+        <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
+        <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
+                data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+      </div>
+      <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
+      <div class="views" id="peek-switch" role="group">
+        <button type="button" id="peek-toggle" aria-pressed="false"
+                data-t-title="Preview" data-t-aria="close the preview">◫</button>
+      </div>
+      <div class="views" id="views" role="group" data-t-aria="how the results are shown">
+        <button type="button" data-view="detail" aria-pressed="true"
+                data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
+        <button type="button" data-view="icons" aria-pressed="false"
+                data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
+        <button type="button" data-view="large" aria-pressed="false"
+                data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="meter">
+      <span class="big" id="count">—</span>
+      <span class="sep">·</span>
+      <span class="ms" id="ms">—</span>
+      <span class="sep" id="rows-sep">·</span>
+      <span id="rows"></span>
+      <!-- A `content:` query's reading: on from where it stopped, or again. -->
+      <button type="button" class="reread" id="read-on" data-t="go on" hidden></button>
+      <button type="button" class="reread" id="read-again" data-t="read again" hidden></button>
+      <!-- Switching a skip rule off starts a walk; this is what then moves. -->
+      <span class="sep" id="scanning-sep" hidden>·</span>
+      <span id="scanning" class="scanning" hidden></span>
+      <!-- Every query reads the unsorted tail: a week took ordering by path
+           from 1.9 ms to 21.5, and a rebuild put it back. -->
+      <span class="sep" id="stale-sep" hidden>·</span>
+      <span id="stale" class="stale" hidden></span>
+      <span class="sep" id="path-note-sep">·</span>
+      <span id="path-note" data-t="connecting…"></span>
+      <!-- The status bar's right end: a disk waiting for an answer, how words
+           are read for every search, and the two keys worth knowing. -->
+      <span class="mright">
+        <button type="button" class="mchip warn" id="m-disk" hidden></button>
+        <button type="button" class="mchip" id="m-narrow"
+                data-t-title="Show narrowing suggestions"><span data-t="Narrow"></span></button>
+        <button type="button" class="mchip" id="m-typos"
+                data-t-title="How every word is read; a press changes it"></button>
+        <span class="mkeys"><kbd>:</kbd> <span data-t="filter"></span>
+          <kbd>Alt</kbd>+<kbd>T</kbd> <span data-t="tab"></span></span>
+      </span>
+    </div>
+
+    <!-- Choosing a face starts a program, so a second press confirms it. -->
+    <div id="faces-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="how to run it">
+      <h2 data-t="how to run it"></h2>
+      <div id="faces-body"></div>
+      <!-- The desktop's own key: shown in the settings' Keyboard section. -->
+      <div id="hotkey-body"></div>
+    </div>
+
+    <div id="rules-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="what is skipped">
+      <h2 data-t="What is skipped"></h2>
+      <p class="why" data-t="These decide what never reaches the index."></p>
+      <div id="rules-body"></div>
+      <p class="why" data-t="Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."></p>
+      <p class="why" data-t="Switching a rule off does not delete it — that is how the two groups nobody can edit are still yours to turn off."></p>
+    </div>
+    <div id="disks-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="disks">
+      <h2 data-t="Disks"></h2>
+      <p class="why" data-t="Every disk on this machine. A built-in one is indexed unless switched off; one plugged in or on the network is asked about first."></p>
+      <div id="disks-body"></div>
+      <p class="why" data-t="Switching a disk on walks it; switching one off takes its files out of the index."></p>
+    </div>
+
+
+    <!-- The settings: a page of sections. The panels above are moved into it
+         when the script starts, so what fills them is unchanged. -->
+    <div id="settings" class="settings" hidden role="dialog" aria-modal="true" data-t-aria="Settings">
+      <div class="set-sheet">
+        <nav class="set-nav">
+          <h2 data-t="Settings"></h2>
+        <button type="button" data-sec="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-t="General"></span></button>
+        <button type="button" data-sec="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg><span data-t="Searching"></span></button>
+        <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List"></span></button>
+        <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks and folders"></span><span class="badge" id="set-badge" hidden>1</span></button>
+        <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
+        <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
+        <button type="button" data-sec="index"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></svg><span data-t="Index"></span></button>
+        <button type="button" data-sec="performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/><path d="M8 20h8"/></svg><span data-t="Performance"></span></button>
+        <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
+          <div class="set-restart" id="set-restart" hidden>
+            <p id="set-restart-what"></p>
+            <button type="button" class="set-push asking" id="set-restart-go" data-t="Restart"></button>
+          </div>
+          <p class="set-foot" data-t="Changes apply at once; there is nothing to save. Esc closes."></p>
+        </nav>
+        <div class="set-main">
+          <button type="button" class="set-x" data-t-aria="close">×</button>
+          <h1 id="set-title"></h1>
+          <p class="set-lead" id="set-lead"></p>
+          <section data-sec="general">
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Language"></div><div class="desc" data-t="Empty follows the desktop."></div></div><div class="seg" id="seg-lang"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="When Scour opens"></div><div class="desc" data-t="Which face the key and the menu entry open."></div></div><div class="seg" id="seg-face"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Theme"></div><div class="desc" data-t="Follows the desktop unless one is chosen."></div></div><div class="seg" id="seg-theme"></div></div>
+            </div>
+            <div class="shead" data-t="Open another face now"></div>
+            <div id="set-faces"></div>
+          </section>
+          <section data-sec="view" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Layout"></div></div><div class="seg" id="seg-layout"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Refresh the list every"></div><div class="desc" data-t="While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."></div></div><div class="seg" id="seg-refresh"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="System icons"></div><div class="desc" data-t="The desktop's own file and folder icons instead of built-in glyphs."></div></div><div class="seg" id="seg-sysicons"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Sidebar"></div><div class="desc" data-t="Places, types and sizes beside the list. The filter strip and the lens do the same from the bar."></div></div><div class="seg" id="seg-rail"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Time ribbon"></div><div class="desc" data-t="How old the results are, as bars under the list."></div></div><div class="seg" id="seg-ribbon"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
+            </div>
+          </section>
+          <section data-sec="search" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Ignore accents"></div><div class="desc" data-t="cafe also finds café. A word typed with an accent still finds only that spelling."></div></div><div class="seg" id="seg-accents"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Typing mistakes"></div><div class="desc" data-t="A letter wrong, missing, extra or swapped, in a word of five letters or more."></div></div><div class="seg" id="seg-typos"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Search tabs"></div><div class="desc" data-t="Several searches side by side. Alt+T opens one."></div></div><div class="seg" id="seg-tabs"></div></div>
+            </div>
+            <p class="set-note set-hint" data-t="letters:scrgui finds scour-gui: those letters in that order, with anything between. fuzzy:word forgives one word its mistakes."></p>
+          </section>
+          <section data-sec="disks" hidden>
+            <div id="set-disks"></div>
+            <div class="shead" data-t="Disks that come later"></div>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="A disk plugged in"></div><div class="desc" data-t="A stick, an external disk, a card."></div></div><div class="seg" id="seg-removable"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Walked again as often as the folders below."></div></div><div class="seg" id="seg-network"></div></div>
+            </div>
+            <div class="shead" data-t="Folders added"></div>
+            <p class="set-note" data-t="One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing."></p>
+            <ul class="folders" id="folders"></ul>
+            <form class="folder" id="folder-form">
+              <input type="text" spellcheck="false" autocomplete="off" data-t-ph="/a/folder or ~/a/folder">
+              <button type="submit" class="set-push" data-t="add"></button>
+            </form>
+            <p class="folder-err" id="folder-err"></p>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Walk again every"></div><div class="desc" data-t="For a folder nothing reports changes for: a share whose server sends none, or one set to walk only."></div></div><div class="seg" id="seg-every"></div></div>
+            </div>
+          </section>
+          <section data-sec="rules" hidden><div id="set-rules"></div></section>
+          <section data-sec="keys" hidden>
+            <div class="shead" data-t="Keyboard shortcut"></div>
+            <div class="set-card set-pad" id="set-hotkey"></div>
+            <div class="shead" data-t="Keys and the query"></div>
+            <div id="set-keys"></div>
+          </section>
+          <section data-sec="index" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Kept in"></div><div class="desc" id="index-where"></div></div><button type="button" class="set-push" id="index-open" data-t="Open the folder"></button></div>
+            </div>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Reorganize"></div><div class="desc" data-t="Folds new files into the ordered part of the index. Nothing is removed and searching goes on; it happens by itself when the machine is idle."></div></div><button type="button" class="set-push" id="index-tidy" data-t="Reorganize"></button></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Reset and scan again"></div><div class="desc" id="index-reset-desc"></div></div><span id="index-reset-btns"></span></div>
+            </div>
+            <p class="set-lead" id="index-said"></p>
+          </section>
+          <section data-sec="performance" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Give memory back"></div><div class="desc" data-t="What a search brought into memory is given back once nobody asks. Automatic is at once under 8 GB of memory and after a minute above it; at once costs the next search a little time."></div></div><div class="seg" id="seg-memory"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Narrowing line"></div><div class="desc" data-t="The suggestions under the query bar. Switched off, a new query asks nothing for them: about half a second of the service's work less."></div></div><div class="seg" id="seg-narrow"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Cores for one search"></div><div class="desc" data-t="How many cores a large search is split over. Fewer leaves the machine more to itself and makes a large search slower."></div></div><div class="seg" id="seg-threads"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Up to date within"></div><div class="desc" data-t="While no window is open, how late a change may reach the index. Sooner writes to the disk more often."></div></div><div class="seg" id="seg-fresh"></div></div>
+            </div>
+          </section>
+          <section data-sec="about" hidden><pre id="set-about"></pre></section>
+        </div>
+      </div>
+    </div>
+
+    <!-- A disk that came and has not been answered for. One at a time. -->
+    <div id="disk-ask" class="disk-ask" hidden role="status">
+      <span class="said"></span>
+      <button type="button" class="yes" data-do="index" data-t="Index it"></button>
+      <button type="button" data-do="later" data-t="Not now"></button>
+      <button type="button" data-do="leave" data-t="Never"></button>
+    </div>
+
+    <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
+      <nav class="rail" data-t-aria="Filters">
+        <button type="button" class="rail-back" id="rail-edge" data-t-title="Show the sidebar" data-t-aria="Show the sidebar">›</button>
+        <h2><span data-t="Scope"></span><button type="button" class="pane-x" id="rail-x" data-t-title="Hide the sidebar" data-t-aria="Hide the sidebar">‹</button></h2>
+        <div id="scopes"></div>
+        <h2 data-t="Kind"></h2>
+        <div id="kinds"></div>
+        <h2 data-t="Size"></h2>
+        <div id="sizes"></div>
+      </nav>
+
+      <div class="results">
+        <button type="button" id="to-top" hidden></button>
+        <div class="scroll">
+          <div class="sizer" id="sizer"></div>
+          <table>
+            <thead>
+              <!-- Built from `COLUMNS`, except this cell: a remade glyph
+                   switch loses its listener. See `buildHeads`. -->
+              <tr id="heads">
+                <th class="mark" id="markhead">
+                  <button type="button" id="icons" aria-pressed="true"
+                          data-t-title="icons" data-t-aria="turn icons on or off">◨</button>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="rows-body"></tbody>
+          </table>
+          <div class="empty" id="empty" hidden
+               data-t-html="No matches. Two letters like &lt;code&gt;ab&lt;/code&gt; work too — the trigram index does not refuse them, it scans."></div>
+          <div class="similar" id="similar" hidden>
+            <div class="sim-head">
+              <strong id="similar-said"></strong>
+              <span class="sim-q" id="similar-q"></span>
+            </div>
+            <div class="sim-rows" id="similar-rows"></div>
+            <div class="sim-acts">
+              <button type="button" class="pri" id="similar-show" data-t="Show similar (Enter)"></button>
+              <button type="button" id="similar-always" data-t="Always forgive typos"></button>
+            </div>
+          </div>
+          <!-- With nothing found: which one filter, left out, would find something. -->
+          <div class="rescue" id="rescue" hidden></div>
+        </div>
+        <div class="grep-view" id="grep-view" hidden></div>
+
+        <div class="restore" id="restore" hidden>
+          <button type="button" id="rail-back" data-t="Show the sidebar" hidden></button>
+          <button type="button" id="ribbon-back" data-t="Show the time ribbon" hidden></button>
+        </div>
+
+        <div class="ribbon">
+          <div class="ribbon-head">
+            <span style="font-weight:500" data-t="Time distribution"></span>
+            <span class="grow"></span>
+            <span id="ribbon-note" data-t="by when the results last changed — click to filter to a range"></span>
+            <button type="button" class="pane-x" id="ribbon-x" data-t-title="Hide the time ribbon" data-t-aria="Hide the time ribbon">×</button>
+          </div>
+          <div class="bars" id="bars"></div>
+          <div class="scale">
+            <span data-t="2 years ago"></span><span data-t="1 year"></span><span data-t="6 months"></span>
+            <span data-t="1 month"></span><span data-t="1 week"></span><span data-t="today"></span>
+          </div>
+        </div>
+      </div>
+
+      <aside class="peek" id="peek" hidden data-t-aria="Preview">
+        <div class="peek-grip" id="peek-grip" aria-hidden="true"
+             data-t-title="drag to widen; double-click for the usual width"></div>
+        <div class="peek-head">
+          <span class="nm" id="peek-name"></span>
+          <button type="button" id="peek-native" data-t-title="open in the system previewer"
+                  data-t-aria="open in the system previewer" hidden>⤢</button>
+          <button type="button" id="peek-close" data-t-title="close (Space)"
+                  data-t-aria="close the preview">×</button>
+        </div>
+        <div class="peek-body" id="peek-body"></div>
+        <div class="peek-cut" id="peek-cut" hidden></div>
+        <div class="peek-found" id="peek-found" hidden></div>
+        <dl class="peek-facts" id="peek-facts"></dl>
+      </aside>
+      <div class="selbar" id="selbar" hidden></div>
+    </div>
+
+    <!-- ------------------------------ REPORT ----------------------------- -->
+    <div class="report" id="view-report" role="tabpanel" aria-labelledby="tab-report" hidden>
+      <div class="crumb" id="crumb"></div>
+
+      <div class="headline">
+        <div class="b" id="r-bytes">—</div>
+        <div class="m" id="r-meta"></div>
+        <div class="ms" id="r-ms"></div>
+      </div>
+      <p class="note" id="r-only" hidden></p>
+
+      <!-- The scope by age: one bar, and the six words under it. -->
+      <div class="strip tall" id="r-age"></div>
+      <div class="key" id="agekey"></div>
+
+      <h4 class="sec"><span data-t="Where the bytes are"></span><small id="r-cut"></small></h4>
+      <div class="strip tall" id="r-folders"></div>
+      <div class="rows" id="r-kids"></div>
+      <p class="note" data-t="The bar behind a row is the folder's share, against the heaviest. The coloured strip is the age of its bytes. Clicking a row descends into it."></p>
+
+      <div class="two">
+        <div>
+          <h4 class="sec"><span data-t="By kind"></span><small id="k-cap"></small></h4>
+          <div class="ring">
+            <div id="k-ring"></div>
+            <div class="legend" id="p-kind"></div>
+          </div>
+          <p class="note" data-t-html="Clicking a slice adds a &lt;code&gt;kind:&lt;/code&gt; term to the query and opens the search tab with the same scope."></p>
+        </div>
+        <div>
+          <h4 class="sec"><span data-t="Largest files"></span></h4>
+          <div class="files" id="p-big"></div>
+          <p class="note" data-t="Right-click opens the same menu: open, open the folder, move to trash."></p>
+        </div>
+      </div>
+
+      <div class="panels">
+        <div class="panel">
+          <h4 data-t="Search in this folder"></h4>
+          <div id="p-jump"></div>
+          <p class="hint" data-t-html="From the report into the search: an &lt;code&gt;under:&lt;/code&gt; term is added to the query and the search tab opens with the same scope."></p>
+        </div>
+      </div>
+
+      <div class="dupes">
+        <div class="dupes-head">
+          <h4 data-t="Duplicate files"></h4>
+          <!-- Filled by `setOpen`, so it carries no `data-t` of its own. -->
+          <button type="button" id="d-open" aria-expanded="false"></button>
+          <div class="dupes-sum" id="d-sum" hidden>—</div>
+          <div class="floors" id="d-floor" hidden></div>
+          <button type="button" id="d-confirm" hidden data-t="Confirm by reading"></button>
+        </div>
+        <p class="hint" id="d-note" hidden
+           data-t-html="Being the same size is not being the same file. Below is a list of candidates by size; &lt;b&gt;nothing should be deleted before it is confirmed&lt;/b&gt;."></p>
+        <!-- What the last move to trash did. Outside `d-list`, which a redraw
+             rewrites, so the answer survives the refresh it asked for. -->
+        <p class="hint" id="d-said" hidden></p>
+        <div id="d-list" hidden></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+@SCRIPT@
+</script>
+</body>
+</html>

@@ -1,0 +1,356 @@
+  /* ---------------- results ---------------- */
+  .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+  /* Back to the top in one click, once the list has left it. */
+  #to-top {
+    position: absolute; right: 22px; bottom: 16px; z-index: 5;
+    height: 30px; padding: 0 13px; border-radius: 15px;
+    background: var(--panel); color: var(--ink-2);
+    border: 1px solid var(--line); font: inherit; font-size: 12.5px; cursor: pointer;
+    box-shadow: 0 2px 10px #0000001a;
+  }
+  #to-top:hover { background: var(--hover); color: var(--ink); }
+  .scroll {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+    /* Confines `buildHeads`'s `40 - i` heading stack inside the scroller. */
+    z-index: 1;
+    /* A reused row moves index, so an anchor would correct `scrollTop`,
+       fire `scroll`, and move the spacer again. */
+    overflow-anchor: none;
+  }
+  /* What the list is as tall as: stated, never summed. See `paintWindow`. */
+  .sizer { position: absolute; top: 0; left: 0; width: 1px; height: 0; pointer-events: none; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  /* A fixed layout alone still lets an unbreakable word push the row out. */
+  tbody td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  thead th {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    text-align: left;
+    font-size: 12px; 
+    color: var(--ink-3);
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th { position: sticky; }
+  /* Nine pixels centred on the line a hand aims at; headings rank downwards
+     so a grip beats its neighbour — see `buildHeads`. */
+  thead th .grip {
+    position: absolute; top: 0; right: -4px; bottom: 0;
+    width: 9px; cursor: col-resize; z-index: 4;
+  }
+  /* Five pixels of inset keeps the line off the row's own bottom rule. */
+  thead th .grip::after {
+    content: ""; position: absolute; top: 5px; bottom: 5px; left: 4px;
+    width: 1px; background: var(--line);
+  }
+  thead th .grip:hover::after,
+  thead th .grip.dragging::after {
+    background: var(--q-key); top: 0; bottom: 0; width: 2px;
+  }
+  /* Carrying a column: the heading fades so the drop line is what the eye follows. */
+  thead th.moving { opacity: .4; }
+  .dropline {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--t1); z-index: 45; pointer-events: none;
+  }
+  .dropline[hidden] { display: none; }
+  body.moving-col { cursor: grabbing; user-select: none; }
+  body.moving-col * { cursor: grabbing !important; }
+  /* Nothing else reacts to the pointer mid-drag: a crossed row would select. */
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing * { cursor: col-resize !important; }
+
+  thead th:hover { color: var(--ink); }
+  thead th.num { text-align: right; }
+  thead th[aria-sort]:not([aria-sort="none"]) { color: var(--ink); }
+  thead th .arrow { color: var(--ink-2); }
+
+  tbody tr { border-bottom: 1px solid var(--line-soft); }
+  tbody tr:hover { background: var(--panel-2); }
+  /* Selection, hover and match stack, so the wash is translucent and on the cells. */
+  #scanning { color: var(--q-key); font-weight: 650; }
+
+  tbody tr.sel td { background: var(--pick); }
+  tbody td { padding: 0 calc(var(--u) * 3); height: var(--row); vertical-align: middle; }
+
+  /* What is selected, flush on top of the status bar at the left edge like a
+     browser's link preview. Gone when nothing is selected. */
+  .selbar {
+    position: absolute; left: 0; bottom: 0; z-index: 15;
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    max-width: calc(100% - 12px); height: 28px;
+    padding: 0 10px 0 12px;
+    border: 1px solid var(--line); border-left: 0; border-bottom: 0;
+    border-radius: 0 6px 0 0;
+    background: var(--panel-2);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, .12);
+    font: 500 11.5px/1 var(--mono); color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .body.peeking .selbar { max-width: calc(100% - var(--peek-w) - 12px); }
+  .selbar[hidden] { display: none; }
+  .selbar .n { color: var(--ink); font-weight: 650; }
+  .selbar .sum { color: var(--ink-3); }
+  .selbar button {
+    flex: none;
+    background: none; border: 1px solid var(--line); border-radius: 3px;
+    padding: 3px 8px;
+    font: inherit; color: var(--ink-2); cursor: pointer;
+  }
+  .selbar button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .selbar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .selbar button.asking { color: var(--q-not); border-color: var(--q-not); }
+  .selbar button:disabled { opacity: .45; cursor: default; }
+  .selbar button:disabled:hover { color: var(--ink-2); border-color: var(--line); }
+  /* The way out: frameless and set apart by a rule, not one more action. */
+  .selbar button.out { border-color: transparent; color: var(--ink-3); }
+  .selbar button.out:hover { color: var(--ink); background: var(--hover); border-color: transparent; }
+  .selbar .rule { flex: none; width: 1px; height: 14px; background: var(--line); }
+  .selbar .one { max-width: 420px; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  .selbar button.jump {
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
+    border-color: transparent; padding: 3px 6px;
+    display: inline-flex; align-items: center; gap: calc(var(--u) * 1.5);
+  }
+  .selbar button.jump:hover { background: var(--hover); border-color: transparent; color: var(--ink); }
+  .selbar button.jump:hover .one { color: var(--ink); }
+
+  /* The mark column: the freshness rule and the type glyph share it, and
+   * `top: 0; bottom: 0` beats a stated height a fractional row rounds past. */
+  td.age { padding: 0 0 0 3px; width: 30px; position: relative; text-align: center; }
+  /* A `content:` query's two-line rows: the cells on the first line, where the
+     file holds the text on the second, across the row. */
+  body.tall:not(.grid) tbody tr { position: relative; }
+  body.tall:not(.grid) tbody td { height: 52px; vertical-align: top; padding-top: 6px; }
+  body.tall:not(.grid) tbody tr.ghost { height: 52px; }
+  tbody .found { display: none; }
+  body.tall:not(.grid) tbody .found {
+    display: block; position: absolute; left: 36px; right: 12px; bottom: 6px;
+    font: 12px var(--mono); color: var(--ink-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  body.tall:not(.grid) tbody .found[hidden] { display: none; }
+  .found .n, .peek-found .n {
+    display: inline-block; min-width: 3em; margin-right: 8px;
+    color: var(--ink-3); text-align: right;
+  }
+  td.age i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  /* The age stripe is the window's choice too: gone. A column of one colour
+   * down a list of today's files was the loudest thing on the page. */
+  tbody td.age i { display: none; }
+
+  .name { font: 500 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+  /* A wash, not a highlighter: it stacks over a selected row. */
+  .name mark { background: var(--mark); color: inherit; padding: 1px 0; border-radius: 2px; }
+  /* No width of its own: the cell is the constraint, and this agrees to be cut. */
+  .path {
+    font: 400 11.5px/1 var(--mono);
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .path b { color: var(--ink-2); font-weight: 400; }
+  tbody td.loc { cursor: pointer; }
+  tbody td.loc:hover { background: color-mix(in srgb, var(--q-key) 11%, transparent); }
+  tbody tr.sel td.loc:hover { background: color-mix(in srgb, var(--q-key) 18%, var(--pick)); }
+  tbody td.loc:hover .path,
+  tbody td.loc:hover .path b {
+    color: var(--q-key);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  /* Dates are right-aligned as numbers, left when they are words. */
+  td.n.left { text-align: left; }
+  td.n {
+    font: 400 12px/1 var(--mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  td.kind { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  .empty { padding: calc(var(--u) * 10) calc(var(--u) * 6) calc(var(--u) * 4); text-align: center; color: var(--ink-3); font-size: 13px; }
+  .empty code { font-family: var(--mono); color: var(--ink-2); }
+  .similar {
+    max-width: 560px; margin: 8px auto 0; padding: 14px 16px;
+    background: var(--ground); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--ink-2); font-size: 13px; text-align: left;
+    box-shadow: 0 10px 28px -18px rgba(0,0,0,.45);
+  }
+  .similar[hidden] { display: none; }
+  .similar .sim-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .similar .sim-q { font: 600 11.5px var(--mono); color: var(--q-key); background: var(--cap); padding: 2px 7px; border-radius: 5px; }
+  .similar .sim-rows { margin: 10px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); padding: 4px 0; }
+  .similar .sim-rows:empty { display: none; }
+  .similar .sim-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+    border: 0; background: none; padding: 5px 6px; border-radius: 5px; cursor: pointer; text-align: left; color: var(--ink);
+  }
+  .similar .sim-row:hover { background: var(--hover); }
+  .similar .sim-row .sn { font: 500 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .similar .sim-row .sp { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 48%; }
+  .similar .sim-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .similar .sim-acts button {
+    border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    padding: 5px 12px; font: 500 12.5px/1.2 var(--sans); color: var(--ink-2); cursor: pointer; margin: 0;
+  }
+  .similar .sim-acts button.pri { border-color: var(--q-key); color: var(--q-key); background: var(--cap); font-weight: 600; }
+  .similar .sim-acts button:hover { color: var(--ink); border-color: var(--ink-3); text-decoration: none; }
+  /* Grep results stream view with sticky sortable column headers */
+  .grep-view { flex: 1; overflow-y: auto; padding: 0 16px 24px; background: var(--panel); min-height: 0; }
+  .grep-view[hidden] { display: none; }
+  .grep-top {
+    position: sticky; top: 0; z-index: 6; background: var(--panel);
+    padding-top: 10px; margin-bottom: 8px;
+  }
+  .grep-sum {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+    padding: 7px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--ground); font: 500 12px/1.3 var(--mono); color: var(--ink-2);
+  }
+  .grep-sum .gs-skip { color: var(--ink-3); }
+  .grep-sum .gs-more {
+    margin-left: auto; border: 1px solid var(--q-key); border-radius: 6px; background: var(--cap);
+    color: var(--q-key); font: 600 12px/1.2 var(--sans); padding: 4px 11px; cursor: pointer;
+  }
+  .grep-sum .gs-more:hover { background: var(--hover); }
+  .grep-cols {
+    display: grid;
+    grid-template-columns: 24px minmax(180px, 2.2fr) minmax(180px, 2.6fr) 96px 142px 92px 44px;
+    align-items: center; gap: 10px; padding: 0 12px;
+  }
+  @media (max-width: 960px) {
+    .grep-cols { grid-template-columns: 22px minmax(140px, 2fr) minmax(120px, 2fr) 118px 82px 40px; }
+    .grep-cols .gc-kind { display: none; }
+  }
+  .grep-thead {
+    height: 30px; background: var(--panel); border-bottom: 1px solid var(--line);
+    font: 600 11.5px/1 var(--sans); color: var(--ink-3); user-select: none;
+  }
+  .grep-thead button {
+    border: 0; background: none; padding: 4px 0; font: inherit; color: inherit;
+    text-align: left; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .grep-thead button.num { justify-content: flex-end; width: 100%; text-align: right; }
+  .grep-thead button:hover, .grep-thead button.on { color: var(--ink); }
+  .grep-thead button .arrow { color: var(--q-key); }
+  .grep-card {
+    border: 1px solid var(--line-soft); border-radius: 8px; margin-bottom: 7px;
+    background: var(--ground); overflow: hidden;
+  }
+  .grep-card .gc-head {
+    min-height: 32px; padding-top: 5px; padding-bottom: 5px;
+    border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  .grep-card .gc-head:hover { background: var(--hover); }
+  .grep-card .gc-ico { width: 16px; height: 16px; display: block; margin: 0 auto; background-color: var(--k, var(--ink-3)); -webkit-mask: var(--g) center / 16px 16px no-repeat; mask: var(--g) center / 16px 16px no-repeat; }
+  .grep-card .gc-nm { font: 600 12.5px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-dir { font: 400 11.5px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-dir:hover { color: var(--q-key); text-decoration: underline; }
+  .grep-card .gc-kind { font: 400 11.5px var(--sans); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-card .gc-when { font: 400 11.5px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .grep-card .gc-sz { font: 400 11.5px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .grep-card .gc-cnt { justify-self: end; font: 600 11px var(--mono); color: var(--q-bad); background: var(--cap-read); padding: 1px 6px; border-radius: 10px; }
+  .grep-line {
+    display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px;
+    padding: 4px 12px; font: 400 12px/1.55 var(--mono); color: var(--ink-2); cursor: pointer;
+  }
+  .grep-line:hover { background: var(--line-soft); color: var(--ink); }
+  .grep-line .gl-no { text-align: right; color: var(--ink-3); user-select: none; font-variant-numeric: tabular-nums; }
+  .grep-line .gl-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grep-line mark { background: var(--mark); color: var(--ink); font-weight: 600; border-radius: 2px; padding: 0 1px; }
+  .grep-more-note { padding: 4px 12px 6px 68px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .rescue { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 14px; font-size: 12.5px; color: var(--ink-3); }
+  .rescue[hidden] { display: none; }
+  .rescue button {
+    border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink-2);
+    padding: 4px 10px; font: inherit; cursor: pointer;
+  }
+  .rescue button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .rescue code { font: 600 12px var(--mono); color: var(--q-key); margin-right: 6px; }
+  .qread .fix {
+    margin-left: 8px; border: 1px solid var(--q-bad); border-radius: 5px; background: none;
+    color: var(--q-bad); font: 600 11px var(--mono); padding: 0 6px; cursor: pointer;
+  }
+
+  /* The grid is the same list, `PER_ROW` to a line. The tile height and
+   * `TILE[…].h` are one number, guarded by a test; the heading row stays as
+   * the sort control and gives up its widths. */
+  body.grid[data-view="icons"] { --tile-h: 104px; --pic: 56px; --nm: 11px; }
+  body.grid[data-view="large"] { --tile-h: 172px; --pic: 120px; --nm: 12px; }
+  /* The gutter is reserved either way: `PER_ROW` is read from `clientWidth`. */
+  body.grid .scroll { scrollbar-gutter: stable; }
+  body.grid .results table { display: block; }
+  body.grid .results thead { display: block; }
+  body.grid .results thead tr { display: flex; align-items: stretch; }
+  body.grid .results thead th { width: auto; flex: 0 0 auto; }
+  /* Nothing to drag: the widths mean nothing while the tiles are showing. */
+  body.grid .results thead th .grip { display: none; }
+  body.grid #rows-body { display: grid; gap: 0; }
+  body.grid #rows-body > tr { display: block; border-bottom: 0; }
+  body.grid #rows-body > tr.spacer,
+  body.grid #rows-body > tr.far { grid-column: 1 / -1; }
+  body.grid #rows-body > tr.ghost { height: auto; }
+  body.grid #rows-body > tr > td { display: block; padding: 0; }
+  body.grid #rows-body > tr.spacer > td { height: 0; }
+  /* `height` is the pitch and the whole outer box, so `lines * pitch` is what
+     the list occupies. Written this deep to beat `display: block` above. */
+  body.grid #rows-body > tr > td.tile {
+    position: relative;
+    height: var(--tile-h);
+    /* Separates one tile's rule from the next, inside the stated height. */
+    border-bottom: 1px solid transparent;
+    padding: calc(var(--u) * 2) calc(var(--u) * 2) 0;
+    display: flex; flex-direction: column; align-items: center;
+    gap: calc(var(--u) * 1.5);
+    overflow: hidden;
+  }
+  /* Three pixels here too, and `top: 0; bottom: 0` as `td.age i` has them. */
+  body.grid td.tile > i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  body.grid td.tile .ico {
+    width: var(--pic); height: var(--pic);
+    object-fit: contain;
+    flex: none;
+  }
+  body.grid td.tile span.ico {
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / var(--pic) var(--pic) no-repeat;
+    mask: var(--g) center / var(--pic) var(--pic) no-repeat;
+  }
+  /* Two lines and then an ellipsis: a third would break the stated pitch. */
+  body.grid td.tile .nm {
+    font: 500 var(--nm)/1.35 var(--mono);
+    color: var(--ink);
+    text-align: center;
+    width: 100%;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  body.grid td.tile .nm mark { background: var(--mark); color: inherit; border-radius: 2px; }
+  body.grid tbody tr:hover td.tile { background: var(--panel-2); }
+  body.grid tbody tr:focus-visible { outline: none; }
+  body.grid tbody tr:focus-visible td.tile { outline: 2px solid var(--focus); outline-offset: -2px; }
+  body.grid #rows-body > tr.far > td { height: auto; }
+
+  /* The three shapes, in the bar that carries what is true of the window. */
+  .views { display: flex; gap: 2px; flex: none; }
+  .views button {
+    background: none; border: 1px solid transparent; color: var(--ink-2);
+    width: 28px; height: 28px; border-radius: 7px; cursor: pointer;
+    font: 500 14px/1 var(--sans); padding: 0;
+  }
+  .views button:hover { color: var(--ink); background: var(--hover); }
+  .views button[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+  .views button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+

@@ -1,0 +1,111 @@
+  /* ---------------- body ---------------- */
+  .body { position: relative; display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
+  .body[hidden], .report[hidden] { display: none; }
+  /* The tabs over the bar they switch, as a browser's are. */
+  .tabstrip { grid-row: 1; }
+  .query { grid-row: 2; }
+  .disk-ask { grid-row: 3; }
+  #view-search, #view-report { grid-row: 4; }
+  .meter { grid-row: 5; }
+
+  /* The grid lines. Shadows, not borders: a border makes a row a pixel taller
+     than the pitch the virtual list counts on. */
+  body.lines:not(.grid) tbody td { box-shadow: inset 0 -1px 0 var(--line-soft); }
+  body.vlines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft); }
+  body.lines.vlines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft); }
+
+  /* ---------------- search tabs ---------------- */
+  .tabstrip {
+    display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px;
+    background: var(--ground); border-bottom: 1px solid var(--line); min-width: 0;
+  }
+  .stabs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; }
+  .stabs[hidden] { visibility: hidden; }
+  .tbar { flex: none; margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .tbar .tabs button { padding: 4px 10px; }
+  .stab {
+    display: flex; align-items: center; gap: 4px; height: 28px;
+    min-width: 96px; max-width: 220px; padding: 0 4px 0 12px;
+    border: 1px solid transparent; border-radius: 7px;
+    color: var(--ink-2); font: 12.5px/1 var(--sans); cursor: pointer; user-select: none;
+  }
+  .stab:hover { background: var(--hover); }
+  .stab[aria-selected="true"] { background: var(--panel); color: var(--ink); border-color: var(--line); }
+  .stab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .stab .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stab .x {
+    width: 20px; height: 20px; border: 0; border-radius: 5px; padding: 0;
+    background: none; color: var(--ink-2); cursor: pointer; opacity: 0; font-size: 13px;
+  }
+  .stab:hover .x, .stab[aria-selected="true"] .x { opacity: 1; }
+  .stab .x:hover { background: var(--line); }
+  .tabplus {
+    width: 28px; height: 28px; border: 0; border-radius: 7px; background: none;
+    color: var(--ink-2); font-size: 17px; cursor: pointer;
+  }
+  .tabplus:hover { background: var(--hover); }
+  .rail { overflow-y: auto; min-height: 0; }
+  /* Advice, not an alarm: the window works, it is only slower than it should be. */
+  .stale { color: var(--t1); }
+  /* The previous query's counts, dimmed; the 0.12s delay stops a flicker. */
+  .rail.settling { opacity: .55; transition: opacity .18s ease-in .12s; }
+  @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }
+
+  .rail {
+    border-right: 1px solid var(--line);
+    padding: calc(var(--u) * 3) 0;
+    background: var(--ground);
+  }
+  .rail h2 {
+    margin: calc(var(--u) * 3) calc(var(--u) * 3) calc(var(--u) * 1.5);
+    font-size: 12px; 
+    color: var(--ink-3);
+    font-weight: 650;
+  }
+  .rail h2:first-child { margin-top: 0; }
+  .facet {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 2);
+    width: 100%;
+    background: none;
+    border: 0;
+    text-align: left;
+    padding: 3px calc(var(--u) * 3);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .facet:hover { background: var(--panel); color: var(--ink); }
+  .facet:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .facet[aria-pressed="true"] { color: var(--ink); border-left-color: var(--ink-3); background: var(--panel); }
+  /* The list's own glyphs, quiet: the rail is for reading words. */
+  .facet .ico {
+    width: 14px; height: 14px; flex: none; position: relative; z-index: 1;
+    background-color: var(--ink-3);
+    -webkit-mask: var(--g) center / 14px 14px no-repeat;
+    mask: var(--g) center / 14px 14px no-repeat;
+  }
+  .facet[aria-pressed="true"] .ico { background-color: var(--ink); }
+  .facet .mi { width: 14px; height: 14px; flex: none; color: var(--ink-3); display: flex; }
+  .facet .mi svg { width: 14px; height: 14px; }
+  /* Kinds get no colour — colour means time — so a bar carries the count. */
+  .facet.bar { position: relative; }
+  /* A hairline inset inside the row, so 100% never reads as a section border. */
+  .facet.bar > .fill {
+    position: absolute; left: 12px; bottom: 1px; height: 2px;
+    background: var(--line); border-radius: 1px; z-index: 0;
+  }
+  .facet.bar > .nm, .facet.bar > .ct { position: relative; z-index: 1; }
+  .facet.bar[aria-pressed="true"] > .fill { background: var(--line); opacity: 1; }
+  .facet .nm { flex: 1; min-width: 0; }
+  .facet .ct {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
