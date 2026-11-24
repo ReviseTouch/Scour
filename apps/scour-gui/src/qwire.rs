@@ -8,7 +8,7 @@ use std::rc::Rc;
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_proto::Response;
-use scour_ui::{frame, lens};
+use scour_ui::{frame, lens, wrap};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::link::{Ask, Got, Link};
@@ -136,6 +136,10 @@ fn field_tip(cat: &Catalogue, field: &str) -> String {
             || format!("{field}:"),
             |(_, label, hint)| format!("{} — {}", cat.get(label), cat.get(hint)),
         )
+}
+
+fn chars_before_q(s: &str, byte: usize) -> usize {
+    qbar::chars_before(s, byte)
 }
 
 /// The name a header drawn as a picture carries beside it: the filter's, as
@@ -327,6 +331,16 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
             c.nice = nice.into();
         }
     }
+    // The capsule under the pointer opens room at its right end for its buttons,
+    // so they stand over nothing: a value is never under them, and can be pressed.
+    let pair = if w.get_hov_fz() {
+        qbar::PAIR_FZ_W
+    } else {
+        qbar::PAIR_W
+    };
+    for c in caps.iter_mut().filter(|c| c.hov && !c.edit) {
+        c.tail = if c.tail > 0.0 { c.tail } else { qbar::CAP_TAIL } + pair;
+    }
     if qb.asked.len() != asked_before {
         let rows: Vec<crate::QMeasure> = qb
             .asked
@@ -377,6 +391,13 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         sl.w = field.x(l, sl.at + sl.len) - sl.x;
     }
     w.set_caret_x(caret_x);
+    // The hovered term's end, now that its capsule has room: where its buttons go.
+    if let Some(h) = &qb.hover {
+        let end = chars_before_q(&text, h.end).max(1) - 1;
+        let (l, col) = wrap::place(&field.lines, end);
+        w.set_hov_x(field.x(l, col as i32 + 1));
+        w.set_hov_line(l as i32 - field.first as i32);
+    }
     // The caret in the term the pointer is on: it is being written.
     let writing = qb.hover.as_ref().is_some_and(|h| {
         qb.anchor == qb.cursor && qb.cursor > h.start && qb.cursor <= h.end && w.get_q_focused()

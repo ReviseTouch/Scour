@@ -32,6 +32,10 @@ pub const WELL_MIN: f32 = 88.0;
 /// picture, the picture to the name, the name to the header's edge, and the
 /// edge to what the filter holds.
 pub const HEAD_LEAD: f32 = 3.0;
+/// Room a hovered capsule opens at its right end for `!` and `×`, and for `≈`
+/// besides.
+pub const PAIR_W: f32 = 54.0;
+pub const PAIR_FZ_W: f32 = 78.0;
 pub const HEAD_PIC: f32 = 16.0;
 pub const HEAD_JOIN: f32 = 5.0;
 pub const HEAD_TRAIL: f32 = 8.0;

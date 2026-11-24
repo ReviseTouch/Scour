@@ -315,6 +315,8 @@
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
   /* The filter the caret is in is being written: the field's own focus. */
   .qshadow .term.cap.edit { box-shadow: inset 0 0 0 2px var(--focus); }
+  .qshadow .term.cap.hov:not(.edit) .val { padding-right: var(--pairroom, 62px); }
+  .qshadow .term.cap.hov:not(.edit):not(:has(.val)) { padding-right: var(--pairroom, 62px); }
   /* The header: a picture and a name, over its own tint. Its letters stay in
      the text, at no width, so every offset has a place. */
   .qshadow .term.cap .cap-head {
@@ -3338,7 +3340,13 @@
 
   function drawActs(term) {
     hoverTerm = term;
-    const rects = term ? [...(termEl(term[0])?.getClientRects() || [])] : [];
+    /* The capsule under the pointer opens room at its right end for the
+       buttons, so they stand over nothing and a value can still be pressed:
+       marked first, measured after. */
+    markHover();
+    const hovEl = term && termEl(term[0]);
+    if (hovEl) hovEl.style.setProperty("--pairroom", fuzzyable(q.value.slice(term[0], term[1])) ? "86px" : "62px");
+    const rects = term ? [...(hovEl?.getClientRects() || [])] : [];
     if (!term || !rects.length || term[1] > q.value.length) {
       hoverTerm = null;
       acts.innerHTML = "";
