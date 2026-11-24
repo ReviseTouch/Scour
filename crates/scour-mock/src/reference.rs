@@ -49,9 +49,9 @@ fn near(term: &str, name: &str, edits: usize, strict: bool) -> bool {
         }
     };
     let mut d = vec![vec![NONE; n.len() + 1]; t.len() + 1];
-    for j in 0..n.len() {
+    for (j, cell) in d[0].iter_mut().take(n.len()).enumerate() {
         if word_starts(&n, j) {
-            d[0][j] = 0;
+            *cell = 0;
         }
     }
     for i in 1..=t.len() {

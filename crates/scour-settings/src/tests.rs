@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn a_disk_chosen_again_moves_between_the_lists() {
