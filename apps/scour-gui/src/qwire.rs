@@ -8,7 +8,7 @@ use std::rc::Rc;
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_proto::Response;
-use scour_ui::{frame, lens, wrap};
+use scour_ui::{frame, lens};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::link::{Ask, Got, Link};
@@ -136,10 +136,6 @@ fn field_tip(cat: &Catalogue, field: &str) -> String {
             || format!("{field}:"),
             |(_, label, hint)| format!("{} — {}", cat.get(label), cat.get(hint)),
         )
-}
-
-fn chars_before_q(s: &str, byte: usize) -> usize {
-    qbar::chars_before(s, byte)
 }
 
 /// The name a header drawn as a picture carries beside it: the filter's, as
@@ -331,15 +327,11 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
             c.nice = nice.into();
         }
     }
-    // The capsule under the pointer opens room at its right end for its buttons,
-    // so they stand over nothing: a value is never under them, and can be pressed.
-    let pair = if w.get_hov_fz() {
-        qbar::PAIR_FZ_W
-    } else {
-        qbar::PAIR_W
-    };
-    for c in caps.iter_mut().filter(|c| c.hov && !c.edit) {
-        c.tail = if c.tail > 0.0 { c.tail } else { qbar::CAP_TAIL } + pair;
+    // Every capsule keeps room at its right end for its `×`, hovered or not:
+    // a button that made room for itself as the pointer came moved everything
+    // after it, and the line jumped under the pointer.
+    for c in caps.iter_mut().filter(|c| c.last) {
+        c.tail = if c.tail > 0.0 { c.tail } else { qbar::CAP_TAIL } + qbar::CLOSE_W;
     }
     if qb.asked.len() != asked_before {
         let rows: Vec<crate::QMeasure> = qb
@@ -391,13 +383,6 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         sl.w = field.x(l, sl.at + sl.len) - sl.x;
     }
     w.set_caret_x(caret_x);
-    // The hovered term's end, now that its capsule has room: where its buttons go.
-    if let Some(h) = &qb.hover {
-        let end = chars_before_q(&text, h.end).max(1) - 1;
-        let (l, col) = wrap::place(&field.lines, end);
-        w.set_hov_x(field.x(l, col as i32 + 1));
-        w.set_hov_line(l as i32 - field.first as i32);
-    }
     // The caret in the term the pointer is on: it is being written.
     let writing = qb.hover.as_ref().is_some_and(|h| {
         qb.anchor == qb.cursor && qb.cursor > h.start && qb.cursor <= h.end && w.get_q_focused()
@@ -911,8 +896,10 @@ pub fn narrowed(
     match reply {
         Response::Facets(f) => s.qb.narrow_facets = Some(f),
         Response::Usage(u) => s.qb.narrow_usage = Some(u),
-        Response::Count { total, .. } if (2..6).contains(&slot) => {
-            s.qb.narrow_sizes[(slot - 2) as usize] = Some(total);
+        // A count that stopped at its cap is not a number to print: the band
+        // is left out rather than offered as "1.000.000".
+        Response::Count { total, capped, .. } if (2..6).contains(&slot) => {
+            s.qb.narrow_sizes[(slot - 2) as usize] = Some(if capped { 0 } else { total });
         }
         _ => return,
     }
@@ -1249,6 +1236,38 @@ fn drop_launcher(w: &MainWindow, s: &Rc<RefCell<State>>) {
     }
 }
 
+/// Take a term out, exclude it or take the exclusion off, or read a word a
+/// letter off: what a term's buttons do.
+fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
+    let text = w.get_query().to_string();
+    if t.end > text.len() {
+        return;
+    }
+    let raw = &text[t.start..t.end];
+    let body = raw.strip_prefix('!').unwrap_or(raw);
+    let neg = if t.not { "!" } else { "" };
+    let with = match what {
+        "drop" => String::new(),
+        "fz" if t.field == Some("fuzzy") => {
+            format!("{neg}{}", &body[body.find(':').map_or(0, |i| i + 1)..])
+        }
+        "fz" => format!("{neg}fuzzy:{body}"),
+        _ if t.not => body.to_string(),
+        _ => format!("!{raw}"),
+    };
+    let (query, caret) = lens::replace(&text, t, &with);
+    write(w, state, query, caret);
+    // Kept under the pointer, so a second press undoes the first in place.
+    if !with.is_empty()
+        && let Some(t) = lens::term_at(&w.get_query(), caret)
+    {
+        state.borrow_mut().qb.hover = Some(t);
+        w.set_hov_not(with.starts_with('!'));
+        w.set_hov_fz_on(with.trim_start_matches('!').starts_with("fuzzy:"));
+        w.set_hov_on(true);
+    }
+}
+
 /// Every callback the bar answers.
 pub fn wire(
     window: &MainWindow,
@@ -1404,36 +1423,26 @@ pub fn wire(
         let (weak, state) = (window.as_weak(), Rc::clone(state));
         window.on_term_act(move |what| {
             let Some(w) = weak.upgrade() else { return };
-            let text = w.get_query().to_string();
             let Some(t) = state.borrow().qb.hover.clone() else {
                 return;
             };
-            if t.end > text.len() {
+            act(&w, &state, &t, &what);
+        });
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        // A capsule's own `×`, and the `!` over its picture: they name the
+        // term they belong to, which need not be the one last hovered.
+        window.on_cap_act(move |what, from, to| {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_query().to_string();
+            let Some(t) = lens::terms(&text)
+                .into_iter()
+                .find(|t| t.start == from.max(0) as usize && t.end == to.max(0) as usize)
+            else {
                 return;
-            }
-            let raw = &text[t.start..t.end];
-            let body = raw.strip_prefix('!').unwrap_or(raw);
-            let neg = if t.not { "!" } else { "" };
-            let with = match what.as_str() {
-                "drop" => String::new(),
-                "fz" if t.field == Some("fuzzy") => {
-                    format!("{neg}{}", &body[body.find(':').map_or(0, |i| i + 1)..])
-                }
-                "fz" => format!("{neg}fuzzy:{body}"),
-                _ if t.not => body.to_string(),
-                _ => format!("!{raw}"),
             };
-            let (query, caret) = lens::replace(&text, &t, &with);
-            write(&w, &state, query, caret);
-            // Kept under the pointer, so a second press undoes the first in place.
-            if !with.is_empty()
-                && let Some(t) = lens::term_at(&w.get_query(), caret)
-            {
-                state.borrow_mut().qb.hover = Some(t);
-                w.set_hov_not(with.starts_with('!'));
-                w.set_hov_fz_on(with.trim_start_matches('!').starts_with("fuzzy:"));
-                w.set_hov_on(true);
-            }
+            act(&w, &state, &t, &what);
         });
     }
     {

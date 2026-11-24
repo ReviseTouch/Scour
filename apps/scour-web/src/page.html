@@ -315,8 +315,31 @@
   .qshadow .term.cap.hov { --cap-ring: var(--ink-3); }
   /* The filter the caret is in is being written: the field's own focus. */
   .qshadow .term.cap.edit { box-shadow: inset 0 0 0 2px var(--focus); }
-  .qshadow .term.cap.hov:not(.edit) .val { padding-right: var(--pairroom, 62px); }
-  .qshadow .term.cap.hov:not(.edit):not(:has(.val)) { padding-right: var(--pairroom, 62px); }
+  /* Every capsule keeps its `×` at its end, hovered or not: a button that made
+     room for itself as the pointer came moved everything after it. */
+  .qshadow .term.cap { position: relative; }
+  .qshadow .term.cap .art.cap-x {
+    flex: none; align-self: center; display: inline-grid; place-items: center;
+    width: 20px; height: 20px; margin: 0 4px 0 -6px; border-radius: 50%;
+    font: 600 16px/1 var(--sans); color: var(--ink-3);
+  }
+  .qshadow .term.cap:not(:has(.val)) .art.cap-x { margin-left: 3px; }
+  .qshadow .term.cap:not(:has(.val)) { padding-left: 4px; }
+  .qshadow .term.cap.hov .cap-x { color: var(--ink-2); }
+  .qshadow .term.cap .cap-x.over { background: var(--q-bad); color: var(--panel); }
+  /* Over the picture while the pointer is on the capsule: `!` excludes, `+`
+     takes it off. In the picture's own place, so nothing moves. */
+  .qshadow .term.cap .head-art { position: relative; }
+  .qshadow .term.cap .negbtn {
+    display: none; position: absolute; left: -4px; top: 50%; transform: translateY(-50%);
+    width: 22px; height: 22px; border-radius: 50%; place-items: center;
+    background: var(--panel); box-shadow: inset 0 0 0 1px var(--line);
+    font: 700 13px/1 var(--sans); color: var(--ink-2);
+  }
+  .qshadow .term.cap.neg .negbtn { color: var(--q-not); }
+  .qshadow .term.cap .negbtn.lead { left: 1px; width: 15px; border-radius: 6px; }
+  .qshadow .term.cap.hov:not(.edit) .negbtn { display: inline-grid; }
+  .qshadow .term.cap .negbtn.over { background: var(--q-not); color: var(--panel); box-shadow: none; }
   /* The header: a picture and a name, over its own tint. Its letters stay in
      the text, at no width, so every offset has a place. */
   .qshadow .term.cap .cap-head {
@@ -3345,7 +3368,6 @@
        marked first, measured after. */
     markHover();
     const hovEl = term && termEl(term[0]);
-    if (hovEl) hovEl.style.setProperty("--pairroom", fuzzyable(q.value.slice(term[0], term[1])) ? "86px" : "62px");
     const rects = term ? [...(hovEl?.getClientRects() || [])] : [];
     if (!term || !rects.length || term[1] > q.value.length) {
       hoverTerm = null;
@@ -3372,11 +3394,10 @@
     const last = rects[rects.length - 1];
     const capEl = termEl(term[0]);
     const inCap = !!(capEl && capEl.classList.contains("cap"));
-    /* Being written, its buttons would stand over what is typed. */
-    if (inCap && capEl.classList.contains("edit")) {
-      hoverTerm = null;
+    /* A capsule has its own buttons, in it and always in their place; the
+       pill is a word's. */
+    if (inCap) {
       acts.innerHTML = "";
-      markHover();
       return;
     }
     pair.classList.toggle("incap", inCap);
@@ -3428,6 +3449,10 @@
       if (e.clientX >= p.left - 8 && e.clientX <= p.right + 8 &&
           e.clientY >= p.top - 4 && e.clientY <= p.bottom + 10) return;
     }
+    for (const o of shadow.querySelectorAll(".cap-x.over, .negbtn.over")) o.classList.remove("over");
+    const btn = capButtonAt(e.clientX, e.clientY);
+    if (btn) btn.el.classList.add("over");
+    q.style.cursor = btn ? "pointer" : "";
     const t = termAt(e.clientX, e.clientY);
     const same = t && hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
     if (!same) drawActs(t);
@@ -3823,6 +3848,20 @@
     decor.innerHTML = html;
   }
 
+  /* A capsule's `×` or `!` under a point, and the term it belongs to. */
+  function capButtonAt(x, y) {
+    const was = q.style.pointerEvents;
+    q.style.pointerEvents = "none";
+    shadow.style.pointerEvents = "auto";
+    const el = document.elementFromPoint(x, y);
+    q.style.pointerEvents = was;
+    shadow.style.pointerEvents = "";
+    const b = el && el.closest && el.closest(".cap-x, .negbtn");
+    const term = b && b.closest(".term");
+    if (!term || (b.classList.contains("negbtn") && getComputedStyle(b).display === "none")) return null;
+    return { what: b.classList.contains("cap-x") ? "drop" : "neg", a: +term.dataset.a, b: +term.dataset.b, el: b };
+  }
+
   /* The offset of the query under a point of the screen. The textarea stands
      over the layer and sees nothing of it, so it steps aside for the question. */
   function offsetAtPoint(x, y) {
@@ -3915,6 +3954,7 @@
         valOpen = false;
         if (tm.said) html += '<span class="art said-art">' + escape_(tm.said) + "</span>";
       }
+      if (tm && tm.cap) html += '<span class="art cap-x" aria-hidden="true">×</span>';
       html += "</span>";
       open = false;
       tm = null;
@@ -3934,7 +3974,7 @@
           const edit = isCap && caret > a && caret <= b && q.selectionEnd === caret;
           if (edit) cls += " edit";
           headAt = isCap ? capHeadOf(text, a, b) : -1;
-          tm = { hint: "", said: "" };
+          tm = { hint: "", said: "", cap: isCap };
           let headHtml = "";
           if (isCap && headAt > a) {
             const fld = capField(text, a, b);
@@ -3942,6 +3982,7 @@
             const neg = text[a] === "!";
             if (art) {
               headHtml = '<span class="cap-head"><span class="art head-art">' +
+                '<span class="negbtn">' + (neg ? "+" : "!") + "</span>" +
                 (neg ? '<span class="bang">!</span>' : "") + art +
                 (fld === "fuzzy" ? "" : '<span class="nm">' + escape_(fieldLabel(fld)) + "</span>") + "</span>";
               if (!edit) tm.said = saidValue(text, a, b, fld);
@@ -3952,7 +3993,11 @@
           html += '<span class="term ' + cls + '" data-a="' + a + '" data-b="' + b + '" data-h="' + headAt + '">';
           open = true;
           if (headAt > a) { html += headHtml; headOpen = true; }
-          else tm = { hint: "", said: "" };
+          else {
+            tm = { hint: "", said: "", cap: isCap };
+            /* An excluded word: its `+` over the `!` it starts with. */
+            if (isCap && text[a] === "!") html += '<span class="art negbtn lead">+</span>';
+          }
         }
         let next = at + t.length;
         if (headOpen) next = Math.min(next, headAt);
@@ -5529,7 +5574,7 @@
         SERVICE.get("facets", { q: text, by: "kind,ext,age", edges: "1,7,30,365" }, signal).catch(() => null),
         HOME && !has("under") && !has("parent") ? SERVICE.get("usage", { path: HOME, top: 4294967295, q: text }, signal).catch(() => null) : null,
         Promise.all(sized.map(([term]) =>
-          SERVICE.get("count", { q: text + " size:" + term, cap: 1000000 }, signal).then((r) => r.total).catch(() => 0))),
+          SERVICE.get("count", { q: text + " size:" + term, cap: 1000000 }, signal).then((r) => (r.capped ? 0 : r.total)).catch(() => 0))),
       ]).then(([f, u, counts]) => {
         if (mine !== narrowGen || q.value !== text) return;
         const out = [];
@@ -7811,6 +7856,12 @@
     if (e.button !== 0) return;
     e.preventDefault();
     q.focus({ preventScroll: true });
+    const btn = capButtonAt(e.clientX, e.clientY);
+    if (btn) {
+      const raw = q.value.slice(btn.a, btn.b);
+      editTerm([btn.a, btn.b], btn.what === "drop" ? "" : raw.startsWith("!") ? raw.slice(1) : "!" + raw);
+      return;
+    }
     const v = q.value, off = offsetAtPoint(e.clientX, e.clientY);
     if (e.detail >= 3) { q.setSelectionRange(0, v.length); return; }
     if (e.detail === 2) {

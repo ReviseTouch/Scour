@@ -32,10 +32,9 @@ pub const WELL_MIN: f32 = 88.0;
 /// picture, the picture to the name, the name to the header's edge, and the
 /// edge to what the filter holds.
 pub const HEAD_LEAD: f32 = 3.0;
-/// Room a hovered capsule opens at its right end for `!` and `×`, and for `≈`
-/// besides.
-pub const PAIR_W: f32 = 54.0;
-pub const PAIR_FZ_W: f32 = 78.0;
+/// Room every capsule keeps at its right end for its `×`: always there, so
+/// nothing moves when the pointer comes or goes.
+pub const CLOSE_W: f32 = 22.0;
 pub const HEAD_PIC: f32 = 16.0;
 pub const HEAD_JOIN: f32 = 5.0;
 pub const HEAD_TRAIL: f32 = 8.0;
@@ -167,6 +166,8 @@ impl Field {
                         from: t.start as i32,
                         to: t.end as i32,
                         whole: s == a && e == b,
+                        first: s == a,
+                        last: e == b,
                         raw: t.value.as_str().into(),
                         ..Cap::default()
                     });
