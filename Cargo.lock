@@ -5351,15 +5351,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruzstd"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
-dependencies = [
- "twox-hash",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5775,7 +5766,7 @@ name = "scour-textcache"
 version = "0.2.0-alpha.12"
 dependencies = [
  "parking_lot",
- "ruzstd",
+ "structured-zstd",
  "tempfile",
 ]
 
@@ -6420,6 +6411,15 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "structured-zstd"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5541de742174ab5d5309a27acc720e231c4194ebb4a83e3671aaeb8736caad06"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "strum"

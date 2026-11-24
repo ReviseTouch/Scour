@@ -167,7 +167,7 @@ not been run. A CI job checks that all three targets compile.
 
 ### From source
 
-Requirements: Rust 1.88 or later ([rustup](https://rustup.rs)), `pkg-config`,
+Requirements: Rust 1.92 or later ([rustup](https://rustup.rs)), `pkg-config`,
 and the fontconfig development headers, which only the window needs:
 
 | distribution | packages |

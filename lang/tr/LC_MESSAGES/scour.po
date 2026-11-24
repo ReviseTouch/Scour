@@ -2974,3 +2974,12 @@ msgstr "Saklanmıyor: her arama yeniden okur."
 
 msgid "with text"
 msgstr "metinli"
+
+msgid "Move…"
+msgstr "Taşı…"
+
+msgid "Read ahead while idle"
+msgstr "Boştayken önceden oku"
+
+msgid "When nobody has searched for five minutes and the machine is quiet, documents are read and kept before they are asked for: slowly, at the lowest priority."
+msgstr "Beş dakikadır arama yapılmamışsa ve makine sakinse belgeler sorulmadan önce okunup saklanır: yavaşça, en düşük öncelikle."

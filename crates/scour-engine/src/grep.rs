@@ -37,6 +37,9 @@ pub struct GrepAsk {
     pub timeout: Duration,
     /// Bytes a second at most; zero is as fast as the disks go.
     pub rate: u64,
+    /// Nobody waits on it: every thread gives way from the first file, and
+    /// the reading does not count as somebody using the index.
+    pub background: bool,
 }
 
 #[derive(Debug, Default)]
@@ -118,7 +121,7 @@ pub(crate) fn run(
                 break 'pages;
             }
             // Past the first batch the reading is a long one, and gives way.
-            options.quiet = start > ask.offset;
+            options.quiet = ask.background || start > ask.offset;
             if let Some(next) = read(
                 &expr,
                 &options,

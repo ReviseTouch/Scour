@@ -15,7 +15,7 @@ workspace = true
 # time, never a file at a time, so a search opens a few large blocks rather
 # than many small ones.
 [dependencies]
-ruzstd = { workspace = true }
+structured-zstd = { workspace = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]

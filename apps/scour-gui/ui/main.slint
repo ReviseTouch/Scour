@@ -698,6 +698,12 @@ export component MainWindow inherits Window {
     in property <string> texts-facts;
     in property <string> set-texts-clear;
     callback texts-forget();
+    in property <string> set-texts-ahead;
+    in property <string> set-texts-ahead-note;
+    in property <bool> texts-ahead-on;
+    in property <string> set-texts-move;
+    callback texts-move();
+    in-out property <string> texts-dir;
     callback index-reset();
     in property <[string]> section-labels;
     in property <[string]> section-leads;
@@ -5149,6 +5155,11 @@ export component MainWindow inherits Window {
         texts-facts: root.texts-facts;
         set-texts-clear: root.set-texts-clear;
         texts-forget() => { root.texts-forget(); }
+        set-texts-ahead: root.set-texts-ahead;
+        set-texts-ahead-note: root.set-texts-ahead-note;
+        texts-ahead-on: root.texts-ahead-on;
+        set-texts-move: root.set-texts-move;
+        texts-move() => { root.texts-move(); }
         set-index-reset: root.set-index-reset;
         set-index-reset-sure: root.set-index-reset-sure;
         set-index-reset-note: root.set-index-reset-note;

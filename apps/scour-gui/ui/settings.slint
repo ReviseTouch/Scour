@@ -229,6 +229,11 @@ export component SettingsPage inherits Rectangle {
     in property <string> texts-facts;
     in property <string> set-texts-clear;
     callback texts-forget();
+    in property <string> set-texts-ahead;
+    in property <string> set-texts-ahead-note;
+    in property <bool> texts-ahead-on;
+    in property <string> set-texts-move;
+    callback texts-move();
     in property <string> set-index-reset;
     in property <string> set-index-reset-sure;
     in property <string> set-index-reset-note;
@@ -1272,10 +1277,30 @@ export component SettingsPage inherits Rectangle {
                                 SettingRow {
                                     label: root.set-texts-kept;
                                     note: root.texts-facts;
-                                    Push {
-                                        label: root.set-texts-clear;
-                                        enabled: root.texts-on;
-                                        clicked => { root.texts-forget(); }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Push {
+                                            label: root.set-texts-move;
+                                            plain: true;
+                                            enabled: root.texts-on;
+                                            clicked => { root.texts-move(); }
+                                        }
+                                        Push {
+                                            label: root.set-texts-clear;
+                                            enabled: root.texts-on;
+                                            clicked => { root.texts-forget(); }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-texts-ahead;
+                                    note: root.set-texts-ahead-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.texts-ahead-on ? "on" : "off";
+                                        picked(v) => { root.perf-picked("texts-ahead", v); }
                                     }
                                 }
                             }

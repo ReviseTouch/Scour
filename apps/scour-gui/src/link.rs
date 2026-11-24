@@ -172,6 +172,8 @@ pub enum Got {
         prefix: String,
         path: String,
     },
+    /// A folder chosen for documents' kept text.
+    TextsDir(String),
     Facets {
         query_revision: u64,
         /// Which half of this answer the window asked for. Both groups are always

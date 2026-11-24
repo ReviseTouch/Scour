@@ -177,6 +177,7 @@ fn run(
                 max_size,
                 timeout: std::time::Duration::from_millis(timeout_ms),
                 rate: u64::from(rate_mib) << 20,
+                background: false,
             };
             // Every reading thread reads as the person asking; see `preview`.
             let enter: scour_grep::Enter = std::sync::Arc::new(crate::as_owner::for_a_read);

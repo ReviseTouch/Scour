@@ -120,3 +120,33 @@ fn only_its_owner_can_read_it() {
         assert_eq!(mode(&entry.path()), 0o600, "{:?}", entry.path());
     }
 }
+
+#[test]
+fn full_blocks_are_read_while_they_are_compressed_and_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), 0).unwrap();
+    // Twelve megabytes in documents of three hundred kilobytes: three blocks
+    // sealed and handed to the background while more arrive.
+    let text = |i: usize| format!("{i:05} ") + &"Asliye Hukuk Mahkemesi ".repeat(13_000);
+    for i in 0..40 {
+        store
+            .put(&key(&format!("/d/{i}.pdf"), 1, 1), &Kept::Words(text(i)))
+            .unwrap();
+        // Every earlier document is readable at once, wherever its block is.
+        let back = store.get(&key(&format!("/d/{}.pdf", i / 2), 1, 1), 0);
+        assert_eq!(back, Some(Kept::Words(text(i / 2))), "document {}", i / 2);
+    }
+    store.flush().unwrap();
+    assert!(
+        store.stats().disk > 0 && store.stats().disk < 2 << 20,
+        "{:?}",
+        store.stats()
+    );
+    drop(store);
+    let again = Store::open(dir.path(), 0).unwrap();
+    for i in 0..40 {
+        let got = again.get(&key(&format!("/d/{i}.pdf"), 1, 1), 0);
+        assert_eq!(got, Some(Kept::Words(text(i))), "document {i}");
+    }
+    assert_eq!(again.stats().documents, 40);
+}

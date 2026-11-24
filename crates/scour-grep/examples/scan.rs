@@ -2,7 +2,7 @@
 //! reading them cost. For measuring: `scour -n 100000 'ext:rs' | …`.
 //!
 //!     cargo run --release -p scour-grep --example scan -- \
-//!         [--binary] [--regex | --hex] [--cold] [--list] NEEDLE
+//!         [--binary] [--regex | --hex] [--cold] [--list] [--quiet] NEEDLE
 //!
 //! `--cold` asks the kernel to drop each file from the page cache first; a
 //! file it would not drop is counted, so a "cold" run says how cold it was.
@@ -14,6 +14,8 @@ use scour_grep::{Budget, File, Ground, Needle, Options, Outcome, Pattern, Scanne
 
 struct Args {
     binary: bool,
+    /// Read at the lowest priority, as a long reading does.
+    quiet: bool,
     /// The paths with a find and the line of the first, on standard error.
     list: bool,
     cold: bool,
@@ -28,12 +30,13 @@ fn args() -> Args {
             .map(|i| rest.remove(i))
             .is_some()
     };
-    let (binary, cold, regex, hex, list) = (
+    let (binary, cold, regex, hex, list, quiet) = (
         flag("--binary"),
         flag("--cold"),
         flag("--regex"),
         flag("--hex"),
         flag("--list"),
+        flag("--quiet"),
     );
     let Some(text) = rest.pop() else {
         eprintln!("usage: scan [--binary] [--regex | --hex] [--cold] NEEDLE < paths");
@@ -49,6 +52,7 @@ fn args() -> Args {
     };
     Args {
         binary,
+        quiet,
         list,
         cold,
         needle,
@@ -80,6 +84,7 @@ fn main() {
     roots.dedup();
     let options = Options {
         binary: args.binary,
+        quiet: args.quiet,
         max_size: 0,
         ..Options::default()
     };

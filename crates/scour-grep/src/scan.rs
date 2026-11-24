@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::budget::Budget;
 use crate::class::Class;
 use crate::excerpt::Hit;
-use crate::ground::{Ground, readers};
+use crate::ground::Ground;
 use crate::order::{Order, arrange};
 use crate::pattern::Pattern;
 use crate::read::Reader;
@@ -165,7 +165,7 @@ impl Scanner {
                 let medium = self.ground.medium(lane);
                 arrange(Order::of(medium, files, list), files, list);
                 let (list, next) = (&*list, Arc::new(AtomicUsize::new(0)));
-                for _ in 0..readers(medium, self.cores).min(list.len()) {
+                for _ in 0..self.ground.readers(lane, self.cores).min(list.len()) {
                     let next = Arc::clone(&next);
                     workers.push(scope.spawn(move || self.work(files, list, &next, budget)));
                 }

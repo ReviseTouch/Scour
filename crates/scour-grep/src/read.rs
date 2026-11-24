@@ -363,10 +363,16 @@ fn open_quietly(path: &Path) -> std::io::Result<File> {
 #[cfg(windows)]
 fn in_the_cloud(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
+    recalled(meta.file_attributes())
+}
+
+/// Whether Windows file attributes say the data is not on this disk.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recalled(attributes: u32) -> bool {
     const OFFLINE: u32 = 0x1000;
     const RECALL_ON_OPEN: u32 = 0x0004_0000;
     const RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
-    meta.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
+    attributes & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
 }
 
 #[cfg(not(windows))]
@@ -391,4 +397,19 @@ fn in_the_cloud_before(_path: &Path) -> bool {
 #[cfg(not(any(unix, windows)))]
 fn open_quietly(path: &Path) -> std::io::Result<File> {
     File::open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cloud_placeholder_is_told_by_its_attributes() {
+        // A OneDrive file kept online only; one pinned to this disk; a plain file.
+        assert!(recalled(0x0040_0000 | 0x20));
+        assert!(recalled(0x1000));
+        assert!(recalled(0x0004_0000));
+        assert!(!recalled(0x0008_0000 | 0x20));
+        assert!(!recalled(0x80));
+    }
 }

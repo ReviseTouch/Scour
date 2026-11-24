@@ -2,6 +2,7 @@
 //! e-mail — read by `scour-extractor` processes started here, and their text
 //! kept in `scour-textcache` so a second search opens none of them.
 
+pub mod ahead;
 mod crypt;
 mod pool;
 

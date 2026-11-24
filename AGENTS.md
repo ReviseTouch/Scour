@@ -123,8 +123,12 @@ what it skipped to standard error. A space in a phrase matches any run of
 blanks and line breaks, no-break and typographic spaces included.
 
 `texts` says what documents' text is kept; `texts --clear` forgets it, and
-`--keep on|off`, `--max-mb N`, `--dir PATH` change the settings
-`texts_off`, `texts_max_mb`, `texts_dir` for every face.
+`--keep on|off`, `--max-mb N`, `--dir PATH`, `--ahead on|off` change the
+settings `texts_off`, `texts_max_mb`, `texts_dir`, `texts_ahead` for every
+face. `texts_ahead`, off unless chosen, reads documents before they are
+asked for once nobody has searched for five minutes and the load is under a
+quarter of the cores: a background reading that gives way from its first
+file, paced at 16 MiB/s, a minute at a time.
 
 ### MCP — `scour-mcp`
 

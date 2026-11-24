@@ -72,6 +72,12 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     ));
     w.set_set_texts_kept(t(cat, "Documents' text kept"));
     w.set_set_texts_clear(t(cat, "Clear"));
+    w.set_set_texts_move(t(cat, "Move…"));
+    w.set_set_texts_ahead(t(cat, "Read ahead while idle"));
+    w.set_set_texts_ahead_note(t(
+        cat,
+        "When nobody has searched for five minutes and the machine is quiet, documents are read and kept before they are asked for: slowly, at the lowest priority.",
+    ));
     w.set_set_index_reset(t(cat, "Reset and scan again"));
     w.set_set_index_reset_note(t(
         cat,

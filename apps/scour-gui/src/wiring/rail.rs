@@ -161,6 +161,22 @@ pub(crate) fn wire(wiring: &Wiring) {
         let weak = window.as_weak();
         let link = Rc::clone(link);
         let cat = Rc::clone(cat);
+        window.on_texts_move({
+            let weak = window.as_weak();
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                let start = w.get_texts_dir().to_string();
+                std::thread::spawn(move || {
+                    let at = std::path::Path::new(&start);
+                    let start = at.parent().filter(|p| p.is_dir());
+                    if let Some(chosen) = scour_openers::pick_folder(start) {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            crate::deliver(Got::TextsDir(chosen));
+                        });
+                    }
+                });
+            }
+        });
         window.on_texts_forget({
             let link = Rc::clone(&link);
             move || {
@@ -294,6 +310,11 @@ pub(crate) fn wire(wiring: &Wiring) {
                     let on = value == "on";
                     w.set_texts_on(on);
                     change.texts_off = Some(!on);
+                }
+                "texts-ahead" => {
+                    let on = value == "on";
+                    w.set_texts_ahead_on(on);
+                    change.texts_ahead = Some(on);
                 }
                 _ => {
                     w.set_fresh_choice(value.clone());

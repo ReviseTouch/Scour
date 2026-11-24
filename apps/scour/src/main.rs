@@ -263,6 +263,9 @@ enum Command {
         /// Where it is kept; an empty string is beside the settings.
         #[arg(long)]
         dir: Option<String>,
+        /// `on` reads documents ahead of any search while nobody uses the machine.
+        #[arg(long, value_enum)]
+        ahead: Option<OnOff>,
     },
     /// Print the MCP configuration to paste into a client.
     McpConfig {
@@ -687,15 +690,21 @@ fn build(args: &Args) -> Result<Request> {
             keep: None,
             max_mb: None,
             dir: None,
+            ahead: None,
             ..
         }) => Request::Texts {},
         Some(Command::Texts {
-            keep, max_mb, dir, ..
+            keep,
+            max_mb,
+            dir,
+            ahead,
+            ..
         }) => Request::SetSettings {
             change: scour_settings::Change {
                 texts_off: keep.map(|k| k == OnOff::Off),
                 texts_max_mb: *max_mb,
                 texts_dir: dir.clone(),
+                texts_ahead: ahead.map(|a| a == OnOff::On),
                 ..Default::default()
             },
         },

@@ -72,6 +72,8 @@ pub struct Change {
     pub texts_max_mb: Option<u32>,
     /// See [`Settings::texts_dir`].
     pub texts_dir: Option<String>,
+    /// See [`Settings::texts_ahead`].
+    pub texts_ahead: Option<bool>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -94,7 +96,10 @@ impl Change {
 
     /// Whether this changes how documents' text is kept.
     pub fn moves_texts(&self) -> bool {
-        self.texts_off.is_some() || self.texts_max_mb.is_some() || self.texts_dir.is_some()
+        self.texts_off.is_some()
+            || self.texts_max_mb.is_some()
+            || self.texts_dir.is_some()
+            || self.texts_ahead.is_some()
     }
 
     /// Whether this changes what is indexed — the disks asked about, the
@@ -234,6 +239,9 @@ impl Change {
         }
         if let Some(v) = self.texts_dir {
             to.texts_dir = v;
+        }
+        if let Some(v) = self.texts_ahead {
+            to.texts_ahead = v;
         }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;

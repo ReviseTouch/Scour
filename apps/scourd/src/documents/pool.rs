@@ -71,14 +71,18 @@ impl Pool {
         let Some(mut worker) = self.take() else {
             return Answer::Failed("the extractor could not be started".into());
         };
-        let cap = TEXT_CAP.min((bytes.len() as u64).saturating_mul(RATIO).max(1 << 20));
+        let cap = cap_for(bytes.len());
         let answer = match wire::write_request(&mut worker.input, extension, cap, bytes) {
             Ok(()) => worker.answers.recv_timeout(PER_FILE),
             Err(e) => Ok(Err(e)),
         };
         match answer {
-            Ok(Ok(answer)) => {
+            Ok(Ok(mut answer)) => {
                 self.give_back(worker);
+                // Held to the bound here too: the extractor is not trusted to.
+                if let Answer::Words(words) = &mut answer {
+                    cut(words, cap as usize);
+                }
                 answer
             }
             // Dead, hung or speaking nonsense: it goes, and this document failed.
@@ -171,6 +175,22 @@ impl Drop for Pool {
     }
 }
 
+/// Text allowed back for a document of `len` bytes: a hundred times its
+/// size, at least a megabyte, at most [`TEXT_CAP`].
+fn cap_for(len: usize) -> u64 {
+    TEXT_CAP.min((len as u64).saturating_mul(RATIO).max(1 << 20))
+}
+
+fn cut(text: &mut String, cap: usize) {
+    if text.len() > cap {
+        let mut at = cap;
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        text.truncate(at);
+    }
+}
+
 fn start(exe: &PathBuf) -> Option<Worker> {
     let mut command = Command::new(exe);
     // Nothing of the service's environment: no variable may switch a
@@ -259,5 +279,27 @@ mod job {
             );
             AssignProcessToJobObject(job, child.as_raw_handle());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_back_is_held_to_its_ratio_and_ceiling() {
+        assert_eq!(cap_for(10), 1 << 20);
+        assert_eq!(cap_for(100 << 10), 100 * (100 << 10));
+        assert_eq!(cap_for(64 << 20), TEXT_CAP);
+        let mut s = "ğ".repeat(10);
+        cut(&mut s, 5);
+        assert_eq!(s, "ğğ");
+    }
+
+    #[test]
+    fn a_missing_extractor_fails_the_document_not_the_service() {
+        let pool = Pool::new("/nonexistent/scour-extractor".into(), 2);
+        assert!(matches!(pool.extract("pdf", b"%PDF"), Answer::Failed(_)));
+        assert!(matches!(pool.extract("pdf", b"%PDF"), Answer::Failed(_)));
     }
 }

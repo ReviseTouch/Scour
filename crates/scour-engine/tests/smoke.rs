@@ -2318,6 +2318,7 @@ fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
         max_size: 0,
         timeout: Duration::from_secs(20),
         rate: 0,
+        background: false,
     };
     let first = f.engine.grep("ext:rs", &ask, None).expect("grep");
     assert_eq!((first.candidates, first.files.len()), (20, 8));

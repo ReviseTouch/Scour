@@ -201,3 +201,85 @@ fn a_phrase_spaced_with_no_break_spaces_is_the_phrase() {
         assert!(matches!(got, Outcome::Found { .. }), "{phrase}: {got:?}");
     }
 }
+
+/// What a scan does to the files it reads, from the kernel's side.
+#[cfg(target_os = "linux")]
+mod side_effects {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    /// A file whose access time is ten days old: older than its change, so
+    /// even `relatime` updates it on the next read.
+    fn aged(dir: &std::path::Path, name: &str) -> File {
+        let file = put(dir, name, b"one needle here");
+        let old = SystemTime::now() - Duration::from_secs(10 * 86_400);
+        let f = std::fs::File::options()
+            .write(true)
+            .open(&file.path)
+            .unwrap();
+        f.set_times(std::fs::FileTimes::new().set_accessed(old))
+            .unwrap();
+        file
+    }
+
+    fn accessed(file: &File) -> SystemTime {
+        std::fs::metadata(&file.path).unwrap().accessed().unwrap()
+    }
+
+    #[test]
+    fn reading_leaves_access_times_alone() {
+        // tmpfs keeps access times; the disks here are mounted `noatime`.
+        let dir = tempfile::tempdir_in("/dev/shm")
+            .or_else(|_| tempfile::tempdir())
+            .unwrap();
+        let control = aged(dir.path(), "control.txt");
+        let before = accessed(&control);
+        std::fs::read(&control.path).unwrap();
+        if accessed(&control) == before {
+            eprintln!("this filesystem records no reads; nothing to observe");
+            return;
+        }
+        let file = aged(dir.path(), "a.txt");
+        let before = accessed(&file);
+        let got = scanner(text("needle"), Options::default(), dir.path())
+            .scan(std::slice::from_ref(&file), &Budget::unlimited());
+        assert!(matches!(got[0], Outcome::Found { .. }));
+        assert_eq!(accessed(&file), before);
+    }
+
+    #[test]
+    fn nothing_is_opened_for_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let files: Vec<File> = (0..20)
+            .map(|i| put(dir.path(), &format!("f{i}.txt"), b"needle"))
+            .collect();
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK) };
+        let path = std::ffi::CString::new(dir.path().as_os_str().as_encoded_bytes()).unwrap();
+        let mask = libc::IN_CLOSE_WRITE | libc::IN_CLOSE_NOWRITE | libc::IN_MODIFY;
+        assert!(unsafe { libc::inotify_add_watch(fd, path.as_ptr(), mask) } >= 0);
+        scanner(text("needle"), Options::default(), dir.path()).scan(&files, &Budget::unlimited());
+        let (mut wrote, mut read) = (0, 0);
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n <= 0 {
+                break;
+            }
+            let mut at = 0usize;
+            while at < n as usize {
+                let ev: libc::inotify_event =
+                    unsafe { std::ptr::read_unaligned(buf.as_ptr().add(at).cast()) };
+                if ev.mask & (libc::IN_CLOSE_WRITE | libc::IN_MODIFY) != 0 {
+                    wrote += 1;
+                }
+                if ev.mask & libc::IN_CLOSE_NOWRITE != 0 {
+                    read += 1;
+                }
+                at += size_of::<libc::inotify_event>() + ev.len as usize;
+            }
+        }
+        unsafe { libc::close(fd) };
+        assert_eq!(wrote, 0);
+        assert!(read >= 20, "{read} closed after reading");
+    }
+}

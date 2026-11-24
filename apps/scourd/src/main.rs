@@ -210,6 +210,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
     };
     live::start(live.engine(), walk);
     live::follow_disks(Arc::clone(&live), Arc::clone(&kept));
+    documents::ahead::start(Arc::clone(&live), Arc::clone(&kept));
     {
         // Ctrl-C, and systemd's SIGTERM, have to reach the accept loop, which is
         // blocked in `accept`. Setting the flag and connecting once wakes it.

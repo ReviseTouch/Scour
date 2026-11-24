@@ -96,6 +96,10 @@ pub struct Settings {
     /// Where it is kept; empty is beside the index's settings.
     #[serde(default)]
     pub texts_dir: String,
+    /// Read documents' text ahead of any search, while nobody uses the
+    /// machine: slowly, at the lowest priority.
+    #[serde(default)]
+    pub texts_ahead: bool,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]

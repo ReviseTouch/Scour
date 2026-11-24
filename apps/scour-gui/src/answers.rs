@@ -816,6 +816,7 @@ pub(super) fn places(cx: &Cx, got: Got) {
     }
     if let Response::Texts {
         on,
+        dir,
         documents,
         no_text,
         failed,
@@ -826,13 +827,14 @@ pub(super) fn places(cx: &Cx, got: Got) {
     } = &*reply
     {
         w.set_texts_on(*on);
+        w.set_texts_dir(dir.as_str().into());
         let facts = if !reader {
             t(cat, "No document reader is installed.").to_string()
         } else if !on {
             t(cat, "Not kept: every search reads them again.").to_string()
         } else {
             format!(
-                "{} {} · {} {} · {} {} · {} / {}",
+                "{dir}\n{} {} · {} {} · {} {} · {} / {}",
                 grouped(*documents),
                 t(cat, "with text"),
                 grouped(*no_text),

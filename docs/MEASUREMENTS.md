@@ -965,27 +965,40 @@ before each round:
 | kept: the same 768 files found | 0.116 s, 0 B read | 0.158 s, 0 B read |
 
 The second search opens no document: an inotify watch on the tree saw only
-its five directories opened. The kept text is 10.4 MiB on disk for 40.7 MiB
-of text. A changed e-mail was read again (95 B) and its old word no longer
+its five directories opened. The kept text was 10.4 MiB on disk for 40.7 MiB
+of text with `ruzstd`; level 19 made 5.46 MiB of the same text. A changed e-mail was read again (95 B) and its old word no longer
 found; four extractors killed with `kill -9` mid-search left the service up,
 the search finished, and those four documents were counted as would not open.
 Four idle extractors held 430 MB between two searches; they now end after
 20 s idle. The service idle for 60 s afterwards: 3 ticks and 7 threads, the
 installed build on the same index 2 ticks and 6 threads.
 
-**Compression.** The same 40.7 MiB of text, 1 MiB blocks:
+**Compression,** measured again on 124.5 MiB of text from 5,973 documents
+(2,000 PDF, 2,000 DOC, 1,000 XLS, 600 PPT, 373 EML from this machine), one
+thread, every block compressed and read back:
 
-| | size | ratio | time |
-|---|---:|---:|---:|
-| zstd (C) level 1 | 7.53 MiB | 5.4× | 0.05 s |
-| zstd (C) level 9 | 5.94 MiB | 6.8× | 0.29 s |
-| zstd (C) level 19 | 5.46 MiB | 7.4× | 8.10 s |
-| `ruzstd` (Rust) | 10.37 MiB | 3.9× | 0.36 s |
+| | block | size | ratio | compress | read back |
+|---|---|---:|---:|---:|---:|
+| libzstd 3 | 4 MiB | 24.60 MiB | 5.06× | 492 MB/s | 1,673 MB/s |
+| libzstd 9 | 4 MiB | 21.15 MiB | 5.89× | 123 MB/s | 1,936 MB/s |
+| libzstd 19 | 4 MiB | 18.85 MiB | 6.60× | 5.3 MB/s | 1,949 MB/s |
+| **structured-zstd 19** | 4 MiB | **18.85 MiB** | **6.60×** | 6.4 MB/s | **2,226 MB/s** |
+| structured-zstd 12 | 4 MiB | 20.89 MiB | 5.96× | 81 MB/s | 2,409 MB/s |
+| structured-zstd 19 | 1 MiB | 20.55 MiB | 6.06× | 7.1 MB/s | 2,108 MB/s |
+| ruzstd (fastest only) | 4 MiB | 37.25 MiB | 3.34× | 134 MB/s | 485 MB/s |
+| brotli q9 | 4 MiB | 20.58 MiB | 6.05× | 21 MB/s | 744 MB/s |
+| brotli q11 | 4 MiB | 17.73 MiB | 7.02× | 1.1 MB/s | 704 MB/s |
+| lz4 | 4 MiB | 42.53 MiB | 2.93× | 735 MB/s | 3,434 MB/s |
 
-Level 19 cost eight seconds of a reading thread's CPU for 842 documents, and
-the C library would not build for `scripts/check`'s other targets. `ruzstd`
-writes the same format in Rust at about level 1; 1 GiB keeps roughly a
-hundred thousand documents' text.
+`structured-zstd` is zstd written in Rust: at every level the same size as
+libzstd, read back faster, and the frames are one format — all 32 blocks of
+the 124.5 MiB came back byte for byte through both decoders. Kept: level 19,
+4 MiB blocks. Compressing at level 19 is slow, so a full block is sealed,
+read from memory meanwhile, and compressed by a thread of its own; a search
+never waits on it. brotli 11 is 6 % smaller and three times slower to read;
+reading is what every search does. An earlier commit of this phase used
+`ruzstd`, which writes only its fastest level: half the ratio, a fifth of
+the read speed.
 
 **Phrases in PDFs.** Five court phrases over the 400 PDFs, a quoted phrase
 against `(?i)` with `\s+` between its words (Turkish `i` spelled out):
@@ -999,6 +1012,38 @@ scour --socket S grep -n 2000 --lines 0 mahkeme          # twice
 scour --socket S grep -n 2000 --lines 0 '"asliye hukuk"' /pdf/
 scour --socket S grep -e -n 2000 --lines 0 '(?i)asl(?:i|İ|ı|I)ye\s+hukuk' /pdf/
 ```
+
+## The service idle, phase by phase (2026-11-24)
+
+An isolated service over 3,170 files (source and 200 PDFs), one walk, one
+`grep`, forty seconds to settle, then 120 s with nothing asked. Debug-profile
+builds (optimized, with debug info) of each phase's last commit:
+
+| build | CPU ticks in 120 s | threads | RSS |
+|---|---:|---:|---:|
+| before content search (`55bc3bd`) | 4 | 6 | 8.3 MiB |
+| phase 1 (`a09d828`) | 3 | 6 | 12.2 MiB |
+| phase 2 (`be1113e`) | 2 | 6 | 14.2 MiB |
+| phase 3 (`455c913`) | 3 | 7 | 14.7 MiB |
+| phase 3, as now | 4 | 8 | 7.1 MiB |
+
+The ticks are noise. The two threads added sleep: the cache's tidying every
+five minutes and reading ahead, which looks every five minutes whether it
+may go on and does nothing unless chosen.
+
+## The desk during a cold reading (2026-11-24)
+
+This machine (NVMe, 20 threads): a probe reads 4 KiB of a file dropped from
+the cache and does 5 ms of CPU work every 100 ms, while 13,600 files are read
+cold again and again; normal and lowest priority alternated:
+
+| | small read median / p95 | 5 ms of work |
+|---|---:|---:|
+| nothing running | 0.12 / 1.35 ms | 5.00 ms |
+| reading, normal | 0.10–0.11 / 0.33–0.37 ms | 5.00 ms |
+| reading, lowest priority | 0.10–0.11 / 0.30–0.35 ms | 5.00 ms |
+
+Nothing to feel here, either way. A spinning disk is where it would show.
 
 ## Reproducing
 

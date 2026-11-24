@@ -5,9 +5,18 @@
 use std::path::Path;
 
 pub(crate) fn may_keep(document: &Path, cache: &Path) -> bool {
-    match (encrypted(document), encrypted(cache)) {
+    decide(encrypted(document), encrypted(cache), || {
+        same_volume(document, cache)
+    })
+}
+
+/// The rule, apart from how each volume is asked about: a plain document
+/// anywhere; an encrypted one only into an encrypted cache; not knowing,
+/// only onto the cache's own volume.
+fn decide(document: Option<bool>, cache: Option<bool>, same: impl FnOnce() -> bool) -> bool {
+    match (document, cache) {
         (Some(false), _) | (Some(true), Some(true)) => true,
-        _ => same_volume(document, cache),
+        _ => same(),
     }
 }
 
@@ -94,6 +103,21 @@ fn encrypted(_path: &Path) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_encrypted_documents_text_never_reaches_a_plain_volume() {
+        let (yes, no) = (Some(true), Some(false));
+        // Encrypted document, plain cache elsewhere: never, whatever the volume says.
+        assert!(!decide(yes, no, || false));
+        assert!(decide(yes, yes, || false));
+        assert!(decide(no, no, || false));
+        assert!(decide(no, None, || false));
+        // Not known: only on the cache's own volume.
+        assert!(!decide(None, no, || false));
+        assert!(decide(None, no, || true));
+        assert!(!decide(yes, None, || false));
+        assert!(decide(yes, None, || true));
+    }
 
     #[test]
     fn a_document_on_the_caches_own_volume_is_always_kept() {
