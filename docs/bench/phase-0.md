@@ -140,7 +140,7 @@ search, with nothing to keep fresh. XLSX is the expensive one either way
 for a ZIP format, it is that one, and the measurement above is the case for
 it.
 
-## Asked of the owner
+## Asked of the owner — answered 2026-11-24: both recommendations taken
 
 **RTF.** The design has RTF from Xberg with `office` off; Xberg puts RTF
 behind `office`. Per the working rules this stops here. The two ways on:

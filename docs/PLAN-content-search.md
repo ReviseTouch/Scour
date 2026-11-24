@@ -15,7 +15,8 @@ code — those five are the owner's to settle before the phase they touch.
 
 | phase | state |
 |---|---|
-| 0 | done on `content/phase-0`: `scripts/content-bench`, `docs/bench/phase-0.md`. D1 measured and holds. **Waiting:** RTF (Xberg does not open it without `office`) and whether e-mail keeps Xberg — `phase-0.md`, "Asked of the owner" |
+| 0 | done, PR #1: `scripts/content-bench`, `docs/bench/phase-0.md`. D1 measured and holds |
+| | **Decided 2026-11-24:** RTF is read by `scour-extract`, streamed, no cache (Phase 1). **Xberg is dropped**; e-mail comes from `mail-parser` directly (Phase 3). The design's Xberg row no longer applies |
 | 1–4 | not begun |
 
 Phase 1 also gains, from Phase 0: the streamed XLSX/PPTX reader reads sheet
