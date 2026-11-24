@@ -82,13 +82,21 @@ grep tool has that; every step below should use it before it opens anything.
   library does not open what it was chosen for, an acceptance line cannot be
   met. Do not widen the scope and do not swap a library alone. Nothing of
   Phase 4 starts without his word.
+- **Every surface, every phase.** A capability is finished when each face
+  that searches contents can use it: the wire (`scour-proto`), `scour grep`,
+  MCP `scour_grep` (its tool description and arguments), `content:` in the
+  window, the terminal and the page, and `scour-web`'s `/api/grep`. A new
+  skip reason, setting or mode that one face cannot show is not done. New
+  crates are leaves with their own `tests/smoke.rs`, follow `AGENTS.md`'s
+  layout (300 lines a file, `lib.rs` only `mod`/`pub use`), and are added to
+  `apps/scourd/tests/layers.rs`'s view of the world.
 - Idle CPU of the service is measured at the end of every phase
   (`scripts/bench` reports it) and must not have risen.
 
 ## 2. Where the design and the code disagree — the owner decides
 
-Each has a recommendation; carry on with the recommendation **only for
-measurement**, and have the answer before building on it.
+**Answered 2026-11-24: every recommendation below is accepted.** They are
+now as binding as the design's own §2.
 
 **D1 — ZIP-based documents are already searched without a cache.** The
 design routes DOCX/XLSX/PPTX through `office_oxide` and ODT/EPUB through
