@@ -377,6 +377,11 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         sl.w = field.x(l, sl.at + sl.len) - sl.x;
     }
     w.set_caret_x(caret_x);
+    // The caret in the term the pointer is on: it is being written.
+    let writing = qb.hover.as_ref().is_some_and(|h| {
+        qb.anchor == qb.cursor && qb.cursor > h.start && qb.cursor <= h.end && w.get_q_focused()
+    });
+    w.set_hov_edit(writing);
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));

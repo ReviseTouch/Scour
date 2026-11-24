@@ -3364,6 +3364,13 @@
     const last = rects[rects.length - 1];
     const capEl = termEl(term[0]);
     const inCap = !!(capEl && capEl.classList.contains("cap"));
+    /* Being written, its buttons would stand over what is typed. */
+    if (inCap && capEl.classList.contains("edit")) {
+      hoverTerm = null;
+      acts.innerHTML = "";
+      markHover();
+      return;
+    }
     pair.classList.toggle("incap", inCap);
     if (inCap) {
       pair.style.setProperty("--pairbg", capEl.classList.contains("neg") ? "var(--cap-neg)"

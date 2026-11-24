@@ -1631,6 +1631,9 @@ export component MainWindow inherits Window {
     in property <bool> hov-fz;
     // The term is a capsule: its buttons stand in it, over its right end.
     in property <bool> hov-cap;
+    // The caret is in the hovered term: it is being written, and its buttons
+    // would stand over what is typed.
+    in property <bool> hov-edit;
     in property <bool> hov-fz-on;
     callback term-act(string);
     // Where Rust wants the selection/caret after it wrote or clamped the query.
@@ -2881,6 +2884,8 @@ export component MainWindow inherits Window {
                             : c.tone == 3 ? transparent : Theme.cap;
                         border-color: self.writing ? Theme.focus : c.hov ? Theme.ink-3 : self.ring;
 
+                        // The header's tint, its left corners the capsule's own: a
+                        // clip does not round them, and square ones stood out.
                         if c.head > 0: Rectangle {
                             x: 0px;
                             y: 0px;
@@ -2888,6 +2893,8 @@ export component MainWindow inherits Window {
                             height: parent.height;
                             opacity: 0.55;
                             background: parent.ring;
+                            border-top-left-radius: 7px;
+                            border-bottom-left-radius: 7px;
                         }
                         if c.head > 0: Rectangle {
                             x: parent.hx;
@@ -3482,7 +3489,8 @@ export component MainWindow inherits Window {
                             || (root.hov-fz && self.fz-hov)
                             || pair-neg.hovered
                             || pair-drop.hovered;
-                        visible: root.hov-on || self.over || field.pair-keep;
+                        visible: (root.hov-on || self.over || field.pair-keep)
+                            && !(root.hov-cap && root.hov-edit);
                         // A capsule's buttons are in the capsule, over the end of
                         // what it holds, on its own tint; a word's stand above it.
                         x: root.hov-cap
