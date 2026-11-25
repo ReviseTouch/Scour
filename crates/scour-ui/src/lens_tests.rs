@@ -250,3 +250,13 @@ fn only_a_content_term_with_something_in_it_reads_files() {
     assert!(!reads("rapor content:"));
     assert!(!reads("rapor"));
 }
+
+#[test]
+fn a_value_a_bar_or_semicolon_would_cut_is_written_quoted() {
+    let q = r#""x;y""#;
+    let t = &terms(q)[0];
+    let written: Vec<String> = word(t).into_iter().map(|c| c.term).collect();
+    assert_eq!(written, [r#""x;y""#, r#"content:"x;y""#, r#"!"x;y""#]);
+    let q = r#"under:"/a|b""#;
+    assert_eq!(place_flipped(&terms(q)[0]).term, r#"parent:"/a|b""#);
+}

@@ -5,11 +5,11 @@
 
 use super::{Term, canonical, term};
 
-/// Every term with its offsets: split on whitespace and `|` outside quotes.
-/// A list is one term across `ext:pdf ; odt`, its `value` without the spaces
-/// (`pdf;odt`), and ends before a piece that cannot be a value
-/// (`kind:doc;!code` is two). A word of only `;` is a separator; elsewhere a
-/// `;` stays in its word, though the service reads it as a space.
+/// Every term with its offsets: split on whitespace, `|` and `;` outside
+/// quotes. A list is one term across `ext:pdf ; odt`, its `value` without the
+/// spaces (`pdf;odt`), and ends before a piece that cannot be a value
+/// (`kind:doc;!code` is two). Outside a list `;` cuts as a space does:
+/// `rapor;fatura` and `under:/a;b` are two terms each.
 pub fn terms(text: &str) -> Vec<Term> {
     let mut out = Vec::new();
     for (s, e) in joined(text, &words(text)) {
@@ -20,7 +20,7 @@ pub fn terms(text: &str) -> Vec<Term> {
         let pieces = if is_list(&condensed(raw)) {
             cut(text, s, e)
         } else {
-            vec![(s, e)]
+            semis(text, s, e)
         };
         for (a, b) in pieces {
             alternatives(text, a, b, &mut out);
@@ -95,6 +95,18 @@ fn cut(text: &str, s: usize, e: usize) -> Vec<(usize, usize)> {
             }
         }
     }
+}
+
+/// A word that is no list cut on every `;` outside quotes.
+fn semis(text: &str, s: usize, e: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = s;
+    while let Some(i) = unquoted(&text[from..e], ';') {
+        out.push((from, from + i));
+        from += i + 1;
+    }
+    out.push((from, e));
+    out
 }
 
 /// The terms of one piece: cut on `|` outside quotes.

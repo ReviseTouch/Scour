@@ -60,19 +60,36 @@ fn a_mixed_or_negated_run_is_not_one_capsule() {
     assert_eq!(said(&c[1]), ["Depo", "/ › c"]);
 }
 
+fn at(q: &str, caret: Caret) -> Vec<String> {
+    said(&place_caps_at(q, HOME, &machine(), Some(caret))[0])
+}
+
 #[test]
-fn the_member_the_caret_is_in_is_shown_raw() {
+fn a_caret_resting_on_a_tile_leaves_it_whole() {
     let q = format!("{SYSTEM}|under:/mnt/depo");
-    let tilde = q.find("~").unwrap() + 1;
-    let c = &caps(&q, Some(tilde))[0];
-    assert_eq!(said(c), ["CACHY", "[1]", "Depo"]);
-    assert!(c.parts[1].caret && !c.parts[0].caret);
-    assert_eq!(c.parts[0].spot.terms.len(), 4);
-    // Editing Depo's only root leaves no Depo part behind.
-    let c = &caps(&q, Some(q.len()))[0];
-    assert_eq!(said(c), ["CACHY", "[1]"]);
-    // Before the run's first letter, the caret is in none of it.
-    assert_eq!(said(&caps(&q, Some(0))[0]), ["CACHY", "Depo"]);
+    let first = "under:/etc".len();
+    let c = &place_caps_at(&q, HOME, &machine(), Some(Caret::resting(first)))[0];
+    assert_eq!(said(c), ["CACHY", "Depo"]);
+    assert!(c.parts[0].caret && !c.parts[0].raw);
+    assert_eq!(at(&q, Caret::resting(q.len())), ["CACHY", "Depo"]);
+    // The old call rests the caret.
+    assert_eq!(said(&caps(&q, Some(first))[0]), ["CACHY", "Depo"]);
+    assert_eq!(at(&q, Caret::resting(0)), ["CACHY", "Depo"]);
+}
+
+#[test]
+fn a_member_being_edited_is_raw_and_its_tile_comes_apart() {
+    let q = format!("{SYSTEM}|under:/mnt/depo");
+    let tilde = q.find('~').unwrap();
+    let apart = ["/ › etc", "[1]", "/ › opt", "/ › usr", "/ › var", "Depo"];
+    // Strictly inside a member: edited however the caret got there.
+    assert_eq!(at(&q, Caret::resting(tilde)), apart);
+    assert_eq!(at(&q, Caret::editing(tilde + 1)), apart);
+    assert_eq!(at(&q, Caret::editing(q.len())), ["CACHY", "[1]"]);
+    // A folder at rest is crumbs; typed into, its letters.
+    let q = "rapor under:~/Belgeler";
+    assert_eq!(at(q, Caret::resting(q.len())), ["~ › Belgeler"]);
+    assert_eq!(at(q, Caret::editing(q.len())), ["[1]"]);
 }
 
 #[test]
@@ -102,7 +119,7 @@ fn every_offset_of_the_run_has_a_part() {
     for at in c.start + 1..=c.end {
         let k = c.part_at(at).unwrap();
         let again = &caps(&q, Some(at))[0];
-        if let Some(raw) = again.parts.iter().find(|p| p.caret) {
+        if let Some(raw) = again.parts.iter().find(|p| p.raw) {
             let t = &raw.spot.terms[0];
             assert!(t.start < at && at <= t.end);
             assert!(c.parts[k].spot.terms.contains(t), "{at}");

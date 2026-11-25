@@ -172,3 +172,77 @@ fn without_places_leaves_no_bar_in_any_arrangement() {
         );
     }
 }
+
+#[test]
+fn add_at_lets_only_the_member_being_edited_give_way() {
+    let at = |q: &str, path, c| place_add_at(q, HOME, path, c).0;
+    // Resting after a press or a click on a part: a finished path joins.
+    let q = "rapor under:/mnt/depo";
+    assert_eq!(
+        at(q, "/usr", Caret::resting(q.len())),
+        "rapor under:/mnt/depo|under:/usr"
+    );
+    let q = "rapor under:~/gel";
+    assert_eq!(
+        at(q, "~/Belgeler", Caret::resting(q.len())),
+        "rapor under:~/gel|under:~/Belgeler"
+    );
+    // Typed into: it gives way, letters after its `/` or not.
+    assert_eq!(
+        at(q, "~/Belgeler", Caret::editing(q.len())),
+        "rapor under:~/Belgeler"
+    );
+    let q = "rapor under:/mnt/depo";
+    assert_eq!(at(q, "/usr", Caret::editing(q.len())), "rapor under:/usr");
+    assert_eq!(
+        at(q, "/usr", Caret::resting(14)),
+        "rapor under:/usr",
+        "inside it"
+    );
+    // Only a place term gives way, and an empty one always.
+    let q = "rapor under:/a ext:pd";
+    assert_eq!(
+        at(q, "/b", Caret::editing(q.len())),
+        "rapor under:/a|under:/b ext:pd"
+    );
+    assert_eq!(
+        at("rapor under:", "/b", Caret::resting(0)),
+        "rapor under:/b"
+    );
+}
+
+#[test]
+fn the_caret_settles_at_the_groups_end_or_stays_on_an_exclusion() {
+    let q = "rapor under:/a|under:/b ext:pdf";
+    let (_, c) = place_settle(q, 6, false);
+    assert_eq!(&q[..c], "rapor under:/a|under:/b");
+    let q = "rapor under:/a !under:/x !under:/y";
+    let (_, c) = place_settle(q, 25, true);
+    assert_eq!(&q[..c], q, "on the exclusion it was on");
+    let (_, c) = place_settle(q, 15, true);
+    assert_eq!(&q[..c], "rapor under:/a !under:/x");
+    assert_eq!(&q[..place_settle(q, 25, false).1], "rapor under:/a");
+    // No exclusion left: the group; no group: an empty place where it was.
+    assert_eq!(place_settle("rapor under:/a", 6, true).1, 14);
+    assert_eq!(
+        place_settle("rapor ext:pdf", 6, true),
+        ("rapor under: ext:pdf".into(), 12)
+    );
+    assert_eq!(place_settle("rapor under:/a|under: x", 0, false).1, 21);
+}
+
+#[test]
+fn every_path_writer_quotes_a_bar_and_a_semicolon() {
+    for (path, written) in [
+        ("/srv/a;b", r#"under:"/srv/a;b""#),
+        ("/srv/a|b", r#"under:"/srv/a|b""#),
+        ("/srv/a b", r#"under:"/srv/a b""#),
+    ] {
+        assert_eq!(add("", path), written);
+        assert_eq!(place_exclude("", HOME, path).0, format!("!{written}"));
+        let t = &terms("under:")[0];
+        assert_eq!(crate::lens::place(t, path), written);
+        let q = add("", path);
+        assert_eq!(scope(&q, HOME).within[0].path, path, "read back whole");
+    }
+}

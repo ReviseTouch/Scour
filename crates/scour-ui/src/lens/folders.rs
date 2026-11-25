@@ -2,19 +2,31 @@
 //! group, "Exclude" writes or takes away its `!under:`, and where the caret
 //! rests afterwards so the lens hanging from the group does not move.
 
+use super::caret::{Caret, edited_term};
 use super::group::{Pick, is_place, norm, place_toggle, quoted_path, remove_term, runs, scope};
 use super::{Term, place_parts, replace, terms};
 use crate::disks::lies_under;
 use crate::path::{full_form, home_form};
 
-/// "Add": the folder into the place group, and the caret after it. A member
-/// it lies in, or that lies in it, an empty `under:`, and `typing` (the lens's
-/// term while letters after its last `/` are typed) give way to it in place;
-/// else it joins. Never takes a folder out; drops the folder's own `!under:`.
+/// [`place_add_at`] with `typing` guessed from its letters after the last
+/// `/`; superseded by it, which a finished path cannot fool.
 pub fn place_add(text: &str, home: &str, path: &str, typing: Option<&Term>) -> (String, usize) {
+    let typing = typing.filter(|t| is_place(t) && !place_parts(&t.value).1.is_empty());
+    add(text, home, path, typing)
+}
+
+/// "Add": the folder into the place group, and the caret after it. A member
+/// it lies in, or that lies in it, an empty `under:`, and the member being
+/// edited at `caret` ([`edited_term`]) give way to it in place; else it
+/// joins. Never takes a folder out; drops the folder's own `!under:`.
+pub fn place_add_at(text: &str, home: &str, path: &str, caret: Caret) -> (String, usize) {
+    let typing = edited_term(text, caret).filter(is_place);
+    add(text, home, path, typing.as_ref())
+}
+
+fn add(text: &str, home: &str, path: &str, typing: Option<&Term>) -> (String, usize) {
     let want = norm(home, path);
     let new = format!("under:{}", quoted_path(&home_form(home, &want)));
-    let typing = typing.filter(|t| is_place(t) && !place_parts(&t.value).1.is_empty());
     let Some(run) = runs(text).into_iter().find(|r| r.iter().any(is_place)) else {
         return unexclude(at_end(text, &new), home, &want);
     };
@@ -63,14 +75,38 @@ pub fn place_exclude(text: &str, home: &str, path: &str) -> (String, usize) {
     at_end(&text, &new)
 }
 
-/// Where the caret rests after a press of the place lens wrote `text`: at the
-/// end of the group's first member, which starts where the group did. With
-/// no group left, at an empty `under:` already there, or at one written at
-/// `at`, where the group was — so the lens stays open on a place.
+/// The end of the group's first member, else [`place_settle`]'s empty
+/// place; superseded by `place_settle`, which also stays on an exclusion.
 pub fn place_anchor(text: &str, home: &str, at: usize) -> (String, usize) {
     if let Some(h) = scope(text, home).within.first() {
         return (text.to_string(), h.term.end);
     }
+    empty_place(text, at)
+}
+
+/// Where the caret rests, as [`Caret::resting`], after a press of the place
+/// lens wrote `text`. `not`: the lens was on an `!under:` and stays on the
+/// one nearest `at`. Otherwise at the end of the group's last `under:` — the
+/// capsule's trailing edge. With no group left, at an empty `under:` already
+/// there, or at one written at `at`, where the group was.
+pub fn place_settle(text: &str, at: usize, not: bool) -> (String, usize) {
+    let all = terms(text);
+    let excluded = all.iter().filter(|t| t.not && t.field == Some("under"));
+    if let Some(t) = excluded
+        .min_by_key(|t| t.start.abs_diff(at))
+        .filter(|_| not)
+    {
+        return (text.to_string(), t.end);
+    }
+    if let Some(run) = runs(text).into_iter().find(|r| r.iter().any(is_place)) {
+        let last = run.iter().rev().find(|t| is_place(t)).map_or(0, |t| t.end);
+        return (text.to_string(), last);
+    }
+    empty_place(text, at)
+}
+
+/// An empty `under:` already in the text, or one written at `at`.
+fn empty_place(text: &str, at: usize) -> (String, usize) {
     let all = terms(text);
     if let Some(t) = all.iter().find(|t| is_place(t) && t.value.is_empty()) {
         return (text.to_string(), t.end);

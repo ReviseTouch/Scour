@@ -70,7 +70,7 @@ pub fn remove_term(text: &str, t: &Term) -> (String, usize) {
     match run.iter().position(|m| m == t) {
         Some(k) if k + 1 < run.len() => cut(t.start, run[k + 1].start),
         Some(k) if k > 0 => cut(run[k - 1].end, t.end),
-        _ => replace(text, t, ""),
+        _ => super::drop_alone(text, t),
     }
 }
 
@@ -203,9 +203,11 @@ pub(super) fn norm(home: &str, p: &str) -> String {
     trim(&full_form(home, p)).to_string()
 }
 
-/// A path as a term's value: quoted when a space or a `|` would cut it.
+/// A path as a term's value: quoted when a space, `|` or `;` would cut it.
 pub(crate) fn quoted_path(p: &str) -> String {
-    if p.chars().any(|c| c.is_whitespace() || c == '|') {
+    if p.chars()
+        .any(|c| c.is_whitespace() || matches!(c, '|' | ';'))
+    {
         format!("\"{p}\"")
     } else {
         p.to_string()

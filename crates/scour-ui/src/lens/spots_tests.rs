@@ -103,3 +103,28 @@ fn the_dots_light_the_disks_the_query_can_reach() {
     assert!(!tile_held(&t[0], &scope("under:~|under:/usr", HOME)));
     assert!(tile_held(&t[0], &scope(SYSTEM, HOME)));
 }
+
+#[test]
+fn a_spot_of_any_run_is_taken_out_of_its_own_run() {
+    let q = "under:/a rapor under:/mnt/depo|under:/c";
+    let caps = crate::lens::place_caps(q, HOME, &machine(), None);
+    let depo = &caps[1].parts[0].spot;
+    assert_eq!(depo.name, "Depo");
+    assert_eq!(depo.remove(q, HOME), ("under:/a rapor under:/c".into(), 15));
+    let c = &caps[1].parts[1].spot;
+    assert_eq!(c.remove(q, HOME).0, "under:/a rapor under:/mnt/depo");
+}
+
+#[test]
+fn a_disk_left_out_whole_is_one_negated_entry() {
+    let none = "!under:/etc !under:~ !under:/opt !under:/usr !under:/var";
+    let q = format!("rapor {none} !under:/mnt/depo/tmp");
+    let s = spots(&q, HOME, &machine());
+    let n: Vec<(&str, bool)> = s.iter().map(|s| (s.name.as_str(), s.not)).collect();
+    assert_eq!(n, [("CACHY", true), ("/mnt/depo/tmp", true)]);
+    assert_eq!(
+        s[0].remove(&q, HOME),
+        ("rapor !under:/mnt/depo/tmp".into(), 6)
+    );
+    assert_eq!(chip_label(&s, 3, "Everywhere"), "Everywhere");
+}

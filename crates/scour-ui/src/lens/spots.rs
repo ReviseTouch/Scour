@@ -3,7 +3,7 @@
 //! query's place terms and the disk tiles. A disk held whole is one entry.
 
 use super::Term;
-use super::group::{Held, Pick, Scope, remove_term, scope, tile_toggle};
+use super::group::{Held, Scope, remove_term, scope};
 use crate::disks::{Shown, Tile, lies_under};
 use crate::path::{home_form, leaf};
 
@@ -27,13 +27,14 @@ pub struct Spot {
 }
 
 impl Spot {
-    /// The query without it, and the caret where it was: a tile goes as
-    /// [`tile_toggle`]`(…, Pick::Also)`, a folder or an exclusion as its term.
-    pub fn remove(&self, text: &str, home: &str) -> (String, usize) {
-        match self.tile {
-            Some(_) => tile_toggle(text, home, &self.paths, Pick::Also),
-            None => remove_term(text, &self.terms[0]),
+    /// The query without its terms, and the caret where the first was: in
+    /// whichever run they are, each with one `|` beside it. `home` is unused.
+    pub fn remove(&self, text: &str, _home: &str) -> (String, usize) {
+        let mut out = (text.to_string(), self.terms[0].start);
+        for t in self.terms.iter().rev() {
+            out = remove_term(&out.0, t);
         }
+        out
     }
 
     fn folder(h: &Held, home: &str, not: bool) -> Spot {
@@ -68,57 +69,69 @@ pub fn tile_lit(t: &Tile, scope: &Scope) -> bool {
 }
 
 /// Where `text` looks, in the order of its terms — a tile held whole as one
-/// entry — and then where it does not.
+/// entry — and then where it does not, a tile left out whole as one too.
 pub fn spots(text: &str, home: &str, tiles: &[Tile]) -> Vec<Spot> {
     let s = scope(text, home);
-    let mut out = gather(&s.within, home, tiles, None);
-    out.extend(s.outside.iter().map(|h| Spot::folder(h, home, true)));
+    let mut out = gather(&s.within, home, tiles, false, None);
+    out.extend(gather(&s.outside, home, tiles, true, None));
     out
 }
 
-/// `members` as entries: each tile whose roots they all hold is one, at its
-/// first member, `lone` left out of it; every other member is its own.
+/// `members` as entries, in the order of the text: each tile whose roots
+/// they all hold is one, the others one each. With `raw` (a capsule's
+/// parts) a tile collapses only over consecutive members, none of them raw.
 pub(super) fn gather(
     members: &[Held],
     home: &str,
     tiles: &[Tile],
-    lone: Option<&Term>,
+    not: bool,
+    raw: Option<&dyn Fn(&Term) -> bool>,
 ) -> Vec<Spot> {
-    let paths: Vec<&str> = members.iter().map(|h| h.path.as_str()).collect();
     let mut taken = vec![false; members.len()];
     let mut out = Vec::new();
     for (k, t) in tiles.iter().enumerate() {
-        let whole = t.choosable() && !t.roots.is_empty();
-        if !whole || !t.roots.iter().all(|r| paths.contains(&r.as_str())) {
+        let on: Vec<usize> = (0..members.len())
+            .filter(|&i| !taken[i] && t.roots.contains(&members[i].path))
+            .collect();
+        if !collapses(t, members, &on, raw) {
             continue;
         }
-        let mut terms = Vec::new();
-        for (i, h) in members.iter().enumerate() {
-            if !taken[i] && t.roots.contains(&h.path) && Some(&h.term) != lone {
-                taken[i] = true;
-                terms.push(h.term.clone());
-            }
-        }
-        if terms.is_empty() {
-            continue;
-        }
+        on.iter().for_each(|&i| taken[i] = true);
         out.push(Spot {
             tile: Some(k),
             name: t.name.clone(),
             short: t.name.clone(),
             kind: Some(t.kind),
-            not: false,
+            not,
             paths: t.roots.clone(),
-            terms,
+            terms: on.iter().map(|&i| members[i].term.clone()).collect(),
         });
     }
     for (i, h) in members.iter().enumerate() {
         if !taken[i] {
-            out.push(Spot::folder(h, home, false));
+            out.push(Spot::folder(h, home, not));
         }
     }
     out.sort_by_key(|s| s.terms[0].start);
     out
+}
+
+/// Whether the members at `on` stand for the whole tile as one entry.
+fn collapses(
+    t: &Tile,
+    members: &[Held],
+    on: &[usize],
+    raw: Option<&dyn Fn(&Term) -> bool>,
+) -> bool {
+    let all = t
+        .roots
+        .iter()
+        .all(|r| on.iter().any(|&i| &members[i].path == r));
+    let whole = t.choosable() && !t.roots.is_empty() && all;
+    whole
+        && raw.is_none_or(|raw| {
+            on.iter().all(|&i| !raw(&members[i].term)) && on[on.len() - 1] - on[0] + 1 == on.len()
+        })
 }
 
 /// The chip's line: `everywhere` when nothing is held, else the places'

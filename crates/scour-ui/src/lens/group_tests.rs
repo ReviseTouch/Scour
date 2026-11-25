@@ -205,3 +205,17 @@ fn a_tile_half_held_is_completed_not_dropped() {
     );
     assert_eq!(tile(q, &[], Pick::Only), "rapor ext:pdf");
 }
+
+#[test]
+fn dropping_an_empty_member_takes_its_bar_too() {
+    for (q, at, want) in [
+        ("rapor under:/a|under: ext:pdf", 2, "rapor under:/a ext:pdf"),
+        ("rapor under:|under:/a", 1, "rapor under:/a"),
+        ("rapor under: | under:/a", 1, "rapor under:/a"),
+        ("rapor under: ext:pdf", 1, "rapor ext:pdf"),
+    ] {
+        let t = &terms(q)[at];
+        assert_eq!(replace(q, t, "").0, want, "{q}");
+        assert_eq!(crate::lens::without(q, t), want, "{q}");
+    }
+}

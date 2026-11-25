@@ -7,11 +7,13 @@
 //! the query: the service still says what every term means.
 
 mod capsule;
+mod caret;
 mod folders;
 mod group;
 mod launch;
 #[cfg(test)]
 mod machine;
+mod negate;
 mod rest;
 mod size;
 mod split;
@@ -21,9 +23,11 @@ mod time_pick;
 mod time_said;
 mod values;
 pub use capsule::*;
+pub use caret::*;
 pub use folders::*;
 pub use group::*;
 pub use launch::*;
+pub use negate::*;
 pub use rest::*;
 pub use size::*;
 pub use split::*;
@@ -202,6 +206,11 @@ pub fn replace(text: &str, t: &Term, with: &str) -> (String, usize) {
         let out = format!("{}{with}{}", &text[..t.start], &text[t.end..]);
         return (out, t.start + with.len());
     }
+    remove_term(text, t)
+}
+
+/// A term of no run taken out, and one space beside it.
+fn drop_alone(text: &str, t: &Term) -> (String, usize) {
     let (mut a, mut b) = (t.start, t.end);
     if text[b..].starts_with(' ') {
         b += 1;
@@ -303,8 +312,11 @@ pub fn list(t: &Term, values: &[(String, String)]) -> Vec<Choice> {
         .collect()
 }
 
+/// Quoted when a space, `|` or `;` would cut it.
 fn quoted(v: &str) -> String {
-    if v.chars().any(char::is_whitespace) {
+    if v.chars()
+        .any(|c| c.is_whitespace() || matches!(c, '|' | ';'))
+    {
         format!("\"{v}\"")
     } else {
         v.to_string()
@@ -317,7 +329,7 @@ pub fn word(t: &Term) -> Vec<Choice> {
     let v = &t.value;
     let n = neg(t);
     let mut out = vec![Choice::new("as typed", "", format!("{n}{}", quoted(v)))];
-    if !v.chars().any(char::is_whitespace) {
+    if quoted(v) == *v {
         out.push(Choice::new(
             "a letter off still matches",
             "fuzzy:",
@@ -360,10 +372,10 @@ pub fn content(t: &Term) -> Vec<Choice> {
     ]
 }
 
-/// A place term for a folder, quoted when its path has a space.
+/// A place term for a folder, quoted when a space, `|` or `;` would cut it.
 pub fn place(t: &Term, path: &str) -> String {
     let field = t.field.unwrap_or("under");
-    format!("{}{field}:{}", neg(t), quoted(path))
+    format!("{}{field}:{}", neg(t), quoted_path(path))
 }
 
 /// The other reading of a place: `under:` everything below, `parent:` only
@@ -376,7 +388,7 @@ pub fn place_flipped(t: &Term) -> Choice {
     Choice::new(
         label,
         other,
-        format!("{}{other}:{}", neg(t), quoted(&t.value)),
+        format!("{}{other}:{}", neg(t), quoted_path(&t.value)),
     )
 }
 
