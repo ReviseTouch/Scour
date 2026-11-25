@@ -7,6 +7,7 @@
 mod list;
 mod menu;
 mod panels;
+mod placecap;
 mod settings;
 mod side;
 mod top;

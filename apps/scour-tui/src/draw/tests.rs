@@ -119,3 +119,70 @@ fn a_line_too_wide_for_the_panel_is_wrapped_rather_than_cut() {
     );
     assert_eq!(wrapped("", 20, false).len(), 1, "an empty line is a line");
 }
+
+/// The query line's row as text, and the caret's column on it.
+fn query_line(app: &App, width: u16) -> (String, u16) {
+    let backend = ratatui::backend::TestBackend::new(width, QUERY_HIGH);
+    let mut term = ratatui::Terminal::new(backend).unwrap();
+    term.draw(|f| query(f, f.area(), app, &theme())).unwrap();
+    let buf = term.backend().buffer().clone();
+    let row: String = (0..width)
+        .map(|x| buf[(x, 1)].symbol().to_string())
+        .collect();
+    let caret = term.get_cursor_position().unwrap().x;
+    (row, caret)
+}
+
+/// A run of `under:` terms reads as one unit while the caret is elsewhere,
+/// and as its letters once the caret is in it; the caret stays on its byte.
+#[test]
+fn a_place_run_is_drawn_as_one_unit_while_the_caret_is_outside_it() {
+    let depo = scour_proto::Disk {
+        volume: scour_proto::Volume {
+            id: "uuid:depo".into(),
+            roots: vec!["/mnt/depo".into()],
+            label: "Depo".into(),
+            kind: scour_proto::VolumeKind::Fixed,
+            fs: "ext4".into(),
+            size: 1,
+        },
+        state: scour_proto::DiskState::Configured,
+        seen: Default::default(),
+    };
+    let query = "under:/mnt/depo|under:/srv/x rapor".to_string();
+    let mut app = App {
+        disks: vec![depo],
+        caret: query.len(),
+        query,
+        mode: Mode::Search,
+        ..Default::default()
+    };
+    let (row, caret) = query_line(&app, 80);
+    let drawn = " SCOUR ⛁ Depo · /srv/x rapor";
+    assert!(row.starts_with(drawn), "{row}");
+    assert_eq!(caret as usize, drawn.chars().count());
+
+    // The caret in the run: its letters, the caret on its own byte.
+    app.caret = 10;
+    let (row, caret) = query_line(&app, 80);
+    assert!(
+        row.starts_with(" SCOUR under:/mnt/depo|under:/srv/x"),
+        "{row}"
+    );
+    assert_eq!(caret, 7 + 10);
+
+    // Before the run, the caret's column is its own.
+    app.query = format!("a {}", app.query);
+    app.caret = 1;
+    let (row, caret) = query_line(&app, 80);
+    assert!(row.starts_with(" SCOUR a ⛁ Depo · /srv/x rapor"), "{row}");
+    assert_eq!(caret, 8);
+
+    // Narrow, the parts that do not fit are a count.
+    app.query = "under:/mnt/depo|under:/srv/x|under:/srv/y|under:/srv/z rapor".into();
+    app.caret = app.query.len();
+    let (row, _) = query_line(&app, 31);
+    assert_eq!(row, " SCOUR ⛁ Depo · /srv/x +2 rapor");
+    let (row, _) = query_line(&app, 30);
+    assert!(row.starts_with(" SCOUR ⛁ Depo +3 rapor"), "{row}");
+}

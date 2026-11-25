@@ -10,6 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use scour_ui::format;
 
+use super::placecap::{self, Folded};
+
 /// The query line: the brand, what has been typed, and the caret.
 pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // The whole line is the field: a strip of panel, as the page draws one.
@@ -21,29 +23,30 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         height: 1,
         ..area
     };
+    let triggers_shown = !app.v2.grep_open && area.width >= 96;
+    let room = (area.width as usize).saturating_sub(7 + if triggers_shown { 18 } else { 0 });
+    let folds = placecap::folded(app, room);
     let typed = if app.query.is_empty() {
         // Quiet and short: a hint as bright as a query reads as one.
-        Span::styled(
+        vec![Span::styled(
             hint(app),
             Style::new()
                 .fg(theme.ink_3())
                 .add_modifier(Modifier::ITALIC | Modifier::DIM),
-        )
+        )]
     } else {
-        Span::styled(
-            app.query.as_str(),
-            Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
-        )
+        let plain = Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD);
+        with_folds(&app.query, vec![(0, app.query.len(), plain)], &folds, theme)
     };
     // The query in colour once the service has read it back: the same roles
     // and colours the window and the page use.
-    let coloured: Vec<Span> = app
+    let runs: Vec<(usize, usize, Style)> = app
         .spans
         .iter()
         .filter_map(|sp| {
             let from = sp.start as usize;
             let to = from + sp.len as usize;
-            let text = app.query.get(from..to)?;
+            app.query.get(from..to)?;
             let colour = match sp.role {
                 // A mistake outranks a polarity: an unreadable value is
                 // searched for as text, which is what matters about it.
@@ -76,9 +79,10 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             if capsule {
                 st = st.bg(theme.hover());
             }
-            Some(Span::styled(text.to_string(), st))
+            Some((from, to, st))
         })
         .collect();
+    let coloured = with_folds(&app.query, runs, &folds, theme);
     let mut parts = vec![Span::styled(
         " SCOUR ",
         Style::new()
@@ -88,7 +92,7 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // The coloured runs cover the whole query when they are here; the plain
     // text stands in until they arrive, so nothing blinks between the two.
     if coloured.is_empty() {
-        parts.push(typed);
+        parts.extend(typed);
     } else {
         parts.extend(coloured);
     }
@@ -161,7 +165,7 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     let line = Line::from(parts);
     f.render_widget(Paragraph::new(line), area);
-    if !app.v2.grep_open && area.width >= 96 {
+    if triggers_shown {
         let triggers = Line::from(vec![
             Span::styled(
                 "⛁ ^P  ",
@@ -184,10 +188,48 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         if let Some(gx) = grep_caret_x {
             f.set_cursor_position((area.x + gx.min(area.width.saturating_sub(1)), area.y));
         } else {
-            let before = app.query[..app.caret].chars().count() as u16;
+            let before = placecap::caret_column(&app.query, app.caret, &folds) as u16;
             f.set_cursor_position((area.x + 7 + before, area.y));
         }
     }
+}
+
+/// `runs` of the query as spans, each folded place run as its label in the
+/// place of its bytes.
+fn with_folds(
+    query: &str,
+    runs: Vec<(usize, usize, Style)>,
+    folds: &[Folded],
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    for (from, to, st) in runs {
+        let mut at = from;
+        while at < to {
+            match folds.iter().find(|f| f.start <= at && at < f.end) {
+                Some(f) => {
+                    if at == f.start {
+                        let cap = Style::new().bg(theme.hover()).add_modifier(Modifier::BOLD);
+                        let disk = f.kind.map_or(theme.key(), |k| theme.disk(k));
+                        out.push(Span::styled("⛁", cap.fg(disk)));
+                        out.push(Span::styled(format!(" {}", f.label), cap.fg(theme.val())));
+                    }
+                    at = f.end.min(to);
+                }
+                None => {
+                    let stop = folds
+                        .iter()
+                        .map(|f| f.start)
+                        .filter(|&s| s > at && s < to)
+                        .min()
+                        .unwrap_or(to);
+                    out.push(Span::styled(query[at..stop].to_string(), st));
+                    at = stop;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Shown, total, what it cost.

@@ -23,7 +23,7 @@ fn disk(id: &str, label: &str, root: &str, kind: VolumeKind, state: DiskState) -
 
 /// The owner's machine: the system disk indexed through `home` and `sistem`
 /// only, Depo set in config.toml and watched, and a stick waiting.
-fn machine() -> (App, Vec<(String, Vec<String>)>) {
+pub(crate) fn machine() -> (App, Vec<(String, Vec<String>)>) {
     let mut depo = disk(
         "uuid:depo",
         "Depo",
@@ -61,15 +61,15 @@ fn machine() -> (App, Vec<(String, Vec<String>)>) {
     (app, sources)
 }
 
-fn key(app: &mut App, c: char) -> Want {
+pub(crate) fn key(app: &mut App, c: char) -> Want {
     crate::keys::press(app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
 }
 
-fn enter(app: &mut App) -> Want {
+pub(crate) fn enter(app: &mut App) -> Want {
     crate::keys::press(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
 }
 
-fn texts(app: &App, wide: usize) -> Vec<String> {
+pub(crate) fn texts(app: &App, wide: usize) -> Vec<String> {
     app.lens_panel_lines(wide)
         .1
         .into_iter()
@@ -84,11 +84,11 @@ fn the_disks_come_once_this_openings_sources_have_and_are_counted_once() {
         app.open_place_lens(),
         Want::Place { opening: 1, .. }
     ));
-    assert_eq!(app.disk_row_count(), 0, "nothing until the sources say");
+    assert_eq!(app.disk_row_count(), 1, "no disk until the sources say");
 
     // An older opening's answer is dropped.
     assert_eq!(app.sources_came(0, sources.clone()), Want::Nothing);
-    assert_eq!(app.disk_row_count(), 0);
+    assert_eq!(app.disk_row_count(), 1);
 
     let Want::DiskCounts { opening: 1, asks } = app.sources_came(1, sources.clone()) else {
         panic!("the choosable disks are counted");
@@ -106,8 +106,8 @@ fn the_disks_come_once_this_openings_sources_have_and_are_counted_once() {
     app.disk_counted(0, "uuid:depo", 9);
     app.disk_counted(1, "uuid:depo", 1_234_567);
     let lines = texts(&app, 80);
-    assert!(lines[2].ends_with("|1,234,567 files"), "{}", lines[2]);
-    assert!(lines[0].ends_with('|'), "not counted yet: {}", lines[0]);
+    assert!(lines[3].ends_with("|1,234,567 files"), "{}", lines[3]);
+    assert!(lines[1].ends_with('|'), "not counted yet: {}", lines[1]);
 
     // Opened again: counted again, from nothing.
     app.panel = Panel::None;
@@ -128,31 +128,33 @@ fn a_disk_line_says_its_name_root_state_and_count_in_columns() {
     app.open_place_lens();
     app.sources_came(1, sources);
     let (_, lines) = app.lens_panel_lines(80);
-    assert_eq!(lines[0].head, "Disks");
-    assert!(lines[0].rule);
-    assert_eq!(lines[0].mark.map(|m| m.kind), Some("system"));
     let t: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
-    assert!(t[0].contains("CACHY") && t[0].contains("some folders indexed"));
+    assert_eq!(t[0], "Searching in: Everywhere");
+    assert!(lines[0].dimmed && !lines[0].rule);
+    assert_eq!(lines[1].head, "Disks");
+    assert!(lines[1].rule);
+    assert_eq!(lines[1].mark.map(|m| m.kind), Some("system"));
+    assert!(t[1].contains("CACHY") && t[1].contains("some folders indexed"));
     // The system disk's folders under it, and no "Index it" for it.
-    assert!(t[1].contains("/usr · /var"), "{}", t[1]);
-    assert!(t[2].contains("Depo") && t[2].contains("/mnt/depo"));
-    assert!(t[2].contains("watched live"));
-    assert!(t[3].contains("/run/media/demo/STICK") && t[3].contains("waiting for an answer"));
-    assert_eq!(&t[4..7], ["    Index it", "    Not this time", "    Never"]);
-    let keys: Vec<&str> = lines[4..7].iter().map(|l| l.key.as_str()).collect();
+    assert!(t[2].contains("/usr · /var"), "{}", t[2]);
+    assert!(t[3].contains("Depo") && t[3].contains("/mnt/depo"));
+    assert!(t[3].contains("watched live"));
+    assert!(t[4].contains("/run/media/demo/STICK") && t[4].contains("waiting for an answer"));
+    assert_eq!(&t[5..8], ["    Index it", "    Not this time", "    Never"]);
+    let keys: Vec<&str> = lines[5..8].iter().map(|l| l.key.as_str()).collect();
     assert_eq!(keys, ["i", "l", "n"]);
-    assert!(t[7].starts_with("+ Add") && lines[7].rule && lines[7].head.is_empty());
-    assert!(t[8].starts_with("! Exclude"));
+    assert!(t[8].starts_with("+ Add") && lines[8].rule && lines[8].head.is_empty());
+    assert!(t[9].starts_with("! Exclude"));
 
     // The state starts in one column on every disk's line.
     let at = |line: &str, word: &str| line[..line.find(word).unwrap()].chars().count();
-    assert_eq!(at(t[0], "some"), at(t[2], "watched"));
-    assert_eq!(at(t[0], "some"), at(t[3], "waiting"));
+    assert_eq!(at(t[1], "some"), at(t[3], "watched"));
+    assert_eq!(at(t[1], "some"), at(t[4], "waiting"));
 
     // Narrow, the root goes before anything is cut.
     let narrow = texts(&app, 48);
-    assert!(!narrow[2].contains("/mnt/depo"), "{}", narrow[2]);
-    assert!(narrow[2].contains("watched live"), "{}", narrow[2]);
+    assert!(!narrow[3].contains("/mnt/depo"), "{}", narrow[3]);
+    assert!(narrow[3].contains("watched live"), "{}", narrow[3]);
 }
 
 #[test]
@@ -162,15 +164,20 @@ fn enter_chooses_one_disk_and_again_lets_it_go() {
     app.sources_came(1, sources);
 
     // Depo, alone.
-    app.panel_at = 2;
+    app.panel_at = 3;
     assert!(matches!(enter(&mut app), Want::Page { .. }));
     assert_eq!(app.query, "under:/mnt/depo");
     assert_eq!(app.panel, Panel::Lens, "the lens stays to show it");
     let lines = texts(&app, 80);
-    assert!(lines[2].starts_with('✓') && !lines[0].starts_with('✓'));
+    assert!(lines[3].starts_with('✓') && !lines[1].starts_with('✓'));
+    assert!(
+        lines[0].starts_with("Searching in: 1 Depo|"),
+        "{}",
+        lines[0]
+    );
 
     // The system disk instead: its folders as one group, Depo gone.
-    app.panel_at = 0;
+    app.panel_at = 1;
     enter(&mut app);
     assert!(!app.query.contains("/mnt/depo"), "{}", app.query);
     for r in [
@@ -183,15 +190,17 @@ fn enter_chooses_one_disk_and_again_lets_it_go() {
         assert!(app.query.contains(r), "{r} in {}", app.query);
     }
     assert_eq!(app.query.matches('|').count(), 4);
-    assert!(texts(&app, 80)[0].starts_with('✓'));
+    assert!(texts(&app, 80)[1].starts_with('✓'));
+    // Held whole, the disk is one entry by its name.
+    assert_eq!(texts(&app, 80)[0], "Searching in: 1 CACHY|");
     // Its folders' line chooses it too: held alone, it lets go.
-    app.panel_at = 1;
+    app.panel_at = 2;
     enter(&mut app);
     assert_eq!(app.query, "");
-    assert!(!texts(&app, 80)[0].starts_with('✓'));
+    assert!(!texts(&app, 80)[1].starts_with('✓'));
 
     // The stick waits for an answer: Enter on it writes nothing.
-    app.panel_at = 3;
+    app.panel_at = 4;
     assert_eq!(enter(&mut app), Want::Nothing);
     assert_eq!(app.query, "");
 }
@@ -203,7 +212,7 @@ fn the_question_keys_answer_only_from_the_answers() {
     app.sources_came(1, sources);
 
     // On the stick's own line a letter is typing.
-    app.panel_at = 3;
+    app.panel_at = 4;
     key(&mut app, 'n');
     assert_eq!(app.query, "n");
 
@@ -211,12 +220,12 @@ fn the_question_keys_answer_only_from_the_answers() {
         volume: "uuid:ab12".into(),
         what: what.into(),
     };
-    app.panel_at = 4;
+    app.panel_at = 5;
     assert_eq!(key(&mut app, 'n'), answer("leave"));
-    assert_eq!(app.panel_at, 6, "the cursor on the answer given");
+    assert_eq!(app.panel_at, 7, "the cursor on the answer given");
     assert_eq!(key(&mut app, 'l'), answer("later"));
     assert_eq!(key(&mut app, 'i'), answer("index"));
-    app.panel_at = 5;
+    app.panel_at = 6;
     assert_eq!(enter(&mut app), answer("later"));
     assert_eq!(app.query, "n", "no answer types");
     // Right on an answer goes nowhere rather than answering.
@@ -235,21 +244,15 @@ fn a_click_lands_on_the_disk_line_drawn_there() {
         let area = Rect::new(0, 0, size.0, size.1);
         let b = crate::draw::panel_rect(&app, area, lines.len() + rules);
         let col = b.x + 6;
-        // The heading, then the disks; a rule above the folders.
-        assert_eq!(crate::draw::panel_line_at(&app, area, col, b.y + 2), None);
-        assert_eq!(
-            crate::draw::panel_line_at(&app, area, col, b.y + 3),
-            Some(0)
-        );
-        assert_eq!(
-            crate::draw::panel_line_at(&app, area, col, b.y + 5),
-            Some(2)
-        );
-        assert_eq!(crate::draw::panel_line_at(&app, area, col, b.y + 10), None);
-        assert_eq!(
-            crate::draw::panel_line_at(&app, area, col, b.y + 11),
-            Some(7)
-        );
+        // Where it searches, the heading, then the disks; a rule above the
+        // folders.
+        let line_at = |row| crate::draw::panel_line_at(&app, area, col, row);
+        assert_eq!(line_at(b.y + 2), Some(0));
+        assert_eq!(line_at(b.y + 3), None);
+        assert_eq!(line_at(b.y + 4), Some(1));
+        assert_eq!(line_at(b.y + 6), Some(3));
+        assert_eq!(line_at(b.y + 11), None);
+        assert_eq!(line_at(b.y + 12), Some(8));
     }
 
     // Pressed and let go on Depo's line: Depo is chosen.
@@ -258,7 +261,7 @@ fn a_click_lands_on_the_disk_line_drawn_there() {
     let at = |kind| MouseEvent {
         kind,
         column: b.x + 10,
-        row: b.y + 5,
+        row: b.y + 6,
         modifiers: KeyModifiers::NONE,
     };
     crate::keys::mouse(
@@ -279,7 +282,7 @@ fn the_folders_add_and_exclude_beside_a_chosen_disk() {
     let (mut app, sources) = machine();
     app.open_place_lens();
     app.sources_came(1, sources);
-    app.panel_at = 2;
+    app.panel_at = 3;
     enter(&mut app);
     app.v2.place_dir = "/mnt/data".into();
     app.rebuild_lens();
@@ -302,10 +305,88 @@ fn a_disk_indexed_through_folders_lists_them_while_it_is_walked() {
     app.open_place_lens();
     app.sources_came(1, sources);
     let lines = texts(&app, 80);
-    assert!(lines[0].contains("being walked"), "{}", lines[0]);
-    assert!(lines[1].contains("/usr · /var"), "{}", lines[1]);
+    assert!(lines[1].contains("being walked"), "{}", lines[1]);
+    assert!(lines[2].contains("/usr · /var"), "{}", lines[2]);
     assert!(
-        lines[2].contains("Depo"),
+        lines[3].contains("Depo"),
         "a whole disk has no folders' line"
     );
+}
+
+/// The lens open on the owner's machine, browsing `dir`, over `query` with
+/// the caret at its start: in no term, so none is being typed.
+fn lens_on(query: &str, dir: &str) -> App {
+    let (mut app, sources) = machine();
+    app.query = query.into();
+    app.caret = 0;
+    app.open_place_lens();
+    app.sources_came(1, sources);
+    app.v2.place_dir = dir.into();
+    app.rebuild_lens();
+    app
+}
+
+fn add(app: &mut App) -> Want {
+    app.panel_at = app.place_line(0);
+    enter(app)
+}
+
+#[test]
+fn add_on_a_folder_already_held_leaves_it() {
+    let mut app = lens_on("rapor under:/mnt/depo|under:/usr", "/usr");
+    add(&mut app);
+    assert_eq!(app.query, "rapor under:/mnt/depo|under:/usr");
+    // The caret rests at the end of the group's first member.
+    assert_eq!(&app.query[..app.caret], "rapor under:/mnt/depo");
+}
+
+#[test]
+fn add_narrows_or_widens_a_member_in_place() {
+    let h = home();
+    let mut app = lens_on("rapor under:~|under:/mnt/depo", &format!("{h}/Belgeler"));
+    add(&mut app);
+    assert_eq!(app.query, "rapor under:~/Belgeler|under:/mnt/depo");
+    app.open_place_lens();
+    app.v2.place_dir = h;
+    add(&mut app);
+    assert_eq!(app.query, "rapor under:~|under:/mnt/depo");
+}
+
+#[test]
+fn add_lets_a_term_still_being_typed_go_and_the_list_shows_its_folder() {
+    let (mut app, _) = machine();
+    app.query = "rapor under:~/Bel".into();
+    app.caret = app.query.len();
+    app.open_place_lens();
+    assert_eq!(app.v2.place_dir, home(), "the folder the value names");
+    let h = home();
+    app.tree_landed(
+        h.clone(),
+        vec![format!("{h}/Belgeler"), format!("{h}/Projeler")],
+    );
+    let folders: Vec<&str> = app
+        .v2
+        .lens_items
+        .iter()
+        .map(|i| i.0.as_str())
+        .filter(|t| t.starts_with('▸'))
+        .collect();
+    assert_eq!(folders, ["▸ Belgeler/"], "narrowed by what is typed");
+    add(&mut app);
+    assert_eq!(app.query, "rapor under:~");
+
+    // Opened again where the lens left the caret: nothing is being typed.
+    app.open_place_lens();
+    assert!(app.v2.place_part.is_none());
+}
+
+#[test]
+fn exclude_toggles_and_takes_the_folder_out_of_the_group() {
+    let mut app = lens_on("under:/mnt/depo|under:/mnt/data", "/mnt/data");
+    key(&mut app, '!');
+    assert_eq!(app.query, "under:/mnt/depo !under:/mnt/data");
+    app.open_place_lens();
+    app.v2.place_dir = "/mnt/data".into();
+    key(&mut app, '!');
+    assert_eq!(app.query, "under:/mnt/depo");
 }

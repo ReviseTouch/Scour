@@ -9,6 +9,7 @@ use crate::app::{App, Panel, Want};
 use crate::draw::PanelLine;
 
 mod place;
+mod spots;
 
 #[derive(Debug, Clone, Default)]
 pub struct V2 {
@@ -24,6 +25,13 @@ pub struct V2 {
     pub grep_summary: String,
     pub place_mode: bool,
     pub place_dir: String,
+    /// The lens opened on a place term still being typed: the folder it
+    /// names and the letters after its last `/`, which narrow that folder's
+    /// list. "Add" lets the term go.
+    pub place_part: Option<(String, String)>,
+    /// The query and caret the place lens last wrote: a term the caret is
+    /// in then was written by the lens, not typed.
+    pub place_left: Option<(String, usize)>,
     pub tree_dirs: Vec<String>,
     pub lens_items: Vec<(String, String, String, Option<String>)>,
     /// A heading over each item, empty for none: the launcher's groups.
@@ -49,13 +57,22 @@ fn quote_if(s: &str) -> String {
 }
 
 impl App {
+    /// The place lens, on the folder the term at the caret names, else on
+    /// the one it was last left at.
     pub fn open_place_lens(&mut self) -> Want {
-        let dir = if self.v2.place_dir.is_empty() {
-            let hm = home();
-            if hm.is_empty() { "/".into() } else { hm }
-        } else {
-            self.v2.place_dir.clone()
+        let hm = home();
+        let left = self.v2.place_left.as_ref();
+        let ours = left.is_some_and(|(q, c)| *q == self.query && *c == self.caret);
+        let at = self
+            .place_term()
+            .filter(|_| !ours)
+            .map(|t| lens::place_at(&t.value, &hm));
+        let dir = match &at {
+            Some((shown, _)) => shown.clone(),
+            None if self.v2.place_dir.is_empty() => lens::place_at("", &hm).0,
+            None => self.v2.place_dir.clone(),
         };
+        self.v2.place_part = at.filter(|(_, part)| !part.is_empty());
         self.v2.place_mode = true;
         self.v2.place_dir = dir.clone();
         self.v2.tree_dirs.clear();
@@ -118,8 +135,15 @@ impl App {
                     Some(p.clone()),
                 ));
             }
+            let part = match &self.v2.place_part {
+                Some((dir, part)) if *dir == cur => part.to_lowercase(),
+                _ => String::new(),
+            };
             for d in &self.v2.tree_dirs {
                 let leaf = scour_ui::path::leaf(d);
+                if !leaf.to_lowercase().starts_with(&part) {
+                    continue;
+                }
                 out.push((
                     format!("▸ {leaf}/"),
                     "→".into(),
@@ -263,15 +287,22 @@ impl App {
         self.typed()
     }
 
+    /// The positive place term the caret is in.
+    fn place_term(&self) -> Option<lens::Term> {
+        let t = lens::term_at(&self.query, self.caret.min(self.query.len()))?;
+        (!t.not && lens::lens_of(&self.query, &t) == Some(Lens::Place)).then_some(t)
+    }
+
     /// Press a folder line of the place lens: "Add" puts the folder into the
-    /// place group, "Exclude" writes `!under:`, any other folder is the only
-    /// place searched. The lens closes on it.
+    /// place group, "Exclude" writes or takes away its `!under:`, any other
+    /// folder is the only place searched. The lens closes on it.
     fn place_press(&mut self, at: usize, dir: Option<String>) -> Want {
         let home = home();
         let here = self.v2.place_dir.clone();
-        let (q, caret) = match (at, dir) {
-            (0, _) => lens::place_toggle(&self.query, &home, &here, lens::Pick::Also),
-            (1, _) => excluded(&self.query, &home, &here),
+        let typing = self.place_term().filter(|_| self.v2.place_part.is_some());
+        let written = match (at, dir) {
+            (0, _) => lens::place_add(&self.query, &home, &here, typing.as_ref()),
+            (1, _) => lens::place_exclude(&self.query, &home, &here),
             (2, _) => {
                 let start = std::path::Path::new(&here);
                 let Some(p) = scour_openers::pick_folder(Some(start)) else {
@@ -284,10 +315,8 @@ impl App {
             (_, Some(d)) => lens::place_toggle(&self.query, &home, &d, lens::Pick::Only),
             (_, None) => return Want::Nothing,
         };
-        self.query = q;
-        self.caret = caret;
         self.panel = Panel::None;
-        self.typed()
+        self.place_wrote(written)
     }
 
     pub fn lens_climb_up(&mut self) -> Want {
@@ -450,26 +479,6 @@ impl App {
     }
 }
 
-/// The query with `!under:` this folder, or without it when it is there.
-fn excluded(text: &str, home: &str, dir: &str) -> (String, usize) {
-    let path = scour_ui::path::untrailed(dir);
-    if let Some(h) = lens::scope(text, home)
-        .outside
-        .into_iter()
-        .find(|h| h.path == path)
-    {
-        return lens::remove_term(text, &h.term);
-    }
-    let gap = match text.is_empty() || text.ends_with(char::is_whitespace) {
-        true => "",
-        false => " ",
-    };
-    let shown = scour_ui::path::home_form(home, path);
-    let out = format!("{text}{gap}!under:{}", quote_if(&shown));
-    let caret = out.len();
-    (out, caret)
-}
-
 pub fn sparkline_bar(strip: &[(u32, u64)]) -> String {
     const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     if strip.is_empty() {
@@ -507,7 +516,7 @@ mod tests {
             vec!["/home/demo/Projeler/Scour".into()],
         );
         // Drill into the subfolder at the end of the lens list.
-        app.panel_at = app.v2.lens_items.len() - 1;
+        app.panel_at = app.place_line(app.v2.lens_items.len() - 1);
         let drill = app.lens_press(true);
         assert_eq!(drill, Want::Tree("/home/demo/Projeler/Scour".into()));
         assert_eq!(app.v2.place_dir, "/home/demo/Projeler/Scour");

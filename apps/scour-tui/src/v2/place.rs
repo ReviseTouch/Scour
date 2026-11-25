@@ -1,7 +1,7 @@
-//! The place lens's disks: a line a disk, above the folders. What a line
-//! says comes from `scour_ui::disks::tiles`, what a choice writes from
-//! `scour_ui::lens::tile_toggle`. One disk at a time: no `|` group is built
-//! here beyond the one a disk's own folders make.
+//! The place lens's head: where the query looks ("Searching in:", from
+//! `scour_ui::lens::spots`), then a line a disk, above the folders. What a
+//! disk's line says comes from `scour_ui::disks::tiles`, what a choice writes
+//! from `scour_ui::lens::tile_toggle`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -38,9 +38,11 @@ pub struct Disks {
     pub asked: HashSet<String>,
 }
 
-/// One line of the disk list.
+/// One line of the lens's head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
+    /// "Searching in:", always the first line: a digit takes its k-th out.
+    Spots,
     /// The disk, by its place among the tiles.
     Tile(usize),
     /// Under a disk indexed through some of its folders, `Partly` or being
@@ -51,24 +53,16 @@ pub enum Row {
 }
 
 impl Row {
-    fn tile(self) -> usize {
+    fn tile(self) -> Option<usize> {
         match self {
-            Row::Tile(i) | Row::Roots(i) | Row::Answer(i, _) => i,
+            Row::Spots => None,
+            Row::Tile(i) | Row::Roots(i) | Row::Answer(i, _) => Some(i),
         }
     }
 }
 
-/// What a choice of this tile writes: its source roots, or the disk's own
-/// root for an indexed disk no source names.
-fn roots_of(t: &Tile) -> Vec<String> {
-    match t.roots.is_empty() {
-        true => vec![t.root.clone()],
-        false => t.roots.clone(),
-    }
-}
-
 /// `s` cut to `wide` characters, the end given up for a `…`.
-fn head_of(s: &str, wide: usize) -> String {
+pub(super) fn head_of(s: &str, wide: usize) -> String {
     match s.chars().count() > wide {
         true => s
             .chars()
@@ -130,13 +124,13 @@ impl App {
         tiles(&disks, &sources, |id| self.v2.disks.files.get(id).copied())
     }
 
-    /// The disk list's lines. None before any `sources` answer: without it
-    /// the system disk reads as not indexed at all.
+    /// The head's lines: "Searching in:", then the disks. No disk before any
+    /// `sources` answer: without it the system disk reads as not indexed.
     pub fn disk_rows(&self, tiles: &[Tile]) -> Vec<Row> {
+        let mut rows = vec![Row::Spots];
         if self.v2.disks.sources.is_none() {
-            return Vec::new();
+            return rows;
         }
-        let mut rows = Vec::new();
         for (i, t) in tiles.iter().enumerate() {
             rows.push(Row::Tile(i));
             // Indexed through some of its folders, whatever it is doing now.
@@ -151,7 +145,7 @@ impl App {
         rows
     }
 
-    /// How many lines the disk list takes at the top of the place lens.
+    /// How many lines the head takes at the top of the place lens.
     pub fn disk_row_count(&self) -> usize {
         match self.v2.place_mode {
             true => self.disk_rows(&self.place_tiles()).len(),
@@ -207,10 +201,11 @@ impl App {
         self.dirty = true;
     }
 
-    /// Press a line of the disk list. `drill` goes into the disk's root.
+    /// Press a line of the head. `drill` goes into the disk's root; the
+    /// "Searching in:" line answers to its digits only.
     pub(super) fn disk_press(&mut self, row: Row, drill: bool) -> Want {
         let tiles = self.place_tiles();
-        let Some(t) = tiles.get(row.tile()) else {
+        let Some(t) = row.tile().and_then(|i| tiles.get(i)) else {
             return Want::Nothing;
         };
         match row {
@@ -228,17 +223,20 @@ impl App {
             }
             _ if !t.choosable() => Want::Nothing,
             _ => {
-                let (q, caret) = lens::tile_toggle(&self.query, &home(), &roots_of(t), Pick::Only);
-                self.query = q;
-                self.caret = caret;
-                self.typed()
+                let written = lens::tile_toggle(&self.query, &home(), &t.roots, Pick::Only);
+                self.place_wrote(written)
             }
         }
     }
 
-    /// An answer's key, while the cursor is on one of that disk's answers.
+    /// A key of the line under the cursor: a spot's digit on "Searching in:",
+    /// an answer's letter on one of that disk's answers.
     pub fn disk_key(&mut self, key: char) -> Option<Want> {
         let rows = self.disk_rows(&self.place_tiles());
+        if rows.get(self.panel_at) == Some(&Row::Spots) {
+            let k = key.to_digit(10).filter(|&k| k > 0)? as usize;
+            return Some(self.spot_out(k).unwrap_or(Want::Nothing));
+        }
         let Some(Row::Answer(i, _)) = rows.get(self.panel_at).copied() else {
             return None;
         };
@@ -272,7 +270,8 @@ impl App {
         let count_w = count(9_999_999).chars().count();
         let root_w = wide.saturating_sub(INDENT + name_w + 2 + 2 + state_w + 2 + count_w);
         let root_w = if root_w < 8 { 0 } else { root_w };
-        let scope = lens::scope(&self.query, &home());
+        let home = home();
+        let scope = lens::scope(&self.query, &home);
         let line = |text: String, key: String, dimmed: bool| PanelLine {
             text,
             key,
@@ -285,9 +284,10 @@ impl App {
         let mut out: Vec<PanelLine> = rows
             .iter()
             .map(|row| match *row {
+                Row::Spots => self.spots_line(&lens::spots(&self.query, &home, &tiles), wide),
                 Row::Tile(i) => {
                     let t = &tiles[i];
-                    let held = t.choosable() && roots_of(t).iter().all(|r| scope.holds(r));
+                    let held = lens::tile_held(t, &scope);
                     let mut text = format!(
                         "{} ■ {:<name_w$}",
                         if held { "✓" } else { " " },
@@ -324,7 +324,7 @@ impl App {
                 ),
             })
             .collect();
-        if let Some(first) = out.first_mut() {
+        if let Some(first) = out.get_mut(1) {
             first.rule = true;
             first.head = self.say("Disks").into_owned();
         }
@@ -334,4 +334,4 @@ impl App {
 
 #[cfg(test)]
 #[path = "place_tests.rs"]
-mod tests;
+pub(super) mod tests;

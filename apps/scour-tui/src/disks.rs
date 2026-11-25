@@ -9,7 +9,7 @@ use crate::app::{App, Panel, Want};
 /// The answers, in the order they are drawn, as the service takes them.
 const ANSWERS: [(&str, &str); 3] = [
     ("index", "Index it"),
-    ("later", "Not now"),
+    ("later", "Not this time"),
     ("leave", "Never"),
 ];
 
