@@ -42,6 +42,6 @@
   function sizePress(i, exclude) {
     const t = panelTerm();
     const same = sizePresetOf(q.value, t) === i && t.not === exclude;
-    panelReplace(same ? "" : sizePresetTerm({ not: exclude }, i), "size");
+    panelSettle(same ? "" : sizePresetTerm({ not: exclude }, i), "size");
   }
 

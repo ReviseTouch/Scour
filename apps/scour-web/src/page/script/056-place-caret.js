@@ -26,7 +26,7 @@
   function placeLensOf(text, t) {
     const raw = text.slice(t.start, t.end);
     if (/^:[^:]*$/.test(raw)) return "launch";
-    const byField = { under: "place", parent: "place", dm: "time", size: "size", kind: "kind", ext: "ext",
+    const byField = { under: "place", parent: "place", dm: "time", size: "size", empty: "size", kind: "kind", ext: "ext",
       content: "content", fuzzy: "word", letters: "word" };
     if (t.field) return byField[t.field] || null;
     if (raw.includes(":")) return null;

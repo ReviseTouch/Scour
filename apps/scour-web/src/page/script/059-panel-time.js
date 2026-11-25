@@ -36,8 +36,7 @@
 
   /* The run of bars the term is on the shown scale, or null. */
   function timeShown(t) {
-    const pick = t.value ? timePick(t.value) : null;
-    return pick && pick.selected && pick.selected.scale === PANEL.scale ? pick.selected : null;
+    return t.value ? timeBarsOn(t.value, PANEL.scale) : null;
   }
 
   /* A run from bar `a` to bar `b` in the switch's mode: Before reaches the
@@ -121,7 +120,7 @@
 
   function timeWrite(sel) {
     const t = panelTerm();
-    panelReplace(sel ? timeTerm(t, sel) : "", "dm");
+    panelSettle(sel ? timeTerm(t, sel) : "", "dm");
   }
 
   function timePress(zone, i, exclude) {
@@ -130,10 +129,11 @@
       const pick = t.value ? timePick(t.value) : null;
       const same = pick && pick.preset === i && t.not === exclude;
       const next = same ? "" : timePresetTerm({ not: exclude }, i);
-      const s = !same && timePick(TIME_PRESETS[i].value).selected;
-      if (s && s.scale !== PANEL.scale) PANEL.scale = s.scale;
+      // Shown on this scale when it lines up, else on its own.
+      const v = TIME_PRESETS[i].value;
+      if (!same && !timeBarsOn(v, PANEL.scale)) PANEL.scale = timePick(v).selected.scale;
       PANEL.anchor = null;
-      panelReplace(next, "dm");
+      panelSettle(next, "dm");
       return;
     }
     if (zone !== "switch") return;
@@ -145,16 +145,9 @@
     }
     const was = timeShown(t);
     PANEL.mode = TIME_MODES[i - TIME_SCALES.length];
-    if (!was) { lensDraw(); return; }
-    // Before is what is older than the run, After the run and what is newer;
-    // between the two they turn about the same edge.
-    const n = TIME_SCALE[PANEL.scale].bars;
-    const m = PANEL.mode;
-    let first = was.first, last = was.last;
-    if (m === "before") [first, last] = [0, was.mode === "before" ? was.last : was.first - 1];
-    if (m === "after") [first, last] = [was.mode === "before" ? was.last + 1 : was.first, n - 1];
-    if (last < 0 || first > n - 1) { lensDraw(); return; }
-    timeWrite({ scale: PANEL.scale, mode: m, first, last });
+    const next = was && timeRemode(t, was, PANEL.mode);
+    if (next) panelSettle(next[1], "dm");
+    else lensDraw();
   }
 
   /* ← and → move the newer end of the run, with Shift the older; Before has

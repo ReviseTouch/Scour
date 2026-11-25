@@ -83,9 +83,14 @@
     const alone = (t) => placeRuns(s).some((r) => r.length === 1 && sameTerm(r[0], t));
     const into = fieldTerms(s, field).find((t) => t.not === exclude && (!exclude || alone(t)));
     if (into) return placeReplace(s, into, valueWritten(s, into, [...listValues(into), value]));
-    // One space before the new term, never none: `!kind:` must not join the word before it.
-    const head = s.trimEnd();
-    const out = head + (head ? " " : "") + (exclude ? "!" : "") + field + ":" + value;
+    return appended(s, (exclude ? "!" : "") + field + ":" + value);
+  }
+
+  /* `lens::appended`: `term` at the end, one space before it whatever the
+     text ends with, and the caret after it. */
+  function appended(text, term) {
+    const base = text.trimEnd();
+    const out = base ? base + " " + term : term;
     return [out, out.length];
   }
 
@@ -124,6 +129,12 @@
 
   /* The size presets, smallest first: Empty, then `LENS_SIZES`. */
   const SIZE_PRESETS = [{ label: "Empty", term: "empty:" }, ...LENS_SIZES.map(([v, l]) => ({ label: l, term: "size:" + v }))];
+  /* `lens::size_said`: what a size capsule says — its preset's msgid, "Empty"
+     for `empty:` — or null. */
+  function sizeSaid(text, t) {
+    const i = sizePresetOf(text, t);
+    return i === null ? null : SIZE_PRESETS[i].label;
+  }
   /* Empty left out: every folder and every file with bytes in it. */
   const NOT_EMPTY = "!empty:";
   const sizePresetTerm = (t, i) => neg(t) + SIZE_PRESETS[i].term;
@@ -140,4 +151,38 @@
     const rest = withoutField(text, "size");
     return SIZE_PRESETS.map((p) => withTerm(rest, p.term));
   };
+
+  /* ---- `lens::settle`: where the caret rests after a panel writes, so the
+     same lens stays open ---- */
+
+  /* `lens::choice_settle`: `by` in place of `t`, the caret at its end; a term
+     taken out leaves an empty `field:` where it stood. */
+  function choiceSettle(text, t, by, field) {
+    const [out, at] = placeReplace(text, t, by);
+    return by ? [out, at] : restEmpty(out, at, field);
+  }
+
+  /* `lens::value_settle`: `valueToggle`, resting on the term of the side just
+     changed nearest the change, else the other side's, else an empty one. */
+  function valueSettle(text, field, value, exclude) {
+    const [out, at] = valueToggle(text, field, value, exclude);
+    const all = fieldTerms(out, field);
+    const gap = (t) => (t.start <= at && at <= t.end ? 0 : Math.min(Math.abs(t.start - at), Math.abs(t.end - at)));
+    const near = (not) => all.filter((t) => t.not === not).reduce((x, y) => (!x || gap(y) < gap(x) ? y : x), null);
+    const t = near(exclude) || near(!exclude);
+    return t ? [out, t.end] : restEmpty(out, at, field);
+  }
+
+  /* An empty `field:` written at `at` — after the run it falls inside, so no
+     `|` is broken — a space either side where text touches it. */
+  function restEmpty(text, at, field) {
+    let p = Math.min(at, text.length);
+    for (const r of placeRuns(text)) {
+      const s = r[0].start, e = r[r.length - 1].end;
+      if (s < p && p < e) p = e;
+    }
+    const lead = p > 0 && !/\s/.test(text[p - 1]) ? " " : "";
+    const tail = p < text.length && !/\s/.test(text[p]) ? " " : "";
+    return [text.slice(0, p) + lead + field + ":" + tail + text.slice(p), p + lead.length + field.length + 1];
+  }
 

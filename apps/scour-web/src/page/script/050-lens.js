@@ -15,7 +15,7 @@
   const LENS_FIELDS = {
     under: "under", in: "under", altinda: "under",
     parent: "parent", child: "parent", children: "parent",
-    dm: "dm", modified: "dm", size: "size",
+    dm: "dm", modified: "dm", size: "size", empty: "empty", bos: "empty",
     kind: "kind", type: "kind", tur: "kind", "t\u00fcr": "kind",
     ext: "ext", content: "content", text: "content", icerik: "content", "i\u00e7erik": "content",
     fuzzy: "fuzzy", typo: "fuzzy", benzer: "fuzzy", letters: "letters", harfler: "letters",
@@ -59,12 +59,10 @@
 
   function lensKindOf(t) {
     if (/^:[^:]*$/.test(t.raw)) return "launch";
-    // `empty:` is a size: the size panel's first preset.
-    if (/^!?(empty|bos):$/i.test(t.raw)) return "size";
     switch (t.field) {
       case "under": case "parent": return "place";
       case "dm": return "time";
-      case "size": return "size";
+      case "size": case "empty": return "size";
       case "kind": return "kind";
       case "ext": return "ext";
       case "content": return "content";
@@ -448,9 +446,9 @@
     return false;
   }
 
-  /* A part of a Location capsule taken out by Backspace or Delete. */
+  /* A part of a Location capsule, or a value of a list one, taken out by Backspace or Delete. */
   function placeKeyed(back) {
-    const done = placeCapKey(back);
+    const done = placeCapKey(back) || listCapKey(back);
     if (!done) return false;
     q.value = done[0];
     q.setSelectionRange(done[1], done[1]);
@@ -664,7 +662,8 @@
     const arrow = e.key === "ArrowRight" || e.key === "ArrowLeft";
     const into = LENS && !lensBox.hidden && e.key === "ArrowRight" && q.selectionStart === LENS.b &&
       opensByItself(q.value, queryCaret());
-    if (arrow && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !into && placeArrow(e.key === "ArrowRight")) {
+    const plain = arrow && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !into && !(PANEL && PANEL.keys);
+    if (plain && (placeArrow(e.key === "ArrowRight") || listArrow(e.key === "ArrowRight"))) {
       e.preventDefault();
       e.stopImmediatePropagation();
       return;

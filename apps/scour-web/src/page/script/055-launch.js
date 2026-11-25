@@ -6,12 +6,12 @@
   /* A picture's name, and the field whose capsule draws it. */
   const LAUNCH_ART = { folder: "under", clock: "dm", shapes: "kind", ext: "ext", size: "size", approx: "fuzzy", read: "content" };
 
-  /* The launcher field a term is of, `parent:` read as the place it is. */
+  /* The launcher field a term is of: `parent:` is the place, `empty:` the size (`lens::filter_of`). */
   function launchFieldOf(raw) {
     const body = raw.startsWith("!") ? raw.slice(1) : raw;
     const sp = body.startsWith('"') ? null : fieldSplit(body);
     const f = sp ? LENS_FIELDS[fold(sp[0])] || null : null;
-    return f === "parent" ? "under" : f;
+    return f === "parent" ? "under" : f === "empty" ? "size" : f;
   }
 
   /* The first term of `text` of this field, as [start, end], or null. */

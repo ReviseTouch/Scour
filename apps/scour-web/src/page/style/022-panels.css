@@ -73,14 +73,3 @@
   .pp-type .lgroup { padding-top: 4px; }
   .pp-chips.exts { padding-top: 2px; }
 
-  /* A list capsule: each value an inner chip, a quiet dot between, "+N"
-     for those the line has no room for. */
-  .qshadow .term.cap .said-art.chips { display: flex; align-items: center; gap: 0; min-width: 0; padding: 0 5px; }
-  .qshadow .term.cap .said-art.chips .lv {
-    flex: none; height: 22px; padding: 0 7px; border-radius: 5px; background: var(--panel);
-    box-shadow: inset 0 0 0 1px var(--cap-ring); font: 600 12.5px/22px var(--sans); color: var(--ink);
-  }
-  .qshadow .term.cap .said-art.chips .lv.more { background: none; box-shadow: none; color: var(--ink-3); padding: 0 3px 0 5px; }
-  .qshadow .term.cap .said-art.chips .lsep { flex: none; font-style: normal; padding: 0 4px; font: 500 12px/1 var(--sans); color: var(--ink-3); }
-  .qshadow .term.cap.neg .said-art.chips { text-decoration: none; }
-  .qshadow .term.cap.neg .said-art.chips .lv { color: var(--q-not); text-decoration: line-through; box-shadow: inset 0 0 0 1px var(--cap-neg-ring); }

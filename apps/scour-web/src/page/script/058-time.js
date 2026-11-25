@@ -81,58 +81,84 @@
     return i < 0 ? null : [s.slice(0, i), s.slice(i + sep.length)];
   };
 
+  /* `lens::time_remode`: the run a switch to `mode` leaves on its scale, and
+     its term in place of `t`. Before and After turn about the run's older
+     edge: Before is what is older, After the run and all that is newer;
+     Between keeps the bars. Null when nothing is left on the axis. */
+  function timeRemode(t, s, mode) {
+    const n = TIME_SCALE[s.scale].bars;
+    let first = s.first, last = s.last;
+    if (s.mode !== mode && mode === "after") [first, last] = [s.mode === "before" ? s.last + 1 : s.first, n - 1];
+    if (s.mode !== mode && mode === "before") {
+      if (s.first < 1) return null;
+      [first, last] = [0, s.first - 1];
+    }
+    if (first > last || last >= n) return null;
+    const next = { scale: s.scale, mode, first, last };
+    return [next, timeTerm(t, next)];
+  }
+
   /* `lens::time_pick`: the preset and the bars a `dm:` value is, or null for
-     one the panel cannot show. */
+     one the panel cannot show. The bars are on the scale the value names,
+     else the finest that fits; see `timeBarsOn`. */
   function timePick(value) {
+    const found = timeFound(value, null);
+    return found && (found[0] !== null || found[1] !== null) ? { preset: found[0], selected: found[1] } : null;
+  }
+
+  /* `lens::time_bars_on`: the bars a value covers on `scale`, whole bars only. */
+  function timeBarsOn(value, scale) {
+    const found = timeFound(value, scale);
+    return found ? found[1] : null;
+  }
+
+  /* `[preset, selected]` of a value, its bars on `only` when given; null for no time. */
+  function timeFound(value, only) {
     const [cmp, rest] = timeCmp(value.trim().toLowerCase());
     const range = splitOnce(rest, "..");
     const rel = timeRel;
-    let out = null;
     if (cmp === "" && range) {
       const [lo, hi] = range;
       const a = rel(lo), b = rel(hi);
-      if (lo === "") out = b && [null, timeBefore(b)];
-      else if (hi === "") out = a && timeWindow(a, "between");
-      else out = a && b && [null, timeBand(a, b)];
-    } else if (cmp === "" && !range) {
-      const r = rel(rest);
-      out = r && timeWindow(r, "between");
-    } else if ((cmp === ">" || cmp === ">=") && !range) {
-      const r = rel(rest);
-      out = r && timeWindow(r, "after");
-    } else if ((cmp === "<" || cmp === "<=") && !range) {
-      const r = rel(rest);
-      out = r && [null, timeBefore(r)];
+      if (lo === "") return b && [null, timeBefore(b, only)];
+      if (hi === "") return a && timeWindow(a, "between", only);
+      return a && b && [null, timeBand(a, b, only)];
     }
-    return out && (out[0] !== null || out[1] !== null) ? { preset: out[0], selected: out[1] } : null;
+    if (range) return null;
+    const r = rel(rest);
+    if (cmp === "") return r && timeWindow(r, "between", only);
+    if (cmp === ">" || cmp === ">=") return r && timeWindow(r, "after", only);
+    if (cmp === "<" || cmp === "<=") return r && [null, timeBefore(r, only)];
+    return null;
   }
 
-  function timeWindow(r, mode) {
+  function timeWindow(r, mode, only) {
     const preset = mode === "between"
       ? TIME_PRESETS.findIndex((p) => timeRel(p.value)?.secs === r.secs) : -1;
-    const fit = timeFit([r], (n, b) => n[0] >= 1 && n[0] <= b);
+    const fit = timeFit([r], only, (n, b) => n[0] >= 1 && n[0] <= b);
     const selected = fit && { scale: fit[0], mode, first: TIME_SCALE[fit[0]].bars - fit[1][0], last: TIME_SCALE[fit[0]].bars - 1 };
     return [preset >= 0 ? preset : null, selected || null];
   }
 
-  function timeBand(older, newer) {
-    const fit = timeFit([older, newer], (n, b) => n[0] > n[1] && n[0] <= b);
+  function timeBand(older, newer, only) {
+    const fit = timeFit([older, newer], only, (n, b) => n[0] > n[1] && n[0] <= b);
     if (!fit) return null;
     const b = TIME_SCALE[fit[0]].bars;
     return { scale: fit[0], mode: "between", first: b - fit[1][0], last: b - 1 - fit[1][1] };
   }
 
-  function timeBefore(r) {
-    const fit = timeFit([r], (n, b) => n[0] >= 1 && n[0] < b);
+  function timeBefore(r, only) {
+    const fit = timeFit([r], only, (n, b) => n[0] >= 1 && n[0] < b);
     return fit && { scale: fit[0], mode: "before", first: 0, last: TIME_SCALE[fit[0]].bars - 1 - fit[1][0] };
   }
 
-  /* The scale the amounts are whole bars of and fit: the unit written first
-     when it is a week, month or year, then the finest that does. */
-  function timeFit(rels, fits) {
+  /* The scale the amounts are whole bars of and fit: `only`, when given;
+     else the unit written first when it is a week, month or year, then the
+     finest that does. */
+  function timeFit(rels, only, fits) {
     const unit = { week: "week", month: "month", year: "year" }[rels[0].unit];
     const written = unit && rels.every((r) => r.unit === rels[0].unit) ? [unit] : [];
-    for (const scale of [...written, ...TIME_SCALES]) {
+    for (const scale of only ? [only] : [...written, ...TIME_SCALES]) {
       const bar = TIME_SCALE[scale].days * DAY;
       if (rels.some((r) => r.secs % bar !== 0)) continue;
       const n = rels.map((r) => r.secs / bar);

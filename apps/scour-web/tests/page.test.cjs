@@ -770,29 +770,13 @@ test('drawGrep renders sortable headers and aligned metadata columns without mis
 });
 
 test('a filter says what it holds in words, and an empty one waits for its value', () => {
-  const q = { value: '', selectionStart: 0, selectionEnd: 0, setSelectionRange() {} };
-  const c = vm.createContext({
-    Set, Map, Math, TextEncoder,
-    document: { activeElement: null, getElementById: () => ({}) },
-    q, shadow: { innerHTML: '' },
-    LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
-    fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
-    placeCapsDrawn: () => [], placeCapKey: () => null, queryCaret: () => null, placeTerms: () => [],
-    T: (id, v) => (v ? id.replace(/\{(\w+)\}/g, (_, k) => v[k]) : id), KIND_KEY: { doc: 'Document', code: 'Code' },
-    Date, Intl, LANG: 'en', DAY: 86400, fmt: String,
-  });
-  vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
-  vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
-  vm.runInContext(section('  const LENS_FIELDS = {', '\n  /* Counting a query'), c);
-  vm.runInContext(section('  const quoteIf = ', '\n  /* A path as a person'), c);
-  for (const name of ['the terms', 'the place model', 'the time in words', 'the time model', 'the type and size model']) {
-    vm.runInContext(section('  /* ---------------- ' + name, '\n  /* ---------------- '), c);
-  }
+  const q = { value: '', selectionStart: 0, selectionEnd: 0, setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; } };
+  const c = paintContext(q);
 
   // Not being written: `7d` is said as "last 7 days", the letters stay in the text.
   c.paint('dm:7d kind:doc');
   assert.match(c.shadow.innerHTML, /class="term cap said"[^>]*>.*<span class="art said-art">last 7 days<\/span>/s);
-  assert.match(c.shadow.innerHTML, /<span class="art said-art">Document<\/span>/);
+  assert.match(c.shadow.innerHTML, /<span class="art pv" data-k="0" data-at="14">Document<\/span>/);
   assert.match(c.shadow.innerHTML, /<span class="val">7d<\/span>/);
 
   // Being written (the caret is in it): as typed, in its well.
@@ -814,12 +798,77 @@ test('a filter says what it holds in words, and an empty one waits for its value
   assert.match(said('dm:<2025-01-01')[0], /^before 2025$/);
   assert.deepEqual(said('!empty: bos:'), ['Empty', 'Empty']);
   assert.match(c.shadow.innerHTML, /class="term cap neg said"[^>]*><span class="cap-head"><span class="art head-art"><span class="bang">!<\/span><svg/);
-  // A list is a chip a value, a quiet dot between; the letters stay in the text.
-  c.paint('kind:doc;code ext:pdf ; odt');
-  assert.match(c.shadow.innerHTML, /<span class="lv">Document<\/span><i class="lsep">·<\/i><span class="lv">Code<\/span>/);
-  assert.match(c.shadow.innerHTML, /<span class="lv">\.pdf<\/span><i class="lsep">·<\/i><span class="lv">\.odt<\/span>/);
-  assert.match(c.shadow.innerHTML, /<span class="val">doc<span class="r-sep">;<\/span>code<\/span>|<span class="val">[^]*doc[^]*code[^]*<\/span>/);
-  assert.equal(c.listChipsHtml(['A', 'B', 'C'], 1), '<span class="lv">A</span><span class="lv more">+2</span>');
+});
+
+/* A context that paints the query layer with the real models behind it. */
+function paintContext(q) {
+  q.addEventListener = () => {};
+  const c = vm.createContext({
+    Set, Map, Math, TextEncoder, JSON,
+    document: { activeElement: null, getElementById: () => ({}) },
+    q, shadow: { innerHTML: '', querySelector: () => null, clientWidth: 0 }, getComputedStyle: () => ({}),
+    LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
+    fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
+    placeCapsDrawn: () => [], placeCapKey: () => null, placeFit() {},
+    queryCaret: () => ({ at: q.selectionStart, editing: !!q.editing }),
+    placeZero: (s) => (s ? '<span class="z">' + s + '</span>' : ''),
+    T: (id, v) => (v ? id.replace(/\{(\w+)\}/g, (_, k) => v[k]) : id), KIND_KEY: { doc: 'Document', code: 'Code' },
+    Date, Intl, LANG: 'en', DAY: 86400, fmt: String,
+  });
+  vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
+  vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  /* Counting a query'), c);
+  vm.runInContext(section('  const quoteIf = ', '\n  /* A path as a person'), c);
+  for (const name of ['the terms', 'the place model', 'the place rules', 'the caret over a place capsule',
+    'the time in words', 'the time model', 'the type and size model']) {
+    vm.runInContext(section('  /* ---------------- ' + name, '\n  /* ---------------- '), c);
+  }
+  vm.runInContext(section('  /* ---------------- the list capsule', '\n  /* Whether a row has a picture'), c);
+  vm.runInContext('lastQueryCaret = 0', c);
+  return c;
+}
+
+test('a kind or ext list at rest is a chip a value, raw while edited, and Backspace takes one value', () => {
+  const q = { value: '', selectionStart: 0, selectionEnd: 0, setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; } };
+  const c = paintContext(q);
+  const chips = () => [...c.shadow.innerHTML.matchAll(/<span class="art pv( more)?"[^>]*>([^<]*)<\/span>/g)].map((m) => m[2]);
+  // At rest: each value its chip — a kind by its name, an extension as written — a dot between.
+  c.paint('kind:doc;code ext:.pdf ; odt !kind:build');
+  assert.deepEqual(chips(), ['Document', 'Code', 'pdf', 'odt', 'build']);
+  assert.match(c.shadow.innerHTML, /class="term cap list" data-a="0" data-b="13" data-h="5">/);
+  assert.match(c.shadow.innerHTML, /data-at="8">Document<\/span><span class="z">;<\/span><span class="z">code<\/span><span class="art psep" data-at="9">·<\/span>/);
+  assert.match(c.shadow.innerHTML, /class="term cap list neg"[^>]*><span class="cap-head"><span class="art head-art"><span class="bang">!<\/span>/);
+  // Every letter of the query stays in the layer.
+  assert.equal(lettersOf(c.shadow.innerHTML), 'kind:doc;code ext:.pdf ; odt !kind:build');
+  // The caret resting at its end keeps it whole; editing there shows the letters.
+  c.document.activeElement = q;
+  q.selectionStart = q.selectionEnd = 13;
+  c.paint('kind:doc;code rapor');
+  assert.deepEqual(chips(), ['Document', 'Code']);
+  q.editing = true;
+  c.paint('kind:doc;code rapor');
+  assert.deepEqual(chips(), []);
+  assert.match(c.shadow.innerHTML, /class="term cap edit"/);
+  q.editing = false;
+  // Backspace at a chip's edge takes that value; Delete the one after the edge.
+  const key = (text, at, back) => {
+    q.value = text; q.selectionStart = q.selectionEnd = at;
+    c.listCapsDrawn(text, { at, editing: false });
+    return J(c.listCapKey(back));
+  };
+  assert.deepEqual(key('kind:doc;code rapor', 13, true), ['kind:doc rapor', 8]);
+  assert.deepEqual(key('kind:doc;code rapor', 8, true), ['kind:code rapor', 5]);
+  assert.deepEqual(key('kind:doc;code', 5, false), ['kind:code', 5]);
+  assert.deepEqual(key('kind:doc;code', 8, false), ['kind:doc', 8]);
+  assert.deepEqual(key('!ext:pdf ; odt', 14, true), ['!ext:pdf', 8]);
+  assert.deepEqual(key('rapor kind:doc', 14, true), ['rapor', 5]);
+  assert.equal(key('kind:doc;code', 7, true), null, 'inside a value the letters are the text\'s own');
+  // The arrows stop at the start of the values and at each chip's edge.
+  q.value = 'kind:doc;code;image x'; c.listCapsDrawn(q.value, null);
+  const steps = [];
+  q.selectionStart = q.selectionEnd = 5;
+  while (c.listArrow(true)) steps.push(q.selectionStart);
+  assert.deepEqual(steps, [8, 13, 19]);
 });
 
 test('capsule field headers render as cap-head and block caret or backspace inside ext:', () => {
@@ -830,17 +879,9 @@ test('capsule field headers render as cap-head and block caret or backspace insi
     selectionDirection: 'forward',
     setSelectionRange(a, b, d) { this.selectionStart = a; this.selectionEnd = b; if (d) this.selectionDirection = d; },
   };
-  const c = vm.createContext({
-    Set, Map, Math, TextEncoder,
-    document: { activeElement: q, getElementById: () => ({}) },
-    q, shadow: { innerHTML: '' },
-    LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
-    fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
-    placeCapsDrawn: () => [], placeCapKey: () => null, queryCaret: () => null, placeTerms: () => [],
-    T: (id) => id, KIND_KEY: {}, KIND_VALUES: [],
-  });
-  vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
-  vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
+  const c = paintContext(q);
+  c.document.activeElement = q;
+  q.editing = true; // being typed: drawn raw, not as a chip
   vm.runInContext(section('  let lastQueryCaret = 0,', '\n  /* Leave the term'), c);
 
   c.paint('ext:docx');
@@ -2023,4 +2064,121 @@ test('a list goes on across a spaced semicolon, and the drawn terms agree (lens/
     assert.deepEqual(drawn(q), want.map((w) => w.replace(/[\s;]+$/, (m) => (/^ext:\s*$/.test(w) ? m : ''))), q);
   }
   assert.deepEqual(drawn('rapor;fatura'), ['rapor', 'fatura']);
+});
+
+test('a panel write rests where the same lens stays open (lens/settle_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const t = (q, at) => `placeTermAt(${JSON.stringify(q)}, ${at})`;
+  const shown = ([text, at]) => text.slice(0, at) + '|' + text.slice(at);
+  // a_written_term_never_touches_its_neighbour
+  const tog = (q, v, ex) => run(`valueToggle(${JSON.stringify(q)}, "kind", ${JSON.stringify(v)}, ${ex})`)[0];
+  assert.equal(tog('kind:doc rapor ', 'build', true), 'kind:doc rapor !kind:build');
+  assert.equal(tog('kind:doc rapor ', 'doc', true), 'rapor !kind:doc');
+  assert.equal(tog('rapor', 'doc', false), 'rapor kind:doc');
+  assert.equal(tog('rapor ', 'doc', false), 'rapor kind:doc');
+  assert.equal(tog('', 'doc', false), 'kind:doc');
+  assert.equal(tog('   ', 'doc', true), '!kind:doc');
+  assert.equal(tog('kind:doc|ext:pdf rapor', 'doc', true), 'ext:pdf rapor !kind:doc');
+  assert.equal(tog('a|kind:doc|b', 'doc', false), 'a|b');
+  assert.equal(run('withTerm("rapor ", "size:>1gb")'), 'rapor size:>1gb');
+  assert.equal(run('withTerm(" ", " ")'), '');
+  // a_choice_rests_at_the_end_of_what_it_wrote
+  const choice = (q, at, by, f) => shown(run(`choiceSettle(${JSON.stringify(q)}, ${t(q, at)}, ${JSON.stringify(by)}, "${f}")`));
+  assert.equal(choice('dm:7d rapor', 5, 'dm:30d', 'dm'), 'dm:30d| rapor');
+  assert.equal(choice('dm:7d|rapor', 5, 'dm:1y', 'dm'), 'dm:1y||rapor');
+  const w = run(`sizePresetTerm(${t('rapor size:>1gb', 15)}, 0)`);
+  assert.equal(choice('rapor size:>1gb', 15, w, 'size'), 'rapor empty:|');
+  // a_choice_that_takes_its_term_out_leaves_an_empty_one_in_its_place
+  const gone = (q, at) => choice(q, at, '', 'dm');
+  assert.equal(gone('rapor dm:7d ', 11), 'rapor dm:|');
+  assert.equal(gone('rapor dm:7d', 11), 'rapor dm:|');
+  assert.equal(gone('dm:7d rapor', 5), 'dm:| rapor');
+  assert.equal(gone('dm:7d|rapor', 5), 'dm:| rapor');
+  assert.equal(gone('a|dm:7d|b', 7), 'a|b dm:|');
+  assert.equal(gone('dm:7d', 5), 'dm:|');
+  // a_toggle_rests_on_the_term_of_the_side_it_changed
+  const s = (q, f, v, ex) => shown(run(`valueSettle(${JSON.stringify(q)}, "${f}", "${v}", ${ex})`));
+  assert.equal(s('rapor', 'kind', 'doc', false), 'rapor kind:doc|');
+  assert.equal(s('kind:doc rapor', 'kind', 'build', true), 'kind:doc rapor !kind:build|');
+  assert.equal(s('kind:doc;code', 'kind', 'code', true), 'kind:doc !kind:code|');
+  assert.equal(s('kind:doc rapor kind:code', 'kind', 'image', false), 'kind:doc;image| rapor kind:code');
+  assert.equal(s('kind:doc !kind:build', 'kind', 'doc', false), '!kind:build|');
+  assert.equal(s('kind:doc !kind:build', 'kind', 'build', true), 'kind:doc|');
+  assert.equal(s('rapor kind:doc dm:7d', 'kind', 'doc', false), 'rapor kind:| dm:7d');
+  assert.equal(s('kind:doc', 'kind', 'doc', false), 'kind:|');
+  assert.equal(s('!ext:log', 'ext', 'log', true), 'ext:|');
+  // an_extension_from_the_kind_tiles_moves_the_lens_to_its_row
+  assert.equal(s('kind:doc', 'ext', 'pdf', false), 'kind:doc ext:pdf|');
+  const [q1, c1] = run('valueSettle("kind:doc", "ext", "pdf", false)');
+  assert.equal(run(`${t(q1, c1)}.field`), 'ext');
+  const [q2, c2] = run('valueSettle("kind:doc", "kind", "build", true)');
+  assert.equal(run(`${t(q2, c2)}.field`), 'kind');
+});
+
+test('empty: opens the size lens and says Empty (lens/size_tests.rs)', () => {
+  const M = lensModel();
+  M.HOME = '/home/u';
+  vm.runInContext(section('  /* ---------------- the caret over a place capsule', '\n  /* ---------------- '), M);
+  vm.runInContext(section('  const LAUNCH_HEADINGS = ', '\n  function launchHtml('), M);
+  const run = (src) => lensRun(M, src);
+  const t = (q) => `placeTermAt(${JSON.stringify(q)}, ${q.length})`;
+  for (const q of ['empty:', 'bos:', 'BOS:', 'Empty:', '!empty:', 'rapor !bos:']) {
+    assert.equal(run(`placeLensOf(${JSON.stringify(q)}, ${t(q)})`), 'size', q);
+    assert.equal(run(`opensByItself(${JSON.stringify(q)}, { at: ${q.length}, editing: false })`), true, q);
+    assert.equal(run(`sizeSaid(${JSON.stringify(q)}, ${t(q)})`), 'Empty', q);
+  }
+  assert.equal(run(`placeLensOf("boş:", ${t('boş:')})`), null);
+  assert.equal(run(`sizeSaid("size:>1gb", ${t('size:>1gb')})`), 'over 1 GB');
+  assert.equal(run(`sizeSaid("size:>0", ${t('size:>0')})`), null);
+  assert.deepEqual(run('launchRows("rapor empty: :", ":").filter((r) => r.held).map((r) => r.field)'), ['size']);
+  // The page's own reading of a term opens the same panel.
+  vm.runInContext(section('  function lensKindOf(t) {', '\n  /* `lens::quoted`'), M);
+  assert.equal(run('lensKindOf({ raw: "!bos:", named: true, field: LENS_FIELDS.bos, value: "" })'), 'size');
+});
+
+test('a value shows on every scale it lines up with, and a mode turns about the run (lens/time_pick_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const sel = (scale, mode, first, last) => ({ scale, mode, first, last });
+  const on = (v, s) => run(`timeBarsOn(${JSON.stringify(v)}, "${s}")`);
+  // a_value_shows_on_every_scale_it_lines_up_with
+  assert.deepEqual(on('7d', 'week'), sel('week', 'between', 25, 25));
+  assert.deepEqual(on('7d', 'day'), sel('day', 'between', 23, 29));
+  assert.equal(on('7d', 'month'), null);
+  assert.deepEqual(on('14d', 'week'), sel('week', 'between', 24, 25));
+  assert.equal(on('3d', 'week'), null);
+  assert.deepEqual(on('1y', 'year'), sel('year', 'between', 9, 9));
+  assert.equal(on('1y', 'day'), null, "past the day scale's 30 bars");
+  assert.deepEqual(on('<2w', 'day'), sel('day', 'before', 0, 15));
+  assert.deepEqual(on('4w..1w', 'day'), sel('day', 'between', 2, 22));
+  assert.deepEqual(on('>1m', 'day'), sel('day', 'after', 0, 29));
+  assert.equal(on('2026-11-03', 'day'), null);
+  for (const v of ['7d', '4w..1w', '<3m', '>2y', '60d', 'today']) {
+    const s = run(`timePick(${JSON.stringify(v)}).selected`);
+    assert.deepEqual(on(v, s.scale), s, v);
+  }
+  // switching_the_mode_turns_about_the_run_s_older_edge
+  const remode = (q, s, m) => run(`timeRemode(placeTermAt(${JSON.stringify(q)}, ${q.length}), ${JSON.stringify(s)}, "${m}")`);
+  const r = sel('day', 'between', 20, 25);
+  const [before, bt] = remode('dm:', r, 'before');
+  assert.deepEqual([before, bt], [sel('day', 'before', 0, 19), 'dm:<10d']);
+  const [after, at] = remode('dm:', r, 'after');
+  assert.deepEqual([after, at], [sel('day', 'after', 20, 29), 'dm:>10d']);
+  assert.deepEqual(remode('dm:', before, 'after')[0], after);
+  assert.deepEqual(remode('dm:', after, 'before')[0], before);
+  assert.deepEqual(remode('dm:', before, 'between'), [sel('day', 'between', 0, 19), 'dm:30d..10d']);
+  assert.deepEqual(remode('dm:', r, 'between')[0], r);
+  for (const [s] of [remode('dm:', r, 'before'), remode('dm:', r, 'after')]) {
+    const term = run(`timeTerm(placeTermAt("dm:", 3), ${JSON.stringify(s)})`);
+    assert.deepEqual(run(`timePick(placeTermAt(${JSON.stringify(term)}, ${term.length}).value).selected`), s, term);
+  }
+  // switching_the_mode_of_a_run_at_either_end_of_the_axis
+  const now = sel('day', 'between', 23, 29);
+  assert.equal(remode('!dm:', now, 'after')[1], '!dm:>7d');
+  assert.equal(remode('!dm:', now, 'before')[1], '!dm:<7d');
+  assert.equal(remode('!dm:', sel('day', 'between', 0, 5), 'before'), null, 'nothing older on the axis');
+  const all = sel('day', 'before', 0, 29);
+  assert.equal(run(`timeTerm(placeTermAt("!dm:", 4), ${JSON.stringify(all)})`), '', 'a Before covering every bar is no filter');
+  assert.equal(remode('!dm:', all, 'after'), null, 'nothing newer than now');
 });

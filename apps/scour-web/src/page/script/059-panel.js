@@ -37,12 +37,11 @@
     }
   }
 
-  /* The lens's term replaced by `term`; nothing written leaves `field:`
-     waiting, so the panel stays where it hangs. */
-  function panelReplace(term, field) {
-    const t = panelTerm();
-    const by = term || field + ":";
-    panelWrite(q.value.slice(0, t.start) + by + q.value.slice(t.end), t.start + by.length);
+  /* `term` in place of the lens's (`lens::choice_settle`): written as
+     nothing, an empty `field:` stands where it was, so the panel stays. */
+  function panelSettle(term, field) {
+    const [text, caret] = choiceSettle(q.value, panelTerm(), term, field);
+    panelWrite(text, caret);
   }
 
   /* One answer, asked once an opening: `ask` is called only on a miss. Kept

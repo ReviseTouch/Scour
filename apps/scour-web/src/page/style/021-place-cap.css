@@ -2,7 +2,7 @@
      chip. The run's letters stay in the layer at no width (`.z`), so every
      offset of it is still a text offset. */
   .qshadow .term.cap .z { font-size: 0; }
-  .qshadow .term.cap.place .pbody {
+  .qshadow .term.cap:is(.place, .list) .pbody {
     display: flex;
     align-items: center;
     flex: 0 1 auto;
@@ -11,7 +11,7 @@
     overflow: hidden;
     border-radius: 0 8px 8px 0;
   }
-  .qshadow .term.cap.place .pv {
+  .qshadow .term.cap:is(.place, .list) .pv {
     display: inline-flex;
     align-items: center;
     /* A part never shrinks: one that does not fit goes behind "+N". */
@@ -29,12 +29,12 @@
     white-space: nowrap;
     overflow: hidden;
   }
-  .qshadow .term.cap.place .pv .pdot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
-  .qshadow .term.cap.place .pv .cr { font-weight: 500; color: var(--ink-2); }
-  .qshadow .term.cap.place .pv .cs { font-style: normal; font-weight: 500; color: var(--ink-3); margin: 0 -1px; }
-  .qshadow .term.cap.place .pv b { font-weight: 700; }
-  .qshadow .term.cap.place .pv.more { flex: none; background: none; box-shadow: none; color: var(--ink-3); padding: 0 3px 0 5px; }
-  .qshadow .term.cap.place .psep { flex: none; padding: 0 4px; font: 500 12px/1 var(--sans); color: var(--ink-3); }
+  .qshadow .term.cap:is(.place, .list) .pv .pdot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+  .qshadow .term.cap:is(.place, .list) .pv .cr { font-weight: 500; color: var(--ink-2); }
+  .qshadow .term.cap:is(.place, .list) .pv .cs { font-style: normal; font-weight: 500; color: var(--ink-3); margin: 0 -1px; }
+  .qshadow .term.cap:is(.place, .list) .pv b { font-weight: 700; }
+  .qshadow .term.cap:is(.place, .list) .pv.more { flex: none; background: none; box-shadow: none; color: var(--ink-3); padding: 0 3px 0 5px; }
+  .qshadow .term.cap:is(.place, .list) .psep { flex: none; padding: 0 4px; font: 500 12px/1 var(--sans); color: var(--ink-3); }
   /* The part being written: its letters as typed, in the capsule's well. */
   .qshadow .term.cap.place .pw {
     flex: 0 1 auto;
@@ -53,4 +53,4 @@
     content: attr(data-hint); color: var(--ink-3); font: 400 13.5px/24px var(--sans); letter-spacing: 0;
   }
   /* The red capsule: where the query does not look, each part struck through. */
-  .qshadow .term.cap.place.neg .pv:not(.more) { text-decoration: line-through; text-decoration-color: var(--q-not); }
+  .qshadow .term.cap:is(.place, .list).neg .pv:not(.more) { text-decoration: line-through; text-decoration-color: var(--q-not); }

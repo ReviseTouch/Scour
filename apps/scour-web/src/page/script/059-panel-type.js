@@ -70,17 +70,14 @@
       "</span><span>" + escape_(T("Alt+click: leave it out")) + "</span></div></div>";
   }
 
-  /* A tile or a chip pressed: its value toggled, and the lens kept on a term
-     of its own field near where it hung, so the panel does not move. */
+  /* A tile or a chip pressed: its value toggled, and the lens kept on the
+     term of the side just changed (`lens::value_settle`). */
   function typePress(zone, i, exclude) {
     const field = zone === "kinds" ? "kind" : "ext";
     const value = zone === "kinds" ? (KIND_LABELS[i] || [])[0] : (PANEL.exts || [])[i];
     if (!value) return;
-    const own = LENS.kind === "ext" ? "ext" : "kind";
-    const near = LENS.a;
-    const [text] = valueToggle(typeUntyped(field, value), field, value, exclude);
-    const [out, caret] = typeAnchor(text, own, near);
-    panelWrite(out, caret);
+    const [text, caret] = valueSettle(typeUntyped(field, value), field, value, exclude);
+    panelWrite(text, caret);
   }
 
   /* The query less the letters being typed at the end of the lens's term
@@ -94,18 +91,5 @@
     if (!last || known || !value.startsWith(valueKey(field, last))) return v;
     const by = vals.length > 1 ? valueWritten(v, t, vals.slice(0, -1)) : neg(t) + v.slice(t.start, t.end).replace(/^!?([^:]*:).*$/s, "$1");
     return v.slice(0, t.start) + by + v.slice(t.end);
-  }
-
-  /* Where the lens rests after a press: the term of `field` nearest `near`;
-     with none left, an empty one where it stood. */
-  function typeAnchor(text, field, near) {
-    const own = fieldTerms(text, field);
-    if (own.length) {
-      const best = own.reduce((x, y) => (Math.abs(y.start - near) < Math.abs(x.start - near) ? y : x));
-      return [text, best.end];
-    }
-    const p = Math.min(near, text.length);
-    const lead = p > 0 && !/\s/.test(text[p - 1]) ? " " : "", tail = p < text.length && !/\s/.test(text[p]) ? " " : "";
-    return [text.slice(0, p) + lead + field + ":" + tail + text.slice(p), p + lead.length + field.length + 1];
   }
 
