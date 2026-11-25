@@ -39,41 +39,13 @@ pub fn words(w: &MainWindow, cat: &Catalogue) {
     });
 }
 
-/// The query's place group holds the whole tile.
-pub fn selected(t: &Tile, scope: &Scope) -> bool {
-    t.choosable() && !t.roots.is_empty() && t.roots.iter().all(|r| scope.holds(r))
-}
-
-/// Drawn full: the query searches somewhere on the disk, or nowhere in
-/// particular. A folder above a disk's root searches it too.
-pub fn lit(t: &Tile, scope: &Scope) -> bool {
-    scope.within.is_empty()
-        || t.roots.iter().any(|r| {
-            scope
-                .within
-                .iter()
-                .any(|h| on(&h.path, r) || on(r, &h.path))
-        })
-}
-
-/// `path` is `root` or lies below it.
-fn on(path: &str, root: &str) -> bool {
-    path == root || root == "/" || path.starts_with(&format!("{root}/"))
-}
-
 /// Draw the open place lens from its answers and the query text.
 pub fn show(w: &MainWindow, o: &Open, cat: &Catalogue, text: &str) {
     let hm = home();
     let scope = lens::scope(text, &hm);
-    let lit = |t: &Tile| lit(t, &scope);
+    let lit = |t: &Tile| lens::tile_lit(t, &scope);
     show_tiles(w, cat, &o.tiles, &scope, &lit, &hm);
-    show_held(
-        w,
-        cat,
-        &scope,
-        &hm,
-        o.tiles.iter().filter(|t| t.choosable()).count(),
-    );
+    show_held(w, cat, &lens::spots(text, &hm, &o.tiles), &o.tiles);
     show_folders(w, o, &hm);
 }
 
@@ -110,7 +82,7 @@ fn show_tiles(
                 state: cat.get(t.shown.label()).as_ref().into(),
                 files: t.files.map(|n| files(cat, n)).unwrap_or_default().into(),
                 choosable: t.choosable(),
-                selected: selected(t, scope),
+                selected: lens::tile_held(t, scope),
                 lit: lit(t),
                 index_it: t.index_it,
             }
@@ -151,16 +123,18 @@ fn show_tiles(
     w.set_lens_total(sum(on).map(|n| files(cat, n)).unwrap_or_default().into());
 }
 
-fn show_held(w: &MainWindow, cat: &Catalogue, scope: &Scope, hm: &str, disks: usize) {
-    let entry = |not: bool| {
-        move |h: &lens::Held| PlaceHeld {
-            label: home_form(hm, &h.path).into(),
-            not,
-        }
-    };
-    let mut held: Vec<PlaceHeld> = scope.within.iter().map(entry(false)).collect();
-    held.extend(scope.outside.iter().map(entry(true)));
+/// "Searching in:": the query's places as `spots` says them, a disk held
+/// whole as one entry.
+fn show_held(w: &MainWindow, cat: &Catalogue, spots: &[lens::Spot], tiles: &[Tile]) {
+    let held: Vec<PlaceHeld> = spots
+        .iter()
+        .map(|s| PlaceHeld {
+            label: s.name.as_str().into(),
+            not: s.not,
+        })
+        .collect();
     w.set_lens_holds(model(held));
+    let disks = tiles.iter().filter(|t| t.choosable()).count();
     w.set_lens_none(
         format!(
             "{} · {}",
@@ -199,7 +173,14 @@ fn show_folders(w: &MainWindow, o: &Open, hm: &str) {
         Some(0) | None => "/".into(),
         Some(i) => v.active[..i].into(),
     });
-    w.set_lens_crumbs(model(crumbs(&v.active, hm)));
+    let crumbs = lens::crumbs(&v.active, hm)
+        .into_iter()
+        .map(|c| PlaceCrumb {
+            label: c.label.into(),
+            path: c.path.into(),
+        })
+        .collect();
+    w.set_lens_crumbs(model(crumbs));
     let max_b = v.dirs.iter().map(|d| d.2).max().unwrap_or(0).max(1);
     let mark = crate::marks();
     let dirs: Vec<PlaceDir> = v
@@ -223,29 +204,4 @@ fn show_folders(w: &MainWindow, o: &Open, hm: &str) {
         })
         .collect();
     w.set_lens_dirs(model(dirs));
-}
-
-/// The steps from `~` or `/` down to the folder, each with its path.
-fn crumbs(active: &str, hm: &str) -> Vec<PlaceCrumb> {
-    let shown = home_form(hm, active);
-    let (mut cur, first, rest) = match shown.strip_prefix('~') {
-        Some(rest) if !hm.is_empty() => (hm.to_string(), "~", rest.to_string()),
-        _ => (String::new(), "/", active.to_string()),
-    };
-    let mut out = vec![PlaceCrumb {
-        label: first.into(),
-        path: if cur.is_empty() {
-            "/".into()
-        } else {
-            cur.as_str().into()
-        },
-    }];
-    for seg in rest.split('/').filter(|s| !s.is_empty()) {
-        cur = format!("{cur}/{seg}");
-        out.push(PlaceCrumb {
-            label: seg.into(),
-            path: cur.as_str().into(),
-        });
-    }
-    out
 }

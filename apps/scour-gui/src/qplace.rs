@@ -8,7 +8,7 @@ use scour_core::SourceInfo;
 use scour_proto::{Disk, Request, Response};
 use scour_ui::disks::{self, DiskIn, SourceIn, Tile};
 use scour_ui::lens;
-use scour_ui::path::{full_form, home_form};
+use scour_ui::path::home_form;
 
 use crate::qlens::{Env, Item, Open};
 
@@ -70,28 +70,16 @@ pub fn pinned<'a>(browse: &'a Option<(String, String)>, q: &str) -> Option<&'a s
 
 /// The folder the list shows and what is typed past its last `/`.
 pub fn browsed(value: &str, home: &str, pinned: Option<&str>) -> (String, String) {
-    if let Some(p) = pinned {
-        return (p.to_string(), String::new());
+    match pinned {
+        Some(p) => (p.to_string(), String::new()),
+        None => lens::place_at(value, home),
     }
-    let (base, part) = lens::place_parts(value);
-    let active = match (base.is_empty(), home.is_empty()) {
-        (true, true) => "/".to_string(),
-        (true, false) => home.to_string(),
-        _ => full_form(home, &base),
-    };
-    (active, part)
 }
 
-/// What a folder's weight is counted against: the query less the whole run
-/// the lens's term is in. Taking the term alone out of `rapor under:/a|under:/b`
-/// leaves `rapor |under:/b`, which reads "rapor or under b".
-fn scoped(q: &str, t: &lens::Term) -> String {
-    let rest: Vec<&str> = lens::runs(q)
-        .into_iter()
-        .filter(|r| !r.contains(t))
-        .map(|r| &q[r[0].start..r[r.len() - 1].end])
-        .collect();
-    let rest = rest.join(" ");
+/// What a folder's weight is counted against: the query less its place
+/// group. One that reads files is not weighed at all.
+fn scoped(q: &str) -> String {
+    let rest = lens::without_places(q);
     if lens::reads(&rest) {
         String::new()
     } else {
@@ -118,7 +106,7 @@ pub fn fill(
         _ => want.push((SOURCES, Request::Sources {})),
     }
     let (active, part) = browsed(&o.term.value, env.home, pinned);
-    let query = scoped(q, &o.term);
+    let query = scoped(q);
     match seen.get(&format!("usage {active} {query}")) {
         Some(Response::Usage(u)) => o.usage = Some(u.clone()),
         _ => want.push((
@@ -176,7 +164,7 @@ pub fn key(
     Some(match (reply, slot) {
         (Response::Volumes { .. }, _) => "volumes".into(),
         (Response::Sources { .. }, _) => "sources".into(),
-        (Response::Usage(_), _) => format!("usage {active} {}", scoped(q, &o.term)),
+        (Response::Usage(_), _) => format!("usage {active} {}", scoped(q)),
         (Response::Tree { .. }, _) => format!("tree {active}"),
         (Response::Count { .. }, n) if n >= DISK => {
             let t = o.tiles.get((n - DISK) as usize)?;

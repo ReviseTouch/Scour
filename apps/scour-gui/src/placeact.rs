@@ -8,84 +8,20 @@ use std::rc::Rc;
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_ui::lens::{self, Pick};
-use scour_ui::path::{full_form, home_form, untrailed};
+use scour_ui::path::home_form;
 use slint::ComponentHandle;
 
 use crate::link::{Ask, Got, Link};
 use crate::qwire::{self, Lensing, home, write};
 use crate::{MainWindow, State};
 
-/// Where the caret goes after a press wrote the place group: at the end of
-/// its first member, which starts where the group always did, so the lens
-/// hanging from it does not move. With no group left, an empty `under:`
-/// waits at the end, for the lens to stay open on.
-fn settle(text: String, home: &str) -> (String, usize) {
-    if let Some(h) = lens::scope(&text, home).within.first() {
-        let end = h.term.end;
-        return (text, end);
-    }
-    if let Some(t) = lens::terms(&text)
-        .into_iter()
-        .find(|t| t.field == Some("under") && !t.not && t.value.is_empty())
-    {
-        return (text, t.end);
-    }
-    let gap = if text.is_empty() || text.ends_with(char::is_whitespace) {
-        ""
-    } else {
-        " "
-    };
-    let out = format!("{text}{gap}under:");
-    let n = out.len();
-    (out, n)
-}
-
-/// `path` lies below `root`, not on it.
-fn inside(path: &str, root: &str) -> bool {
-    path != root && (root == "/" || path.starts_with(&format!("{root}/")))
-}
-
-/// "Add": the folder joins the place group. The term being typed or walked
-/// gives way to it; a member it lies inside is narrowed to it, since keeping
-/// both would search the wider one.
-pub fn add(text: &str, home: &str, path: &str, typing: Option<&lens::Term>) -> String {
-    let want = untrailed(&full_form(home, path)).to_string();
-    let mut text = match typing {
-        Some(t) => lens::remove_term(text, t).0,
-        None => text.to_string(),
-    };
-    let scope = lens::scope(&text, home);
-    if scope.holds(&want) {
-        return text;
-    }
-    if let Some(h) = scope.within.iter().find(|h| inside(&want, &h.path)) {
-        text = lens::remove_term(&text, &h.term).0;
-    }
-    lens::place_toggle(&text, home, &want, Pick::Also).0
-}
-
-/// "Exclude": `!under:` the folder, a term of its own at the end.
-pub fn exclude(text: &str, home: &str, path: &str) -> String {
-    let want = untrailed(&full_form(home, path)).to_string();
-    if lens::scope(text, home)
-        .outside
-        .iter()
-        .any(|h| h.path == want)
-    {
-        return text.to_string();
-    }
-    let shown = home_form(home, &want);
-    let value = if shown.contains(|c: char| c.is_whitespace() || c == '|') {
-        format!("\"{shown}\"")
-    } else {
-        shown
-    };
-    let gap = if text.is_empty() || text.ends_with(char::is_whitespace) {
-        ""
-    } else {
-        " "
-    };
-    format!("{text}{gap}!under:{value}")
+/// Where the place group starts in `text`, else the lens's own term: where
+/// [`lens::place_anchor`] writes an empty `under:` once the group is gone.
+fn group_at(text: &str, home: &str, lens_at: usize) -> usize {
+    lens::scope(text, home)
+        .within
+        .first()
+        .map_or(lens_at, |h| h.term.start.min(lens_at))
 }
 
 /// A press on a tile, or Enter on one: [`lens::tile_toggle`], and the list
@@ -109,8 +45,9 @@ pub fn tile_pick(
         .filter(|t| t.choosable())
         .map(|t| (t.roots.clone(), t.whole.then(|| t.root.clone())));
     let Some((roots, root)) = tile else { return };
+    let at = group_at(&text, &hm, lens_at(state));
     let (q, _) = lens::tile_toggle(&text, &hm, &roots, pick);
-    let (q, caret) = settle(q, &hm);
+    let (q, caret) = lens::place_anchor(&q, &hm, at);
     rewrite(w, state, q, caret, root, redraw);
 }
 
@@ -136,20 +73,27 @@ fn rewrite(
     redraw(Lensing::Asked);
 }
 
-/// An entry of the "Searching in" line taken out.
+/// Where the open lens's term starts, or the end of nothing.
+fn lens_at(state: &Rc<RefCell<State>>) -> usize {
+    let st = state.borrow();
+    st.qb.lenses.open.as_ref().map_or(usize::MAX, |o| o.a)
+}
+
+/// An entry of the "Searching in" line taken out: a disk held whole as one.
 fn drop_held(w: &MainWindow, state: &Rc<RefCell<State>>, i: usize, redraw: &impl Fn(Lensing)) {
     let text = w.get_query().to_string();
     let hm = home();
-    let scope = lens::scope(&text, &hm);
-    let n = scope.within.len();
-    let q = if let Some(h) = scope.within.get(i) {
-        lens::place_toggle(&text, &hm, &h.path, Pick::Also).0
-    } else if let Some(h) = scope.outside.get(i - n) {
-        lens::remove_term(&text, &h.term).0
-    } else {
-        return;
+    let spot = {
+        let st = state.borrow();
+        let tiles = st.qb.lenses.open.as_ref().map(|o| o.tiles.as_slice());
+        lens::spots(&text, &hm, tiles.unwrap_or_default())
+            .into_iter()
+            .nth(i)
     };
-    let (q, caret) = settle(q, &hm);
+    let Some(spot) = spot else { return };
+    let at = group_at(&text, &hm, lens_at(state));
+    let (q, _) = spot.remove(&text, &hm);
+    let (q, caret) = lens::place_anchor(&q, &hm, at);
     rewrite(w, state, q, caret, None, redraw);
 }
 
@@ -219,8 +163,8 @@ fn answer_disk(
     lenses.forget("sources");
 }
 
-/// The term the lens is on, and whether it is still being typed or walked:
-/// empty, ending in `/`, or with letters after its last `/`.
+/// The term the lens is on; `typing` is that term while no click pinned the
+/// list to a folder, for [`lens::place_add`] to let it give way.
 struct On {
     a: usize,
     b: usize,
@@ -229,23 +173,24 @@ struct On {
     typing: Option<lens::Term>,
 }
 
-fn on(state: &Rc<RefCell<State>>) -> Option<On> {
+fn on(state: &Rc<RefCell<State>>, text: &str) -> Option<On> {
     let st = state.borrow();
-    let o = st.qb.lenses.open.as_ref()?;
+    let lenses = &st.qb.lenses;
+    let o = lenses.open.as_ref()?;
     let t = &o.term;
-    let typing =
-        !t.not && (t.value.is_empty() || t.value.ends_with('/') || !o.place.part.is_empty());
+    let pinned = crate::qplace::pinned(&lenses.browse, text).is_some();
     Some(On {
         a: o.a,
         b: o.b,
         field: t.field.unwrap_or("under"),
         neg: if t.not { "!" } else { "" },
-        typing: typing.then(|| t.clone()),
+        typing: (!pinned).then(|| t.clone()),
     })
 }
 
-fn quote(s: String) -> String {
-    if s.chars().any(char::is_whitespace) {
+/// A path as a term's value: quoted when a space or a `|` would cut it.
+pub(crate) fn quote(s: String) -> String {
+    if s.chars().any(|c| c.is_whitespace() || c == '|') {
         format!("\"{s}\"")
     } else {
         s
@@ -325,8 +270,8 @@ fn act(
     what: &str,
     target: &str,
 ) {
-    let Some(on) = on(state) else { return };
     let text = w.get_query().to_string();
+    let Some(on) = on(state, &text) else { return };
     let hm = home();
     match what {
         "disk" | "later" | "never" => {
@@ -347,12 +292,16 @@ fn act(
             choose(w, state, &on, target);
             redraw(Lensing::Keep);
         }
-        "inc" => {
-            let q = add(&text, &hm, target, on.typing.as_ref());
-            let (q, caret) = settle(q, &hm);
+        "inc" | "exc" => {
+            let at = group_at(&text, &hm, on.a);
+            let (q, _) = if what == "inc" {
+                lens::place_add(&text, &hm, target, on.typing.as_ref())
+            } else {
+                lens::place_exclude(&text, &hm, target)
+            };
+            let (q, caret) = lens::place_anchor(&q, &hm, at);
             rewrite(w, state, q, caret, None, redraw);
         }
-        "exc" => rewrite(w, state, exclude(&text, &hm, target), on.b, None, redraw),
         _ => {}
     }
 }

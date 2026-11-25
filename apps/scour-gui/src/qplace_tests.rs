@@ -163,9 +163,9 @@ fn a_folder_a_click_pinned_is_shown_until_the_text_changes() {
 
 #[test]
 fn a_folder_is_weighed_against_the_query_less_the_whole_place_group() {
-    let q = "rapor under:/a|under:/b ext:pdf";
-    let t = lens::term_at(q, 14).unwrap();
-    assert_eq!(scoped(q, &t), "rapor ext:pdf");
+    assert_eq!(scoped("rapor under:/a|under:/b ext:pdf"), "rapor ext:pdf");
+    assert_eq!(scoped("rapor under:/a !under:/a/x"), "rapor !under:/a/x");
+    assert_eq!(scoped("content:x under:/a"), "");
 }
 
 #[test]

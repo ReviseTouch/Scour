@@ -4,14 +4,13 @@
 
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
-use scour_ui::disks::{Shown, Tile};
-use scour_ui::lens::{self, Scope};
-use scour_ui::path::{home_form, leaf};
+use scour_ui::disks::Tile;
+use scour_ui::lens;
 use slint::{ModelRc, VecModel};
 
 use crate::qwire::{QueryBar, home};
 use crate::ui::ScopeDot;
-use crate::{MainWindow, placewire, qplace};
+use crate::{MainWindow, qplace};
 
 /// What the chip shows: a dot per disk, kind and ringed and lit, and its words.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,50 +19,30 @@ pub struct Chip {
     pub label: String,
 }
 
-/// The chip for these disks and this query. `everywhere` is said when the
-/// query's place group holds nothing.
-pub fn chip(tiles: &[Tile], scope: &Scope, hm: &str, everywhere: &str) -> Chip {
-    let dots = tiles
-        .iter()
-        .filter(|t| t.choosable() || t.shown == Shown::Asking)
-        .map(|t| {
-            let asking = t.shown == Shown::Asking;
-            (t.kind, asking, asking || placewire::lit(t, scope))
-        })
+/// Names the chip's line holds before it says `+k`; one when two would not
+/// fit its fixed width, which elides at about ten letters.
+const NAMES: usize = 2;
+const ROOM: usize = 10;
+
+/// The chip for these disks and this query, as the model says it.
+pub fn chip(tiles: &[Tile], text: &str, hm: &str, everywhere: &str) -> Chip {
+    let dots = lens::chip_dots(tiles, &lens::scope(text, hm))
+        .into_iter()
+        .map(|d| (d.kind, d.asking, d.lit))
         .collect();
-    if scope.within.is_empty() {
-        return Chip {
-            dots,
-            label: everywhere.to_string(),
-        };
+    let spots = lens::spots(text, hm, tiles);
+    let mut label = lens::chip_label(&spots, NAMES, everywhere);
+    if label.chars().count() > ROOM {
+        label = lens::chip_label(&spots, 1, everywhere);
     }
-    let mut names = Vec::new();
-    let mut covered: Vec<&str> = Vec::new();
-    for t in tiles.iter().filter(|t| placewire::selected(t, scope)) {
-        names.push(t.name.clone());
-        covered.extend(t.roots.iter().map(String::as_str));
-    }
-    for h in &scope.within {
-        if !covered.contains(&h.path.as_str()) {
-            names.push(leaf(&home_form(hm, &h.path)).to_string());
-        }
-    }
-    Chip {
-        dots,
-        label: names.join(" + "),
-    }
+    Chip { dots, label }
 }
 
 /// Draw the chip, when it changed.
 pub fn draw(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue, text: &str) {
     let hm = home();
     let tiles = qplace::tiles(&qb.disks, &qb.sources);
-    let next = chip(
-        &tiles,
-        &lens::scope(text, &hm),
-        &hm,
-        cat.get("Everywhere").as_ref(),
-    );
+    let next = chip(&tiles, text, &hm, cat.get("Everywhere").as_ref());
     if next == qb.chip {
         return;
     }

@@ -42,7 +42,7 @@ fn tiles() -> Vec<scour_ui::disks::Tile> {
 #[test]
 fn the_chip_names_what_the_group_holds_and_rings_a_disk_waiting() {
     let t = tiles();
-    let chip = |q: &str| chip(&t, &lens::scope(q, HOME), HOME, "Everywhere");
+    let chip = |q: &str| chip(&t, q, HOME, "Everywhere");
     let all = chip("rapor");
     assert_eq!(all.label, "Everywhere");
     assert_eq!(
@@ -50,7 +50,7 @@ fn the_chip_names_what_the_group_holds_and_rings_a_disk_waiting() {
         [
             ("system", false, true),
             ("fixed", false, true),
-            ("removable", true, true)
+            ("removable", true, false)
         ]
     );
     let depo = chip("rapor under:/mnt/depo");
@@ -58,7 +58,11 @@ fn the_chip_names_what_the_group_holds_and_rings_a_disk_waiting() {
     assert_eq!(depo.dots[0], ("system", false, false));
     // A whole tile by its name, a folder by its last step.
     let both = chip("under:~|under:/usr|under:/mnt/depo/PROJELER");
-    assert_eq!(both.label, "CACHY + PROJELER");
+    assert_eq!(both.label, "CACHY +1");
+    assert_eq!(
+        chip("under:~|under:/usr|under:/mnt/depo/x").label,
+        "CACHY + x"
+    );
     assert!(both.dots[1].2);
     assert_eq!(chip("under:~/Belgeler").label, "Belgeler");
 }
