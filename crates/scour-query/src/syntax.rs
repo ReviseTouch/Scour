@@ -149,7 +149,9 @@ Without an operator, `size:1mb` means "at least 1 MB".
 * Relative: `24h`, `7d`, `2w`, `6m`, `1y`, or `today`, `yesterday`, `week`,
   `month`, `year`. These mean "within the last N", counted back from now.
 * Absolute: `YYYY-MM-DD` in UTC. Without an operator it means *on* that day;
-  with one (`dm:>2026-01-01`) it means what it says.
+  with one (`dm:>2026-01-01`) it means what it says, counting whole days:
+  `dm:<=2026-01-31` includes the 31st, `dm:>2026-01-31` starts on February 1,
+  and `dm:2026-01-01..2026-01-31` is all of January.
 
 ## Matching
 

@@ -2,7 +2,8 @@
 //!
 //! A relative window (`24h`, `7d`, `today`) means "within the last N hours or
 //! days" counted back from now, never to a calendar boundary — that would need
-//! the local zone. An ISO day (`2026-01-31`) is a calendar day in UTC.
+//! the local zone. An ISO day (`2026-01-31`) is a calendar day in UTC, and a
+//! bound includes it whole: `..B`, `<=B` and `>B` are measured from its end.
 
 use scour_core::{Cmp, Match, TimeField};
 
@@ -53,7 +54,16 @@ pub(crate) fn parse_time(field: TimeField, v: &str, now: i64) -> Option<Match> {
     } else {
         Cmp::Eq
     };
-    Some(Match::Time(field, cmp, day))
+    Some(Match::Time(field, cmp, day_bound(cmp, day)))
+}
+
+/// The instant a comparison with a whole day is measured from: `<=` and `>`
+/// hold day B through its last second, `<` and `>=` start at 00:00.
+fn day_bound(cmp: Cmp, day: i64) -> i64 {
+    match cmp {
+        Cmp::Le | Cmp::Gt => day + DAY - 1,
+        _ => day,
+    }
 }
 
 /// Seconds behind `24h`, `7d`, `today`, and their Turkish spellings.
@@ -135,7 +145,11 @@ mod tests {
         );
         assert_eq!(
             parse_time(TimeField::Accessed, ">2026-01-31", 0),
-            Some(Match::Time(TimeField::Accessed, Cmp::Gt, 1_769_817_600))
+            Some(Match::Time(
+                TimeField::Accessed,
+                Cmp::Gt,
+                1_769_817_600 + 86_399
+            ))
         );
     }
 

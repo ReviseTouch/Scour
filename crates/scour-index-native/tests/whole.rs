@@ -128,10 +128,16 @@ fn many_segments_answer_exactly_what_one_would() {
         "rapor|belge",
         "ext:rs !main",
         "dm:30d",
+        "dm:2026-07-20",
+        "dm:2026-07-18..2026-07-20",
+        "dm:<=2026-07-20",
+        "dm:>2026-07-20",
+        "dm:30d..7d",
         "İSTANBUL",
         "zzzznothing",
     ] {
         f.check(q, SortKey::Modified, true);
+        f.check(q, SortKey::Modified, false);
     }
     for key in [
         SortKey::Name,
@@ -147,6 +153,20 @@ fn many_segments_answer_exactly_what_one_would() {
     assert_eq!(
         f.index.stats().expect("stats").entries,
         f.entries.len() as u64
+    );
+}
+
+/// A closed date range holds its last day: `A..A` finds what the day `A` does.
+#[test]
+fn a_one_day_range_finds_that_day() {
+    let f = Fixture::new(16_000, 2_000);
+    let all = |q: &str| f.search(q, SortKey::Modified, true, 100_000);
+    let day = all("dm:2026-07-20");
+    assert!(!day.is_empty(), "the fixture is supposed to touch that day");
+    assert_eq!(all("dm:2026-07-20..2026-07-20"), day);
+    assert_eq!(
+        all("dm:2026-07-20..2026-07-20"),
+        f.expected("dm:2026-07-20", SortKey::Modified, true, 100_000)
     );
 }
 

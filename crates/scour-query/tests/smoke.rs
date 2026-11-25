@@ -174,7 +174,7 @@ fn every_documented_example_still_works() {
         ),
         (
             "da:>2026-01-01",
-            Match::Time(TimeField::Accessed, Cmp::Gt, 1_767_225_600),
+            Match::Time(TimeField::Accessed, Cmp::Gt, 1_767_225_600 + 86_399),
         ),
         ("content:invoice", Match::ContentContains("invoice".into())),
     ];
@@ -272,6 +272,100 @@ fn a_comparison_on_a_relative_window_is_not_dropped() {
     assert_eq!(of("dm:>7d"), (TimeField::Modified, Cmp::Gt, now - week));
     assert_eq!(of("dm:<7d"), (TimeField::Modified, Cmp::Lt, now - week));
     assert_eq!(of("da:<24h"), (TimeField::Accessed, Cmp::Lt, now - 86_400));
+}
+
+/// Does `q` hold at instant `t`? Equality on a time is its whole UTC day, as
+/// every index evaluates it.
+fn holds_at(q: &str, t: i64) -> bool {
+    parse_at(q, NOW).groups.iter().all(|g| {
+        g.alts.iter().any(|(neg, m)| {
+            let hit = match m {
+                Match::Time(_, Cmp::Eq, at) => t >= *at && t < at + 86_400,
+                Match::Time(_, cmp, at) => cmp.holds(t, *at),
+                other => panic!("{q}: {other:?}"),
+            };
+            hit != *neg
+        })
+    })
+}
+
+#[test]
+fn a_calendar_date_as_a_bound_holds_the_whole_day() {
+    // 2026-11-24T00:00:00Z, and the seconds either side of that day's edges.
+    let day = 1_795_478_400;
+    let probes = [
+        day - 86_400,
+        day - 1,
+        day,
+        day + 43_200,
+        day + 86_399,
+        day + 86_400,
+        day + 2 * 86_400,
+    ];
+    let days = |q: &str| probes.map(|t| holds_at(q, t));
+    for f in ["dm", "dc", "da"] {
+        let on = days(&format!("{f}:2026-11-24"));
+        assert_eq!(on, [false, false, true, true, true, false, false]);
+        assert_eq!(days(&format!("{f}:2026-11-24..2026-11-24")), on);
+        assert_eq!(
+            days(&format!("{f}:2026-11-23..2026-11-24")),
+            [true, true, true, true, true, false, false]
+        );
+        assert_eq!(
+            days(&format!("{f}:<=2026-11-24")),
+            [true, true, true, true, true, false, false]
+        );
+        assert_eq!(
+            days(&format!("{f}:..2026-11-24")),
+            days(&format!("{f}:<=2026-11-24"))
+        );
+        assert_eq!(
+            days(&format!("{f}:>2026-11-24")),
+            [false, false, false, false, false, true, true]
+        );
+        assert_eq!(
+            days(&format!("{f}:<2026-11-24")),
+            [true, true, false, false, false, false, false]
+        );
+        assert_eq!(
+            days(&format!("{f}:>=2026-11-24")),
+            [false, false, true, true, true, true, true]
+        );
+        assert_eq!(
+            days(&format!("{f}:2026-11-24..")),
+            days(&format!("{f}:>=2026-11-24"))
+        );
+    }
+    // Read back as typed, so the sentence can be pasted in again.
+    assert_eq!(
+        describe(&parse_at("dm:2026-11-24..2026-11-24", NOW)),
+        "modified >= 2026-11-24 and modified <= 2026-11-24"
+    );
+    assert_eq!(
+        describe(&parse_at("dm:>2026-11-24", NOW)),
+        "modified > 2026-11-24"
+    );
+}
+
+#[test]
+fn a_relative_bound_keeps_its_exact_instant() {
+    let week = 7 * 86_400;
+    let month = 30 * 86_400;
+    let of = |q: &str| -> Vec<(Cmp, i64)> {
+        alts(q)
+            .into_iter()
+            .map(|(_, m)| match m {
+                Match::Time(_, cmp, at) => (cmp, at),
+                other => panic!("{q}: {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(of("dm:<=7d"), vec![(Cmp::Le, NOW - week)]);
+    assert_eq!(of("dm:>7d"), vec![(Cmp::Gt, NOW - week)]);
+    assert_eq!(
+        of("dm:30d..7d"),
+        vec![(Cmp::Ge, NOW - month), (Cmp::Le, NOW - week)]
+    );
 }
 
 #[test]
