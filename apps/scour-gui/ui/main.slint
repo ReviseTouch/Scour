@@ -2266,9 +2266,26 @@ export component MainWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 0px;
+                        // In the window's own corner: the rail on the left put
+                        // out and back, as » in the other corner opens the list.
+                        VerticalLayout {
+                            alignment: center;
+                            padding-left: 8px;
+                            Tool {
+                                width: 26px;
+                                height: 24px;
+                                icon: @image-url("icons/tools/rail.svg");
+                                has-icon: true;
+                                on: root.rail-shown;
+                                clicked => {
+                                    root.rail-shown = !root.rail-shown;
+                                    root.panes-changed();
+                                }
+                            }
+                        }
                         HorizontalLayout {
                             horizontal-stretch: 1;
-                            padding-left: 16px;
+                            padding-left: 8px;
                             padding-right: 12px;
                             spacing: 8px;
                         if root.fix-said != "": Rectangle {
@@ -2388,19 +2405,6 @@ export component MainWindow inherits Window {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
-                        }
-                        // The preview beside the list, put out and back from
-                        // here as the rail is from its own edge.
-                        VerticalLayout {
-                            alignment: center;
-                            Tool {
-                                width: 26px;
-                                height: 24px;
-                                icon: @image-url("icons/tools/peek.svg");
-                                has-icon: true;
-                                on: root.peeking;
-                                clicked => { root.peek-toggled(); }
-                            }
                         }
                         // In the corner: every way to narrow as a list, the
                         // ones the line has no room for too.
