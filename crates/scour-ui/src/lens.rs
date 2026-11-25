@@ -12,12 +12,26 @@ mod group;
 mod launch;
 #[cfg(test)]
 mod machine;
+mod rest;
+mod size;
+mod split;
 mod spots;
+mod time;
+mod time_pick;
+mod time_said;
+mod values;
 pub use capsule::*;
 pub use folders::*;
 pub use group::*;
 pub use launch::*;
+pub use rest::*;
+pub use size::*;
+pub use split::*;
 pub use spots::*;
+pub use time::*;
+pub use time_pick::*;
+pub use time_said::*;
+pub use values::*;
 
 /// A term of the query, by byte offsets into it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,30 +104,6 @@ fn canonical(name: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, all)| all.contains(&folded.as_str()))
         .map(|(c, _)| *c)
-}
-
-/// Every term with its offsets: split on whitespace and `|` outside quotes.
-pub fn terms(text: &str) -> Vec<Term> {
-    let mut out = Vec::new();
-    let (mut start, mut quoted) = (None::<usize>, false);
-    let close = |s: usize, e: usize, out: &mut Vec<Term>| out.push(term(text, s, e));
-    for (i, c) in text.char_indices() {
-        let cut = !quoted && (c.is_whitespace() || c == '|');
-        if c == '"' {
-            quoted = !quoted;
-        }
-        if cut {
-            if let Some(s) = start.take() {
-                close(s, i, &mut out);
-            }
-        } else {
-            start.get_or_insert(i);
-        }
-    }
-    if let Some(s) = start {
-        close(s, text.len(), &mut out);
-    }
-    out
 }
 
 fn term(text: &str, start: usize, end: usize) -> Term {
