@@ -340,6 +340,7 @@ impl App {
                         line: h.line,
                         text: h.text.clone(),
                         at: h.at,
+                        marks: h.marks.clone(),
                     })
                     .collect(),
             })

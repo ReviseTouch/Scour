@@ -243,6 +243,7 @@ fn every_response_round_trips() {
                     offset: 40,
                     text: "unsafe {".into(),
                     at: (0, 6),
+                    marks: vec![(0, 6)],
                 }],
                 more: true,
             }],

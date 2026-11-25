@@ -383,6 +383,47 @@ pub fn badge_of(name: &str) -> String {
     }
 }
 
+/// A line out of a file in seven parts, every find marked — up to three —
+/// as [`Marked`] draws it: tabs and line ends as spaces, the indent gone, and
+/// only the last `before` characters ahead of the first find, so it is in
+/// sight however far into the line it is.
+pub(crate) fn line_parts(
+    text: &str,
+    at: (u32, u32),
+    marks: &[(u32, u32)],
+    before: usize,
+) -> [String; 7] {
+    let tidy = |s: &str| s.replace(['\t', '\r', '\n'], " ");
+    let one = [at];
+    let marks: Vec<(usize, usize)> = (if marks.is_empty() { &one[..] } else { marks })
+        .iter()
+        .map(|&(a, l)| (a as usize, (a + l) as usize))
+        .filter(|&(a, b)| a < b && text.get(a..b).is_some())
+        .collect();
+    let mut parts: [String; 7] = Default::default();
+    if marks.is_empty() {
+        parts[0] = tidy(text);
+        return parts;
+    }
+    let mut at = 0;
+    for (k, &(a, b)) in marks.iter().take(3).enumerate() {
+        parts[k * 2] = tidy(&text[at..a]);
+        parts[k * 2 + 1] = tidy(&text[a..b]);
+        at = b;
+    }
+    // What follows the last mark shown is drawn last, a fourth find plain.
+    parts[6] = tidy(&text[at..]);
+    let pre = parts[0].trim_start().to_owned();
+    let kept = pre.chars().count();
+    parts[0] = if kept > before {
+        let cut: String = pre.chars().skip(kept - before).collect();
+        format!("…{}", cut.trim_start())
+    } else {
+        pre
+    };
+    parts
+}
+
 /// Where a `content:` query found its text in the file, as a row and the
 /// preview draw it. A line is one line: tabs become spaces, the indent goes,
 /// and only the last few dozen characters before the find are kept, so the
@@ -392,33 +433,21 @@ fn found_of(h: &Hit) -> slint::ModelRc<Found> {
         return slint::ModelRc::default();
     }
     const BEFORE: usize = 40;
-    let tidy = |s: &str| s.replace(['\t', '\r', '\n'], " ");
     let found: Vec<Found> = h
         .found
         .iter()
         .map(|f| {
-            let (at, len) = (f.at.0 as usize, f.at.1 as usize);
-            let (pre, hit, post) = match (
-                f.text.get(..at),
-                f.text.get(at..at + len),
-                f.text.get(at + len..),
-            ) {
-                (Some(pre), Some(hit), Some(post)) => (pre, hit, post),
-                _ => (f.text.as_str(), "", ""),
-            };
-            let pre = tidy(pre.trim_start());
-            let kept = pre.chars().count();
-            let pre = if kept > BEFORE {
-                let cut: String = pre.chars().skip(kept - BEFORE).collect();
-                format!("…{}", cut.trim_start())
-            } else {
-                pre
-            };
+            let [pre, hit, mid, hit2, mid2, hit3, post] =
+                line_parts(&f.text, f.at, &f.marks, BEFORE);
             Found {
                 line: f.line.map(|n| n.to_string()).unwrap_or_default().into(),
                 pre: pre.into(),
-                hit: tidy(hit).into(),
-                post: tidy(post).into(),
+                hit: hit.into(),
+                mid: mid.into(),
+                hit2: hit2.into(),
+                mid2: mid2.into(),
+                hit3: hit3.into(),
+                post: post.into(),
             }
         })
         .collect();
@@ -538,6 +567,23 @@ mod tests {
         assert_eq!(
             name_parts("main.rs", &[]),
             ["main.rs", "", "", "", "", "", ""]
+        );
+        // A line out of a file: every find the service marked.
+        let p = line_parts(
+            "icra dairesi ve icra",
+            (0, 4),
+            &[(0, 4), (5, 7), (16, 4)],
+            40,
+        );
+        assert_eq!(
+            p,
+            ["", "icra", " ", "dairesi", " ve ", "icra", ""].map(String::from)
+        );
+        // An older service sends `at` alone.
+        let p = line_parts("bir icra\tdosyası", (4, 4), &[], 40);
+        assert_eq!(
+            p,
+            ["bir ", "icra", "", "", "", "", " dosyası"].map(String::from)
         );
         // Either word of an OR.
         assert_eq!(

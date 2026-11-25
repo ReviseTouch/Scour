@@ -15,6 +15,10 @@ pub struct Hit {
     pub text: String,
     /// Where in `text` the find itself is: byte offset and length.
     pub at: (u32, u32),
+    /// Every find in `text` of every word the pattern must hold, in order,
+    /// overlapping ones joined: `at` among them. A line holding two of the
+    /// words shows both.
+    pub marks: Vec<(u32, u32)>,
 }
 
 /// What a file's first bytes say it is.

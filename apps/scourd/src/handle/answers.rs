@@ -37,6 +37,7 @@ pub(super) fn grep_answer(r: scour_engine::Grepped) -> scour_proto::GrepResponse
                         offset: h.offset,
                         text: h.text,
                         at: h.at,
+                        marks: h.marks,
                     })
                     .collect(),
             })

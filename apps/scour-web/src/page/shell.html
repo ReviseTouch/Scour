@@ -74,8 +74,14 @@
            same box. Hidden until asked for. -->
       <div class="grep-bar" id="grep-bar" hidden>
         <span class="ghead"><span aria-hidden="true">≣</span><span data-t="Inside"></span></span>
-        <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
-               data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
+        <!-- The field's letters are drawn by the shadow behind it, each piece of
+             the pattern in its capsule, each operator in its colour; the field
+             keeps the caret and the selection. -->
+        <span class="gfield">
+          <span class="gshadow" id="grep-shadow" aria-hidden="true"></span>
+          <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
+                 data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
+        </span>
         <div class="grep-seg" role="group">
           <button type="button" data-gmode="text" aria-pressed="true" data-t="Text"></button>
           <button type="button" data-gmode="regex" aria-pressed="false" data-t="Regex"></button>

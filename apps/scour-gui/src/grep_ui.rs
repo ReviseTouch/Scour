@@ -67,34 +67,47 @@ fn home_form(p: &str) -> String {
     crate::qlens::home_path(&home, p)
 }
 
-fn cut_hit(text: &str, at: (u32, u32)) -> (String, String, String) {
-    let (s, len) = (at.0 as usize, at.1 as usize);
-    match (text.get(..s), text.get(s..s + len), text.get(s + len..)) {
-        (Some(pre), Some(hit), Some(post)) => {
-            let clean = |v: &str| v.replace(['\t', '\r', '\n'], " ");
-            let mut p = clean(pre).trim_start().to_owned();
-            if p.chars().count() > 44 {
-                let tail: String = p
-                    .chars()
-                    .rev()
-                    .take(44)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                p = format!("…{}", tail.trim_start());
+/// The content pattern's pieces as capsules and its operators in colour, as
+/// the search reads them; only a text pattern has pieces.
+fn style_pattern(w: &MainWindow, pattern: &str, mode: GrepMode) {
+    let (mut caps, mut ops) = (Vec::new(), Vec::new());
+    if mode == GrepMode::Text {
+        let chars: Vec<char> = pattern.chars().collect();
+        for p in scour_ui::pattern::pieces(pattern) {
+            let kind = match p.kind {
+                scour_ui::pattern::PieceKind::Word => None,
+                scour_ui::pattern::PieceKind::Phrase => Some("phrase"),
+                scour_ui::pattern::PieceKind::Or => Some("or"),
+                scour_ui::pattern::PieceKind::Not => Some("not"),
+            };
+            if let Some(kind) = kind {
+                caps.push(crate::ui::GrepCap {
+                    col: p.start as i32,
+                    len: (p.end - p.start) as i32,
+                    kind: kind.into(),
+                });
             }
-            (p, clean(hit), clean(post))
+            for i in p.ops {
+                let ch = chars[i];
+                ops.push(crate::ui::GrepOp {
+                    col: i as i32,
+                    ch: ch.to_string().into(),
+                    kind: match ch {
+                        '!' => "not",
+                        '"' => "quote",
+                        _ => "or",
+                    }
+                    .into(),
+                });
+            }
         }
-        _ => (
-            text.replace(['\t', '\r', '\n'], " "),
-            String::new(),
-            String::new(),
-        ),
     }
+    w.set_grep_caps(ModelRc::new(VecModel::from(caps)));
+    w.set_grep_ops(ModelRc::new(VecModel::from(ops)));
 }
 
 pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, append: bool) {
+    style_pattern(w, &s.grep.pattern, s.grep.mode);
     if !s.grep.open || s.grep.pattern.is_empty() {
         s.grep.generation += 1;
         s.grep.files.clear();
@@ -266,10 +279,15 @@ pub fn answered(
             line: slint::SharedString::new(),
             pre: slint::SharedString::new(),
             hit: slint::SharedString::new(),
+            mid: slint::SharedString::new(),
+            hit2: slint::SharedString::new(),
+            mid2: slint::SharedString::new(),
+            hit3: slint::SharedString::new(),
             post: slint::SharedString::new(),
         });
         for h in &gf.hits {
-            let (pre, hit, post) = cut_hit(&h.text, h.at);
+            let [pre, hit, mid, hit2, mid2, hit3, post] =
+                crate::rows::line_parts(&h.text, h.at, &h.marks, 44);
             let line = h
                 .line
                 .map_or_else(|| format!("@{}", h.offset), |l| l.to_string());
@@ -286,6 +304,10 @@ pub fn answered(
                 line: line.into(),
                 pre: pre.into(),
                 hit: hit.into(),
+                mid: mid.into(),
+                hit2: hit2.into(),
+                mid2: mid2.into(),
+                hit3: hit3.into(),
                 post: post.into(),
             });
         }
@@ -326,7 +348,8 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
         .hits
         .iter()
         .map(|h| {
-            let (pre, hit, post) = cut_hit(&h.text, h.at);
+            let [pre, hit, mid, hit2, mid2, hit3, post] =
+                crate::rows::line_parts(&h.text, h.at, &h.marks, 44);
             Found {
                 line: h
                     .line
@@ -334,6 +357,10 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
                     .into(),
                 pre: pre.into(),
                 hit: hit.into(),
+                mid: mid.into(),
+                hit2: hit2.into(),
+                mid2: mid2.into(),
+                hit3: hit3.into(),
                 post: post.into(),
             }
         })

@@ -200,6 +200,7 @@ impl Reader {
                     line,
                     text,
                     at,
+                    marks: vec![at],
                 });
             }
             // Anchored at offset zero: a later buffer cannot hold it.

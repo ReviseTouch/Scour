@@ -687,6 +687,11 @@ test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos'
   // marks both in `HASAN SALİHOĞLU`, and the second `hasan` too.
   assert.deepEqual(run('spans("HASAN SALİHOĞLU-hasan", ["hasan", "salih"])'), [[0, 5], [6, 5], [16, 5]]);
   assert.deepEqual(run('spans("raporapor", ["rapor", "apora"])'), [[0, 9]]);
+  // The content field's pieces, as `scour_ui::pattern::pieces` takes them.
+  vm.runInContext(section('  function patternPieces(input) {', '\n  /* The letters behind the field'), c);
+  const shown = (p) => JSON.parse(run(`JSON.stringify(patternPieces(${JSON.stringify(p)}).map((x) => [Array.from(${JSON.stringify(p)}).slice(x.start, x.end).join(""), x.kind, x.ops.length]))`));
+  assert.deepEqual(shown('icra "dava dosyası" !karar a;b'), [["icra", "word", 0], ['"dava dosyası"', "phrase", 2], ["!karar", "not", 1], ["a;b", "or", 1]]);
+  assert.deepEqual(shown("(a | b) x ; y ! z"), [["(a | b)", "or", 3], ["x ; y", "or", 1], ["! z", "not", 1]]);
   assert.deepEqual(run('spans("main.rs", ["zzz", ""])'), []);
   assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
 });

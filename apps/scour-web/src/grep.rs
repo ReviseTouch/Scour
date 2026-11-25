@@ -107,6 +107,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
                                 "pre": pre,
                                 "hit": hit,
                                 "post": post,
+                                "segs": crate::search::segs(&h.text, h.at, &h.marks),
                             })
                         })
                         .collect();

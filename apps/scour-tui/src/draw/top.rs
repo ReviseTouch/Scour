@@ -5,7 +5,7 @@ use crate::app::{App, Mode, Spot};
 use crate::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use scour_ui::format;
@@ -132,21 +132,61 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .bg(theme.hover())
                 .add_modifier(Modifier::BOLD),
         ));
-        parts.push(Span::styled(
-            pat_shown,
-            Style::new()
-                .fg(if app.v2.grep_pattern.is_empty() {
-                    theme.ink_3()
-                } else {
-                    theme.ink()
-                })
-                .bg(theme.hover())
-                .add_modifier(if app.v2.grep_pattern.is_empty() {
-                    Modifier::ITALIC
-                } else {
-                    Modifier::BOLD
-                }),
-        ));
+        if app.v2.grep_pattern.is_empty() || app.v2.grep_mode != scour_proto::GrepMode::Text {
+            parts.push(Span::styled(
+                pat_shown,
+                Style::new()
+                    .fg(if app.v2.grep_pattern.is_empty() {
+                        theme.ink_3()
+                    } else {
+                        theme.ink()
+                    })
+                    .bg(theme.hover())
+                    .add_modifier(if app.v2.grep_pattern.is_empty() {
+                        Modifier::ITALIC
+                    } else {
+                        Modifier::BOLD
+                    }),
+            ));
+        } else {
+            // Each piece of the pattern as the search reads it: a phrase, an
+            // OR and a NOT on a ground of their own, operators in colour.
+            let chars: Vec<char> = app.v2.grep_pattern.chars().collect();
+            let mut ground = vec![theme.hover(); chars.len()];
+            let mut fg: Vec<Color> = vec![theme.ink(); chars.len()];
+            for p in scour_ui::pattern::pieces(&app.v2.grep_pattern) {
+                let under = match p.kind {
+                    scour_ui::pattern::PieceKind::Word => None,
+                    scour_ui::pattern::PieceKind::Not => Some(theme.line()),
+                    _ => Some(theme.panel()),
+                };
+                if let Some(under) = under {
+                    ground[p.start..p.end].iter_mut().for_each(|g| *g = under);
+                }
+                for i in p.ops {
+                    fg[i] = match chars[i] {
+                        '!' => theme.not(),
+                        '"' => theme.glob(),
+                        _ => theme.key(),
+                    };
+                }
+            }
+            let mut i = 0;
+            while i < chars.len() {
+                let mut j = i + 1;
+                while j < chars.len() && ground[j] == ground[i] && fg[j] == fg[i] {
+                    j += 1;
+                }
+                parts.push(Span::styled(
+                    chars[i..j].iter().collect::<String>(),
+                    Style::new()
+                        .fg(fg[i])
+                        .bg(ground[i])
+                        .add_modifier(Modifier::BOLD),
+                ));
+                i = j;
+            }
+        }
         let flags = format!(
             " · {mode_lbl}{}{}{} · F8/Esc ]",
             if app.v2.grep_exact { " Aa" } else { "" },

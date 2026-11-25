@@ -421,6 +421,7 @@ fn holding(
                         line: h.line,
                         text: h.text,
                         at: h.at,
+                        marks: h.marks,
                     })
                     .collect();
                 found.truncate(FOUND_PER_FILE);

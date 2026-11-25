@@ -496,6 +496,7 @@ fn collect_in_chunk(
                     line,
                     text: String::new(),
                     at: (0, 0),
+                    marks: Vec::new(),
                 });
                 tally.more = false;
             }
@@ -512,6 +513,7 @@ fn collect_in_chunk(
             line,
             text,
             at,
+            marks: vec![at],
         });
     }
 }
