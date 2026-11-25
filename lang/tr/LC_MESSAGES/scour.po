@@ -3106,3 +3106,12 @@ msgstr "zaman panelinde: ← → yeni ucu, Shift eski ucu oynatır"
 
 msgid "in the type panel: Tab goes between kinds and extensions"
 msgstr "tür panelinde: Tab türlerle uzantılar arasında geçer"
+
+msgid "Space or Enter adds or takes one away; Alt+Enter leaves it out"
+msgstr "Boşluk ya da Enter ekler veya çıkarır; Alt+Enter dışlar"
+
+msgid "← → move the newer end, Shift the older"
+msgstr "← → yeni ucu, Shift eski ucu oynatır"
+
+msgid "Alt+click: leave it out"
+msgstr "Alt+tık: dışla"
