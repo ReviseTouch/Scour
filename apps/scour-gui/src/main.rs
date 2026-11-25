@@ -45,6 +45,10 @@ mod pixels;
 mod placeact;
 mod placewire;
 mod qbar;
+mod qdress;
+mod qflow;
+mod qgroup;
+mod qlay;
 mod qlens;
 mod qplace;
 mod qscope;
@@ -82,8 +86,8 @@ mod ui {
 
 pub use ui::{
     Bar, Big, CalDay, CalMonth, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts,
-    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, QMeasure, Reach, Row, Rule, Scheme, Seg,
-    Sel, Slice, Slot, Span, Theme,
+    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, QBit, QMeasure, Reach, Row, Rule, Scheme,
+    Seg, Sel, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -1088,7 +1092,8 @@ fn apply(
             Response::Volumes { disks, folders } => {
                 state.borrow_mut().asked_disk = disks::draw(w, cat, &disks);
                 state.borrow_mut().qb.disks = disks.clone();
-                qscope::draw(w, &mut state.borrow_mut().qb, cat, &w.get_query());
+                // The chip, and a place group's disks in the bar.
+                qwire::draw(w, &mut state.borrow_mut(), link, cat, qwire::Lensing::Keep);
                 disks::draw_folders(w, cat, &folders);
                 // While something is being walked and the page is open, asked
                 // again: the line beside it says when the walk ends.
@@ -1105,7 +1110,7 @@ fn apply(
             }
             Response::Sources { sources } => {
                 state.borrow_mut().qb.sources = sources;
-                qscope::draw(w, &mut state.borrow_mut().qb, cat, &w.get_query());
+                qwire::draw(w, &mut state.borrow_mut(), link, cat, qwire::Lensing::Keep);
             }
             _ => link.send(Ask::Volumes),
         },

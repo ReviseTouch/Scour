@@ -408,11 +408,26 @@ export struct Cap {
     tail: length,
 }
 
-// A word a capsule shows in the window's own face, for the window to measure:
-// a header's name, or `big`, what a filter holds said in words.
+// A word a capsule shows in the window's own face, for the window to measure.
+// `face`: 0 a header's name · 1 what a filter holds said in words · 2 a part
+// of a place group · 3 the same, bold.
 export struct QMeasure {
     text: string,
-    big: bool,
+    face: int,
+}
+
+// What a place group's capsule holds, placed by Rust: `kind` 0 a part's
+// ground · 1 words · 2 a disk's dot · 3 the `·` between parts · 4 the well
+// of the member being edited. `dim` 0 ink · 1 quieter · 2 quietest.
+export struct QBit {
+    line: int,
+    x: length,
+    w: length,
+    kind: int,
+    text: string,
+    bold: bool,
+    dim: int,
+    disk: string,
 }
 
 // Part of the query's selection, on one line.

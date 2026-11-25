@@ -9,14 +9,14 @@ export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
 import { PlaceLens } from "place.slint";
-import { ScopeChip } from "place-parts.slint";
+import { ScopeChip, DiskInk } from "place-parts.slint";
 import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
@@ -41,6 +41,7 @@ export component MainWindow inherits Window {
     // The query bar, as Rust lays it out: see `qbar.rs`.
     in property <[Cap]> caps;
     in property <[QMeasure]> q-measure;
+    in property <[QBit]> q-bits;
     // Whether the keyboard is in the query: a filter is being written only then.
     out property <bool> q-focused: input.has-focus;
     callback q-focus-moved();
@@ -64,8 +65,8 @@ export component MainWindow inherits Window {
     out property <length> q-advance: ruler.preferred-width / 40;
     /// The column under a point of a shown line; `round` for the gap nearest.
     pure callback q-col(int, length, bool) -> int;
-    // Characters a line holds, measured here and wrapped by there.
-    callback q-cols(int);
+    // How wide a line is, measured here and wrapped by there.
+    callback q-room(length);
     callback q-caret(int, int);
     // A shown line and a column to a byte offset of the query.
     pure callback q-hit(int, int) -> int;
@@ -1345,11 +1346,10 @@ export component MainWindow inherits Window {
                     // One character's width, measured over forty because a
                     // layout rounds each run to whole pixels and the error
                     // accumulates. One width for every character: the query's
-                    // face is monospace, and Rust wraps it by that.
+                    // face is monospace; Rust wraps by what each is drawn as.
                     property <length> advance: ruler.preferred-width / 40;
-                    property <int> cols: max(8, Math.floor(field.room / max(1px, field.advance)));
-                    changed cols => { root.q-cols(self.cols); }
-                    init => { root.q-cols(self.cols); }
+                    changed room => { root.q-room(self.room); }
+                    init => { root.q-room(self.room); }
                     // The lines start this far down, so one line sits in the
                     // middle of the box as it always did.
                     property <length> top: (field.height - root.q-shown * root.q-pitch) / 2;
@@ -1472,13 +1472,54 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // Inside a place group's capsule: each part's ground, its
+                    // disk's dot or its crumbs, the `·` between, the well of
+                    // the member being edited. Rust places every one.
+                    for b in root.q-bits: Rectangle {
+                        x: field.pad + b.x;
+                        y: field.top + (b.line - root.q-first) * root.q-pitch;
+                        width: b.w;
+                        height: root.q-pitch;
+                        visible: b.line >= root.q-first && b.line < root.q-first + root.q-shown;
+                        if b.kind == 0 || b.kind == 4: Rectangle {
+                            y: 7px;
+                            height: parent.height - 14px;
+                            border-radius: 6px;
+                            background: b.kind == 4 ? Theme.panel : Theme.panel-2;
+                            opacity: b.kind == 4 ? 1 : 0.7;
+                            border-width: b.kind == 4 && input.has-focus ? 1.5px : 0px;
+                            border-color: Theme.focus;
+                        }
+                        if b.kind == 1: Text {
+                            y: 0px;
+                            height: parent.height;
+                            text: b.text;
+                            color: b.dim == 0 ? Theme.ink : b.dim == 1 ? Theme.ink-2 : Theme.ink-3;
+                            font-size: 14px;
+                            font-weight: b.bold ? 600 : 500;
+                            vertical-alignment: center;
+                        }
+                        if b.kind == 2: Rectangle {
+                            y: (parent.height - 7px) / 2;
+                            height: 7px;
+                            border-radius: 3.5px;
+                            background: DiskInk.of(b.disk);
+                        }
+                        if b.kind == 3: Rectangle {
+                            y: (parent.height - 3px) / 2;
+                            height: 3px;
+                            border-radius: 1.5px;
+                            background: Theme.ink-3;
+                        }
+                    }
+
                     // The words the capsules show in the window's own face,
                     // measured here: Rust places columns and cannot.
                     for m[mi] in root.q-measure: Text {
                         visible: false;
                         text: m.text;
-                        font-size: m.big ? 15px : 12px;
-                        font-weight: 600;
+                        font-size: m.face == 0 ? 12px : m.face == 1 ? 15px : 14px;
+                        font-weight: m.face == 2 ? 500 : 600;
                         property <length> wide: self.preferred-width;
                         init => { root.q-measured(mi, self.wide); }
                         changed wide => { root.q-measured(mi, self.wide); }

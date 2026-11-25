@@ -6,6 +6,7 @@
 
 use scour_ui::{frame, lens, wrap};
 
+use crate::qgroup::Aim;
 use crate::{Cap, Sel, Span};
 
 /// Lines shown before the field scrolls inside itself.
@@ -49,10 +50,31 @@ pub fn has_icon(field: &str) -> bool {
     )
 }
 
+/// A place group drawn on a line: its first character, how many, how wide,
+/// and where each of its char offsets is drawn from its left.
+pub struct Laid {
+    pub line: usize,
+    pub at: usize,
+    pub len: usize,
+    pub width: f32,
+    pub dx: Vec<f32>,
+}
+
+/// Part of a drawn line where a press is not read by column: a place group's
+/// part, and the char offsets it puts the caret at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Zone {
+    pub line: usize,
+    /// From the field's padding; the aim in char offsets.
+    pub x0: f32,
+    pub x1: f32,
+    pub aim: Aim,
+}
+
 #[derive(Default)]
 pub struct Field {
-    /// Characters a line holds; zero until the window has measured.
-    pub cols: usize,
+    /// How wide a line is, in pixels; zero until the window has measured.
+    pub room: f32,
     /// The first line shown, once there are more than [`VISIBLE`].
     pub first: usize,
     pub lines: Vec<wrap::Line>,
@@ -62,6 +84,8 @@ pub struct Field {
     /// one more than the line's characters. Headers are narrower than letters,
     /// so a column is not `advance` times itself.
     pub xs: Vec<Vec<f32>>,
+    /// The place groups' parts, aimed in char offsets.
+    pub zones: Vec<Zone>,
 }
 
 /// A byte offset into `s` as a character offset.
@@ -79,9 +103,30 @@ pub fn byte_of(s: &str, ch: usize) -> usize {
 }
 
 impl Field {
-    pub fn relayout(&mut self, query: &str) {
-        self.lines = wrap::lines(query, self.cols.max(8));
+    /// Wrap `query` by what each character is drawn as, `keep` never broken.
+    pub fn relayout(&mut self, query: &str, w: &[f32], keep: &[(usize, usize)]) {
+        let chars: Vec<char> = query.chars().collect();
+        let room = if self.room > 0.0 {
+            self.room
+        } else {
+            80.0 * self.adv()
+        };
+        self.lines = crate::qflow::lines(&chars, w, room, keep);
         self.first = self.first.min(self.lines.len().saturating_sub(VISIBLE));
+    }
+
+    /// The query on one line, unwrapped: what is wrapped.
+    pub fn unwrapped(&mut self, query: &str) {
+        let n = query.chars().count();
+        self.lines = vec![wrap::Line { start: 0, end: n }];
+    }
+
+    fn adv(&self) -> f32 {
+        if self.advance > 0.0 {
+            self.advance
+        } else {
+            9.6
+        }
     }
 
     /// How many lines the field is tall.
@@ -205,57 +250,70 @@ impl Field {
         (line as i32, col as i32, sels)
     }
 
-    /// Where each column is drawn, given the capsules: a header's letters are
-    /// small, an ≈ header one icon wide, everything else a letter of the face.
-    pub fn measure(&mut self, caps: &[Cap]) {
-        let adv = if self.advance > 0.0 {
-            self.advance
-        } else {
-            9.6
-        };
-        self.xs = self
-            .lines
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                let n = l.end.saturating_sub(l.start);
-                let mut w = vec![adv; n];
-                for c in caps.iter().filter(|c| c.line == i as i32 && c.len > 0) {
-                    let (a, h, len) = (c.at.max(0) as usize, c.head as usize, c.len as usize);
-                    if h > 0 {
-                        let each = if c.icon && c.head_w > 0.0 {
-                            c.head_w / h as f32
-                        } else if c.icon {
-                            (ICON_W + if c.tone == 2 { NOT_W } else { 0.0 }) / h as f32
-                        } else {
-                            adv * HEAD_SCALE - HEAD_TIGHT
-                        };
-                        for x in w.iter_mut().skip(a).take(h) {
-                            *x = each;
-                        }
-                        if !c.icon
-                            && let Some(x) = w.get_mut(a + h - 1)
-                        {
-                            *x += HEAD_GAP;
-                        }
-                    }
-                    // What it holds, said in words: as wide as the words.
-                    if c.nice_w > 0.0 && len > h {
-                        let each = c.nice_w / (len - h) as f32;
-                        for x in w.iter_mut().skip(a + h).take(len - h) {
-                            *x = each;
-                        }
-                    }
-                    if let Some(x) = w.get_mut(a + len - 1) {
-                        *x += if c.tail > 0.0 { c.tail } else { CAP_TAIL };
-                    }
+    /// What each character of a line is drawn as, given the capsules: a
+    /// header's letters small, an ≈ header one icon wide, a place group all
+    /// on its first character, everything else a letter of the face.
+    pub fn widths(&self, i: usize, caps: &[Cap], laid: &[Laid]) -> Vec<f32> {
+        let adv = self.adv();
+        let l = self.lines[i];
+        let n = l.end.saturating_sub(l.start);
+        let mut w = vec![adv; n];
+        for c in caps.iter().filter(|c| c.line == i as i32 && c.len > 0) {
+            let (a, h, len) = (c.at.max(0) as usize, c.head as usize, c.len as usize);
+            if h > 0 {
+                let each = if c.icon && c.head_w > 0.0 {
+                    c.head_w / h as f32
+                } else if c.icon {
+                    (ICON_W + if c.tone == 2 { NOT_W } else { 0.0 }) / h as f32
+                } else {
+                    adv * HEAD_SCALE - HEAD_TIGHT
+                };
+                for x in w.iter_mut().skip(a).take(h) {
+                    *x = each;
                 }
-                let mut xs = Vec::with_capacity(n + 1);
+                if !c.icon
+                    && let Some(x) = w.get_mut(a + h - 1)
+                {
+                    *x += HEAD_GAP;
+                }
+            }
+            // What it holds, said in words: as wide as the words.
+            if c.nice_w > 0.0 && len > h {
+                let each = c.nice_w / (len - h) as f32;
+                for x in w.iter_mut().skip(a + h).take(len - h) {
+                    *x = each;
+                }
+            }
+            if let Some(x) = w.get_mut(a + len - 1) {
+                *x += if c.tail > 0.0 { c.tail } else { CAP_TAIL };
+            }
+        }
+        for g in laid.iter().filter(|g| g.line == i && g.at + g.len <= n) {
+            w[g.at..g.at + g.len].fill(0.0);
+            w[g.at] = g.width;
+        }
+        w
+    }
+
+    /// Where each column is drawn: the widths summed, and inside a place
+    /// group each offset where the group says.
+    pub fn measure(&mut self, caps: &[Cap], laid: &[Laid]) {
+        self.xs = (0..self.lines.len())
+            .map(|i| {
+                let w = self.widths(i, caps, laid);
+                let mut xs = Vec::with_capacity(w.len() + 1);
                 let mut at = 0.0;
                 xs.push(at);
                 for x in w {
                     at += x;
                     xs.push(at);
+                }
+                let n = xs.len();
+                for g in laid.iter().filter(|g| g.line == i && g.at + g.len < n) {
+                    let left = xs[g.at];
+                    for k in 1..g.len {
+                        xs[g.at + k] = left + g.dx[k];
+                    }
                 }
                 xs
             })
@@ -265,11 +323,7 @@ impl Field {
     /// Where a column of a line (counted from the first line, not the first
     /// shown) is drawn. Past the end, a letter of the face per column.
     pub fn x(&self, line: usize, col: i32) -> f32 {
-        let adv = if self.advance > 0.0 {
-            self.advance
-        } else {
-            9.6
-        };
+        let adv = self.adv();
         let col = col.max(0) as usize;
         match self.xs.get(line) {
             Some(xs) if col < xs.len() => xs[col],
@@ -286,6 +340,13 @@ impl Field {
             return 0;
         };
         let x = x.max(0.0);
+        if let Some(z) = self
+            .zones
+            .iter()
+            .find(|z| z.line == line && z.x0 <= x && x < z.x1)
+        {
+            return self.aimed(line, z.aim, x, round);
+        }
         let mut col = 0;
         for (i, pair) in xs.windows(2).enumerate() {
             let mid = if round {
@@ -300,6 +361,28 @@ impl Field {
             }
         }
         col as i32
+    }
+
+    /// The column a press in a place group's part is read as: the end of its
+    /// member, or the letter of the member being edited it is nearest.
+    fn aimed(&self, line: usize, aim: Aim, x: f32, round: bool) -> i32 {
+        let l = self.lines[line];
+        let col = |c: usize| c.clamp(l.start, l.end) - l.start;
+        let (a, b) = match aim {
+            Aim::At(c) => {
+                let c = col(c);
+                return if round { c } else { c.saturating_sub(1) } as i32;
+            }
+            Aim::Letters(a, b) => (col(a), col(b)),
+        };
+        let xs = &self.xs[line];
+        let at = |c: usize| xs.get(c).copied().unwrap_or(0.0);
+        if round {
+            let near = (a..=b).min_by(|&p, &q| (at(p) - x).abs().total_cmp(&(at(q) - x).abs()));
+            return near.unwrap_or(a) as i32;
+        }
+        let over = (a..b).rev().find(|&c| at(c) <= x).unwrap_or(a);
+        (if b > a { over } else { a.saturating_sub(1) }) as i32
     }
 
     /// The byte offset a press at a shown line and a column lands on.
@@ -354,7 +437,7 @@ mod tests {
             head: 4,
             ..Cap::default()
         };
-        f.measure(std::slice::from_ref(&cap));
+        f.measure(std::slice::from_ref(&cap), &[]);
         let narrow = 10.0 * HEAD_SCALE - HEAD_TIGHT;
         assert!((f.x(0, 4) - (4.0 * narrow + HEAD_GAP)).abs() < 0.01);
         assert!((f.x(0, 5) - (4.0 * narrow + HEAD_GAP + 10.0)).abs() < 0.01);
@@ -366,16 +449,18 @@ mod tests {
                 assert_eq!(f.col_at(0, x + 0.5, false), col, "a character at {col}");
             }
         }
-        f.measure(&[Cap { icon: true, ..cap }]);
+        f.measure(&[Cap { icon: true, ..cap }], &[]);
         assert!((f.x(0, 4) - ICON_W).abs() < 0.01);
     }
 
+    /// A field `cols` letters of ten pixels wide.
     fn field(q: &str, cols: usize) -> Field {
         let mut f = Field {
-            cols,
+            room: cols as f32 * 10.0,
+            advance: 10.0,
             ..Default::default()
         };
-        f.relayout(q);
+        f.relayout(q, &vec![10.0; q.chars().count()], &[]);
         f
     }
 

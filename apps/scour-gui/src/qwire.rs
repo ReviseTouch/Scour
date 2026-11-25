@@ -52,8 +52,10 @@ pub struct QueryBar {
     /// How wide the window draws each word a capsule shows in its own face —
     /// a header's name, a value said in words — and the words it was asked to
     /// measure, in the order it was asked.
-    widths: std::collections::HashMap<(String, bool), f32>,
-    asked: Vec<(String, bool)>,
+    pub(crate) widths: std::collections::HashMap<(String, i32), f32>,
+    pub(crate) asked: Vec<(String, i32)>,
+    /// The place groups drawn as one capsule: their bytes, and where.
+    pub groups: Vec<(usize, usize, qbar::Laid)>,
     /// The last `volumes` and `sources` answers: the scope chip's disks.
     pub disks: Vec<scour_proto::Disk>,
     pub sources: Vec<scour_core::SourceInfo>,
@@ -125,70 +127,6 @@ fn send(link: &Link, generation: u64, wants: Vec<(u32, scour_proto::Request)>) {
     }
 }
 
-/// What a header drawn as a picture stands for: the filter's name in the list
-/// `:` opens, and what it does.
-fn field_tip(cat: &Catalogue, field: &str) -> String {
-    lens::filter_of(field).map_or_else(
-        || format!("{field}:"),
-        |f| format!("{} — {}", cat.get(f.label), cat.get(f.about)),
-    )
-}
-
-/// The name a header drawn as a picture carries beside it: the filter's, as
-/// the list `:` opens says it. An ≈ says itself.
-fn head_label(cat: &Catalogue, field: &str) -> String {
-    if field == "fuzzy" {
-        return String::new();
-    }
-    lens::filter_of(field).map_or_else(String::new, |f| cat.get(f.label).into_owned())
-}
-
-/// What an empty filter asks for, in the place its value will be.
-fn head_hint(cat: &Catalogue, field: &str) -> String {
-    let id = match field {
-        "dm" => "when?",
-        "size" => "how big?",
-        "kind" => "which type?",
-        "ext" => "pdf, rs…",
-        "under" | "parent" => "which folder?",
-        "content" => "text inside the files",
-        _ => "a word",
-    };
-    cat.get(id).into_owned()
-}
-
-/// What a filter holds, in words, when it holds one of the values its lens
-/// offers: `7d` is "last 7 days", `doc` is "Document".
-fn friendly(cat: &Catalogue, field: &str, raw: &str) -> Option<String> {
-    let band = |bands: &[(&str, &str)]| {
-        bands
-            .iter()
-            .find(|(v, _)| *v == raw)
-            .map(|(_, l)| cat.get(l).into_owned())
-    };
-    match field {
-        "dm" => band(lens::TIMES),
-        "size" => band(lens::SIZES),
-        "kind" if lens::KINDS.contains(&raw) => scour_core::Kind::from_name(raw)
-            .and_then(|k| k.first())
-            .map(|k| cat.get(k.msgid()).into_owned()),
-        _ => None,
-    }
-}
-
-/// How wide the window draws `text` — in a header's face, or `big`, a
-/// value's. Not measured yet, it is asked for and guessed at meanwhile.
-fn width_of(qb: &mut QueryBar, text: &str, big: bool) -> f32 {
-    let key = (text.to_string(), big);
-    if let Some(w) = qb.widths.get(&key) {
-        return *w;
-    }
-    if !qb.asked.contains(&key) {
-        qb.asked.push(key);
-    }
-    text.chars().count() as f32 * if big { 8.4 } else { 6.9 }
-}
-
 /// The window measured one of the words it was asked to. True when that
 /// moves something.
 pub fn measured(s: &mut State, i: usize, w: f32) -> bool {
@@ -207,54 +145,17 @@ pub fn measured(s: &mut State, i: usize, w: f32) -> bool {
     true
 }
 
-/// Take the letters of one stretch of a line out of the runs, or draw them
-/// small: a header's, or a value said in words instead.
-fn carve(
-    runs: Vec<crate::Span>,
-    line: i32,
-    from: i32,
-    to: i32,
-    small: Option<bool>,
-) -> Vec<crate::Span> {
-    runs.into_iter()
-        .flat_map(|r| {
-            let len = r.text.chars().count() as i32;
-            if r.line != line || r.at + len <= from || r.at >= to {
-                return vec![r];
-            }
-            let chars: Vec<char> = r.text.chars().collect();
-            let piece = |a: i32, b: i32, small: bool| crate::Span {
-                text: chars[(a - r.at) as usize..(b - r.at) as usize]
-                    .iter()
-                    .collect::<String>()
-                    .into(),
-                at: a,
-                small,
-                ..r.clone()
-            };
-            let mut kept = Vec::new();
-            if r.at < from {
-                kept.push(piece(r.at, from, r.small));
-            }
-            if let Some(small) = small {
-                kept.push(piece(r.at.max(from), (r.at + len).min(to), small));
-            }
-            if r.at + len > to {
-                kept.push(piece(to, r.at + len, r.small));
-            }
-            kept
-        })
-        .collect()
-}
-
 /// Lay the query out and draw it: the runs, the capsules, the caret, the
 /// selection, the field's height; and the lens, as `lensing` says.
 pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing: Lensing) {
     let text = w.get_query().to_string();
     let qb = &mut s.qb;
-    qb.field.relayout(&text);
-    let mut runs = qb.field.place(crate::painted(&text, &s.spans));
-    let mut caps = qb.field.caps(&text, &s.spans);
+    let asked_before = qb.asked.len();
+    let crate::qlay::Laidout {
+        mut caps,
+        runs,
+        bits,
+    } = crate::qlay::lay_out(w, qb, cat, &text, &s.spans);
     if let Some(h) = &qb.hover {
         let (a, b) = (
             qbar::chars_before(&text, h.start),
@@ -267,94 +168,18 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         }
     }
     let (line, col, sels) = qb.field.caret(&text, qb.anchor, qb.cursor);
-    // A filter's header the caret is not in is drawn as a picture and a
-    // name, when the settings ask for pictures. The filter the caret is in is
-    // being written: its value as typed, in a well to type in. Any other says
-    // what it holds in words, where its lens has words for it.
-    let adv = match w.get_q_advance() {
-        a if a > 0.0 => a,
-        _ => 9.6,
-    };
-    let asked_before = qb.asked.len();
-    let at_caret = (qb.anchor == qb.cursor && w.get_q_focused()).then_some(qb.cursor as i32);
-    for c in &mut caps {
-        c.icon = !w.get_field_words()
-            && qbar::has_icon(&c.field)
-            && c.head > 0
-            && !(c.line == line && col > c.at && col < c.at + c.head);
-        c.edit = c.head > 0 && at_caret.is_some_and(|k| k > c.from && k <= c.to);
-        if c.head > 0 {
-            c.tail = qbar::VALUE_TAIL;
-        }
-        if !c.icon {
-            continue;
-        }
-        let field = c.field.to_string();
-        c.tip = field_tip(cat, &field).into();
-        let label = head_label(cat, &field);
-        let name_w = if label.is_empty() {
-            0.0
-        } else {
-            qbar::HEAD_JOIN + width_of(qb, &label, false)
-        };
-        c.label = label.into();
-        c.head_w = qbar::HEAD_LEAD
-            + qbar::HEAD_PIC
-            + name_w
-            + qbar::HEAD_TRAIL
-            + qbar::HEAD_ROOM
-            + if c.tone == 2 { qbar::NOT_W } else { 0.0 };
-        let held = (c.len - c.head).max(0);
-        if c.tone == 3 && c.whole && held == 0 {
-            let hint = head_hint(cat, &field);
-            c.tail = width_of(qb, &hint, true) + qbar::VALUE_TAIL + 10.0;
-            c.hint = hint.into();
-        } else if c.edit {
-            c.tail = (qbar::WELL_MIN - held as f32 * adv).max(qbar::VALUE_TAIL);
-        } else if c.whole
-            && held as usize == c.raw.chars().count()
-            && let Some(nice) = friendly(cat, &field, c.raw.as_str())
-        {
-            c.nice_w = width_of(qb, &nice, true);
-            c.nice = nice.into();
-        }
-    }
     if qb.asked.len() != asked_before {
         let rows: Vec<crate::QMeasure> = qb
             .asked
             .iter()
-            .map(|(text, big)| crate::QMeasure {
+            .map(|(text, face)| crate::QMeasure {
                 text: text.as_str().into(),
-                big: *big,
+                face: *face,
             })
             .collect();
         w.set_q_measure(ModelRc::new(VecModel::from(rows)));
     }
-    // Where every column is drawn, now the headers are known.
-    qb.field.advance = w.get_q_advance();
-    qb.field.measure(&caps);
-    // A header's letters are drawn small, and not at all under a picture;
-    // a value said in words is not drawn in letters.
-    for c in caps.iter().filter(|c| c.head > 0) {
-        runs = carve(runs, c.line, c.at, c.at + c.head, (!c.icon).then_some(true));
-        if !c.nice.is_empty() {
-            runs = carve(runs, c.line, c.at + c.head, c.at + c.len, None);
-        }
-    }
     let field = &qb.field;
-    for r in &mut runs {
-        r.x = field.x(r.line as usize, r.at);
-    }
-    for c in &mut caps {
-        let l = c.line as usize;
-        c.x = field.x(l, c.at);
-        c.w = field.x(l, c.at + c.len) - c.x;
-        c.hw = field.x(l, c.at + c.head) - c.x;
-        // An empty filter's room is past its header, not part of it.
-        if c.len == c.head {
-            c.hw -= c.tail;
-        }
-    }
     // The caret at the end of the filter being written stands after its last
     // letter, not after the room the well keeps open.
     let caret_x = field.x(line.max(0) as usize, col)
@@ -375,8 +200,9 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     for sl in &mut sels {
         let l = sl.line as usize;
         sl.x = field.x(l, sl.at);
-        sl.w = field.x(l, sl.at + sl.len) - sl.x;
+        sl.w = (field.x(l, sl.at + sl.len) - sl.x).max(0.0);
     }
+    let caret_x = crate::qlay::caret_x(qb, &text, qb.cursor).unwrap_or(caret_x);
     w.set_caret_x(caret_x);
     // The caret in the term the pointer is on: it is being written.
     let writing = qb.hover.as_ref().is_some_and(|h| {
@@ -385,6 +211,7 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     w.set_hov_edit(writing);
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
+    w.set_q_bits(ModelRc::new(VecModel::from(bits)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));
     w.set_q_shown(qb.field.shown() as i32);
     w.set_q_first(qb.field.first as i32);
@@ -473,7 +300,13 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
         })
         .collect();
     let counted = o.items.iter().any(|i| i.count || i.n.is_some());
-    let (line, col) = qb.field.start_of(&text, o.a);
+    // A member of a place group: the lens hangs from the whole capsule.
+    let from = qb
+        .groups
+        .iter()
+        .find(|g| g.0 <= o.a && o.a <= g.1)
+        .map_or(o.a, |g| g.0);
+    let (line, col) = qb.field.start_of(&text, from);
     w.set_lens_rows(ModelRc::new(VecModel::from(rows)));
     w.set_lens_sel(o.sel as i32);
     w.set_lens_title(o.title.as_str().into());
@@ -1027,7 +860,30 @@ fn apply_frame_edit(w: &MainWindow, s: &Rc<RefCell<State>>, next: (String, usize
     true
 }
 
+/// Backspace or Delete at a part of a place group drawn whole: the part goes.
+fn group_key(w: &MainWindow, s: &Rc<RefCell<State>>, back: bool) -> bool {
+    let text = w.get_query().to_string();
+    let next = {
+        let st = s.borrow();
+        let c = st.qb.cursor.min(text.len());
+        if st.qb.anchor != c || !st.qb.groups.iter().any(|g| g.0 <= c && c <= g.1) {
+            return false;
+        }
+        let tiles = crate::qplace::tiles(&st.qb.disks, &st.qb.sources);
+        let caps = lens::place_caps(&text, &home(), &tiles, Some(c));
+        if back {
+            crate::qgroup::backspace(&text, &home(), &caps, c)
+        } else {
+            crate::qgroup::delete(&text, &home(), &caps, c)
+        }
+    };
+    next.is_some_and(|next| apply_frame_edit(w, s, next))
+}
+
 fn frame_backspace(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
+    if group_key(w, s, true) {
+        return true;
+    }
     let text = w.get_query().to_string();
     let (anchor, c, spans) = {
         let st = s.borrow();
@@ -1041,6 +897,9 @@ fn frame_backspace(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
 }
 
 fn frame_delete(w: &MainWindow, s: &Rc<RefCell<State>>) -> bool {
+    if group_key(w, s, false) {
+        return true;
+    }
     let text = w.get_query().to_string();
     let (anchor, c, spans) = {
         let st = s.borrow();
@@ -1085,6 +944,10 @@ fn drop_launcher(w: &MainWindow, s: &Rc<RefCell<State>>) {
 fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
     let text = w.get_query().to_string();
     if t.end > text.len() {
+        return;
+    }
+    if let Some((query, caret)) = crate::qgroup::whole(&text, t, what) {
+        write(w, state, query, caret);
         return;
     }
     let raw = &text[t.start..t.end];
@@ -1136,8 +999,13 @@ pub fn wire(
         let (state, redraw) = (Rc::clone(state), redraw.clone());
         let state2 = Rc::clone(&state);
         window.on_q_col(move |line, x, round| state2.borrow().qb.field.col_at(line, x, round));
-        window.on_q_cols(move |n| {
-            state.borrow_mut().qb.field.cols = n.max(8) as usize;
+        window.on_q_room(move |room| {
+            let mut st = state.borrow_mut();
+            if (st.qb.field.room - room).abs() < 0.5 {
+                return;
+            }
+            st.qb.field.room = room;
+            drop(st);
             redraw(Lensing::Keep);
         });
     }
@@ -1200,6 +1068,24 @@ pub fn wire(
             let found = (line >= 0)
                 .then(|| state.borrow().qb.field.term_at(&text, line, col))
                 .flatten();
+            // A member of a place group: the pill acts on the whole group.
+            let found = found.map(|(t, eline, ecol)| {
+                let st = state.borrow();
+                match st.qb.groups.iter().find(|g| g.0 <= t.start && t.end <= g.1) {
+                    Some((a, b, l)) => (
+                        lens::Term {
+                            start: *a,
+                            end: *b,
+                            not: false,
+                            field: Some("under"),
+                            value: String::new(),
+                        },
+                        l.line as i32 - st.qb.field.first as i32,
+                        (l.at + l.len) as i32,
+                    ),
+                    None => (t, eline, ecol),
+                }
+            });
             let Some((t, eline, ecol)) = found else {
                 if w.get_hov_on() {
                     w.set_hov_on(false);
@@ -1577,11 +1463,7 @@ pub fn picked_folder(
     let a = a.min(text.len());
     let b = b.min(text.len()).max(a);
     let shown = qlens::home_path(&home(), &path);
-    let quoted = if shown.chars().any(char::is_whitespace) {
-        format!("\"{shown}\"")
-    } else {
-        shown
-    };
+    let quoted = crate::placeact::quote(shown);
     let tail = if !text[b..].starts_with(char::is_whitespace) {
         " "
     } else {
