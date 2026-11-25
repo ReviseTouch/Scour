@@ -169,3 +169,108 @@ fn a_selection_names_the_bars_it_was_drawn_from() {
     let sum: u64 = h.bars[s.first..=s.last].iter().map(|b| b.count).sum();
     assert_eq!(sum, 3, "today and the seventh day, not the eighth");
 }
+
+#[test]
+fn a_value_shows_on_every_scale_it_lines_up_with() {
+    let on = time_bars_on;
+    assert_eq!(
+        on("7d", Scale::Week),
+        Some(sel(Scale::Week, Mode::Between, 25, 25))
+    );
+    assert_eq!(
+        on("7d", Scale::Day),
+        Some(sel(Scale::Day, Mode::Between, 23, 29))
+    );
+    assert_eq!(on("7d", Scale::Month), None);
+    assert_eq!(
+        on("14d", Scale::Week),
+        Some(sel(Scale::Week, Mode::Between, 24, 25))
+    );
+    assert_eq!(on("3d", Scale::Week), None);
+    assert_eq!(
+        on("1y", Scale::Year),
+        Some(sel(Scale::Year, Mode::Between, 9, 9))
+    );
+    assert_eq!(on("1y", Scale::Day), None, "past the day scale's 30 bars");
+    assert_eq!(
+        on("<2w", Scale::Day),
+        Some(sel(Scale::Day, Mode::Before, 0, 15))
+    );
+    assert_eq!(
+        on("4w..1w", Scale::Day),
+        Some(sel(Scale::Day, Mode::Between, 2, 22))
+    );
+    assert_eq!(
+        on(">1m", Scale::Day),
+        Some(sel(Scale::Day, Mode::After, 0, 29))
+    );
+    assert_eq!(on("2026-11-03", Scale::Day), None);
+    for v in ["7d", "4w..1w", "<3m", ">2y", "60d", "today"] {
+        let s = time_pick(v).unwrap().selected.unwrap();
+        assert_eq!(on(v, s.scale), Some(s), "{v}");
+    }
+}
+
+/// Before and After turn about the run's older edge; Between keeps it.
+#[test]
+fn switching_the_mode_turns_about_the_run_s_older_edge() {
+    let dm = t("dm:");
+    let run = sel(Scale::Day, Mode::Between, 20, 25);
+    let (before, term) = time_remode(&dm, run, Mode::Before).unwrap();
+    assert_eq!(
+        (before, term.as_str()),
+        (sel(Scale::Day, Mode::Before, 0, 19), "dm:<10d")
+    );
+    let (after, term) = time_remode(&dm, run, Mode::After).unwrap();
+    assert_eq!(
+        (after, term.as_str()),
+        (sel(Scale::Day, Mode::After, 20, 29), "dm:>10d")
+    );
+    assert_eq!(time_remode(&dm, before, Mode::After).unwrap().0, after);
+    assert_eq!(time_remode(&dm, after, Mode::Before).unwrap().0, before);
+    let back = time_remode(&dm, before, Mode::Between).unwrap();
+    assert_eq!(
+        back,
+        (sel(Scale::Day, Mode::Between, 0, 19), "dm:30d..10d".into())
+    );
+    assert_eq!(time_remode(&dm, run, Mode::Between).unwrap().0, run);
+    for (s, _) in [
+        time_remode(&dm, run, Mode::Before),
+        time_remode(&dm, run, Mode::After),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let term = time_term(&dm, s);
+        assert_eq!(
+            time_pick(&t(&term).value).unwrap().selected,
+            Some(s),
+            "{term}"
+        );
+    }
+}
+
+#[test]
+fn switching_the_mode_of_a_run_at_either_end_of_the_axis() {
+    let dm = t("!dm:");
+    let now = sel(Scale::Day, Mode::Between, 23, 29);
+    assert_eq!(time_remode(&dm, now, Mode::After).unwrap().1, "!dm:>7d");
+    assert_eq!(time_remode(&dm, now, Mode::Before).unwrap().1, "!dm:<7d");
+    let oldest = sel(Scale::Day, Mode::Between, 0, 5);
+    assert_eq!(
+        time_remode(&dm, oldest, Mode::Before),
+        None,
+        "nothing older on the axis"
+    );
+    let all = sel(Scale::Day, Mode::Before, 0, 29);
+    assert_eq!(
+        time_term(&dm, all),
+        "",
+        "a Before covering every bar is no filter"
+    );
+    assert_eq!(
+        time_remode(&dm, all, Mode::After),
+        None,
+        "nothing newer than now"
+    );
+}

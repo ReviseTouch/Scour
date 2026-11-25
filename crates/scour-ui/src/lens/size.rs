@@ -61,6 +61,12 @@ pub fn size_preset_of(text: &str, t: &Term) -> Option<usize> {
         .position(|p| p.term.strip_prefix("size:") == Some(v.as_str()))
 }
 
+/// What a size capsule says: its preset's msgid, "Empty" for `empty:` and
+/// `bos:`; `None` for any other value. A negated one is struck by the face.
+pub fn size_said(text: &str, t: &Term) -> Option<&'static str> {
+    size_preset_of(text, t).map(|i| SIZE_PRESETS[i].label)
+}
+
 /// The query each preset is counted with, in [`SIZE_PRESETS`] order: the
 /// query less its size terms (`empty:` among them), and the preset.
 pub fn size_counts(text: &str) -> Vec<String> {

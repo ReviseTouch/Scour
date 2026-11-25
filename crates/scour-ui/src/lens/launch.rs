@@ -94,9 +94,14 @@ pub const LAUNCH: &[Filter] = &[
     ),
 ];
 
-/// The filter a field belongs to: `parent:` is listed as the place it is.
+/// The filter a field belongs to: `parent:` is listed as the place it is,
+/// `empty:` as the size.
 pub fn filter_of(field: &str) -> Option<&'static Filter> {
-    let key = if field == "parent" { "under" } else { field };
+    let key = match field {
+        "parent" => "under",
+        "empty" => "size",
+        f => f,
+    };
     LAUNCH.iter().find(|f| f.field == key)
 }
 

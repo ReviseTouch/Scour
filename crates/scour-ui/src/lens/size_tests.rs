@@ -1,5 +1,5 @@
 use super::*;
-use crate::lens::{SIZES, term_at};
+use crate::lens::{Lens, SIZES, bands, launch, lens_of, term_at};
 
 fn t(q: &str) -> Term {
     term_at(q, q.len()).unwrap()
@@ -64,4 +64,25 @@ fn each_preset_is_counted_over_the_query_less_its_size_terms() {
         size_counts("size:<1kb|rapor ext:pdf")[1],
         "ext:pdf size:<100kb"
     );
+}
+
+/// The service reads `empty:` and `bos:`, any case; not `boş:` (a name).
+#[test]
+fn an_empty_term_opens_the_size_lens_and_says_empty() {
+    for q in ["empty:", "bos:", "BOS:", "Empty:", "!empty:", "rapor !bos:"] {
+        let term = t(q);
+        assert_eq!(lens_of(q, &term), Some(Lens::Size), "{q}");
+        assert_eq!(size_said(q, &term), Some("Empty"), "{q}");
+    }
+    assert_eq!(lens_of("boş:", &t("boş:")), None);
+    assert_eq!(size_said("size:>1gb", &t("size:>1gb")), Some("over 1 GB"));
+    assert_eq!(size_said("size:>0", &t("size:>0")), None);
+    // An older face writing the bands of `lens::bands` on `empty:` writes size.
+    assert_eq!(bands(&t("!empty:"), SIZES)[0].term, "!size:<100kb");
+    let held: Vec<String> = launch("rapor empty: :", ":", |m| m.to_string())
+        .into_iter()
+        .filter(|s| s.held)
+        .map(|s| s.choice.term)
+        .collect();
+    assert_eq!(held, ["size:"]);
 }

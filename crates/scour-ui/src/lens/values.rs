@@ -3,7 +3,7 @@
 //! terms, `kind:doc !kind:build`; a value is in one or the other, never both.
 
 use super::group::{remove_term, runs};
-use super::rest::{field_terms, without_field};
+use super::rest::{appended, field_terms, without_field};
 use super::{Choice, KINDS, Term, neg, replace};
 
 /// The kinds as tiles, in [`KINDS`] order, with the msgids that name them
@@ -144,15 +144,8 @@ pub fn value_toggle(text: &str, field: &str, value: &str, exclude: bool) -> (Str
             replace(&text, &t, &written(&text, &t, &vs))
         }
         None => {
-            let gap = if text.trim().is_empty() || text.ends_with(' ') {
-                ""
-            } else {
-                " "
-            };
             let bang = if exclude { "!" } else { "" };
-            let out = format!("{}{gap}{bang}{field}:{value}", text.trim_end());
-            let caret = out.len();
-            (out, caret)
+            appended(&text, &format!("{bang}{field}:{value}"))
         }
     }
 }

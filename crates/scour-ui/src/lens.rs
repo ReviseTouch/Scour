@@ -15,6 +15,7 @@ mod launch;
 mod machine;
 mod negate;
 mod rest;
+mod settle;
 mod size;
 mod split;
 mod spots;
@@ -29,6 +30,7 @@ pub use group::*;
 pub use launch::*;
 pub use negate::*;
 pub use rest::*;
+pub use settle::*;
 pub use size::*;
 pub use split::*;
 pub use spots::*;
@@ -83,6 +85,7 @@ const SPELLINGS: &[(&str, &[&str])] = &[
     ("parent", &["parent", "child", "children"]),
     ("dm", &["dm", "modified"]),
     ("size", &["size"]),
+    ("empty", &["empty", "bos"]),
     ("kind", &["kind", "type", "tur", "tür"]),
     ("ext", &["ext"]),
     ("content", &["content", "text", "icerik", "içerik"]),
@@ -181,7 +184,7 @@ pub fn lens_of(text: &str, t: &Term) -> Option<Lens> {
     match t.field {
         Some("under" | "parent") => Some(Lens::Place),
         Some("dm") => Some(Lens::Time),
-        Some("size") => Some(Lens::Size),
+        Some("size" | "empty") => Some(Lens::Size),
         Some("kind") => Some(Lens::Kind),
         Some("ext") => Some(Lens::Ext),
         Some("content") => Some(Lens::Content),
@@ -279,7 +282,10 @@ pub const SIZES: &[(&str, &str)] = &[
 
 /// The choices of a band lens: one term per band, the field as it was typed.
 pub fn bands(t: &Term, bands: &[(&str, &str)]) -> Vec<Choice> {
-    let field = t.field.unwrap_or("dm");
+    let field = match t.field {
+        Some("empty") => "size",
+        f => f.unwrap_or("dm"),
+    };
     bands
         .iter()
         .map(|(v, l)| Choice::new(l, v, format!("{}{field}:{v}", neg(t))))

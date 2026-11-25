@@ -51,26 +51,67 @@ pub fn time_term(t: &Term, s: Selected) -> String {
     format!("{}dm:{v}", neg(t))
 }
 
+/// The run a switch to `mode` leaves on the same scale, and its term in
+/// place of `t`. Before and After turn about the run's older edge: Before
+/// is what is older than the run, After the run and all that is newer;
+/// Between keeps the bars shown. `None` when nothing would be left on the
+/// axis. Touching now, Between writes a window (`dm:7d`), After the same
+/// rows as `dm:>7d`, and a Before covering every bar writes nothing.
+pub fn time_remode(t: &Term, s: Selected, mode: Mode) -> Option<(Selected, String)> {
+    let n = s.scale.bars();
+    let (first, last) = match (s.mode, mode) {
+        (a, b) if a == b => (s.first, s.last),
+        (_, Mode::Between) => (s.first, s.last),
+        (Mode::Before, Mode::After) => (s.last + 1, n - 1),
+        (_, Mode::After) => (s.first, n - 1),
+        (_, Mode::Before) => (0, s.first.checked_sub(1)?),
+    };
+    if first > last || last >= n {
+        return None;
+    }
+    let next = Selected {
+        mode,
+        first,
+        last,
+        ..s
+    };
+    Some((next, time_term(t, next)))
+}
+
 /// Which preset and bars a `dm:` value is; `None` for one the panel cannot
 /// show: a date, `=`, a span that is no whole number of bars, or one past the
 /// scale. `Before` reads back to the run from the oldest bar, `After` to the
-/// run up to now: they write one end only.
+/// run up to now: they write one end only. The bars are on the scale the
+/// value names, else the finest that fits; see [`time_bars_on`].
 pub fn time_pick(value: &str) -> Option<TimePick> {
-    let v = value.trim().to_lowercase();
-    let (cmp, rest) = split_cmp(&v);
-    let (preset, selected) = match (cmp, rest.split_once("..")) {
-        ("", Some(("", hi))) => (None, before(rel(hi)?)),
-        ("", Some((lo, ""))) => window(rel(lo)?, Mode::Between),
-        ("", Some((lo, hi))) => (None, band(rel(lo)?, rel(hi)?)),
-        ("", None) => window(rel(rest)?, Mode::Between),
-        (">" | ">=", None) => window(rel(rest)?, Mode::After),
-        ("<" | "<=", None) => (None, before(rel(rest)?)),
-        _ => return None,
-    };
+    let (preset, selected) = pick(value, None)?;
     (preset.is_some() || selected.is_some()).then_some(TimePick { preset, selected })
 }
 
-fn window(r: Rel, mode: Mode) -> (Option<usize>, Option<Selected>) {
+/// The bars a `dm:` value covers on `scale`, whole bars only, so switching
+/// scales keeps showing the choice where it lines up: `dm:7d` is one bar of
+/// the week scale, `dm:3d` none.
+pub fn time_bars_on(value: &str, scale: Scale) -> Option<Selected> {
+    pick(value, Some(scale))?.1
+}
+
+type Found = (Option<usize>, Option<Selected>);
+
+fn pick(value: &str, only: Option<Scale>) -> Option<Found> {
+    let v = value.trim().to_lowercase();
+    let (cmp, rest) = split_cmp(&v);
+    Some(match (cmp, rest.split_once("..")) {
+        ("", Some(("", hi))) => (None, before(rel(hi)?, only)),
+        ("", Some((lo, ""))) => window(rel(lo)?, Mode::Between, only),
+        ("", Some((lo, hi))) => (None, band(rel(lo)?, rel(hi)?, only)),
+        ("", None) => window(rel(rest)?, Mode::Between, only),
+        (">" | ">=", None) => window(rel(rest)?, Mode::After, only),
+        ("<" | "<=", None) => (None, before(rel(rest)?, only)),
+        _ => return None,
+    })
+}
+
+fn window(r: Rel, mode: Mode, only: Option<Scale>) -> Found {
     let preset = (mode == Mode::Between)
         .then(|| {
             TIME_PRESETS
@@ -78,7 +119,7 @@ fn window(r: Rel, mode: Mode) -> (Option<usize>, Option<Selected>) {
                 .position(|p| rel(p.value).is_some_and(|q| q.secs() == r.secs()))
         })
         .flatten();
-    let selected = fit(&[r], |n, b| (1..=b).contains(&n[0])).map(|(scale, n)| {
+    let selected = fit(&[r], only, |n, b| (1..=b).contains(&n[0])).map(|(scale, n)| {
         let b = scale.bars();
         Selected {
             scale,
@@ -90,8 +131,8 @@ fn window(r: Rel, mode: Mode) -> (Option<usize>, Option<Selected>) {
     (preset, selected)
 }
 
-fn band(older: Rel, newer: Rel) -> Option<Selected> {
-    let (scale, n) = fit(&[older, newer], |n, b| n[0] > n[1] && n[0] <= b)?;
+fn band(older: Rel, newer: Rel, only: Option<Scale>) -> Option<Selected> {
+    let (scale, n) = fit(&[older, newer], only, |n, b| n[0] > n[1] && n[0] <= b)?;
     let b = scale.bars();
     Some(Selected {
         scale,
@@ -101,8 +142,8 @@ fn band(older: Rel, newer: Rel) -> Option<Selected> {
     })
 }
 
-fn before(r: Rel) -> Option<Selected> {
-    let (scale, n) = fit(&[r], |n, b| n[0] >= 1 && n[0] < b)?;
+fn before(r: Rel, only: Option<Scale>) -> Option<Selected> {
+    let (scale, n) = fit(&[r], only, |n, b| n[0] >= 1 && n[0] < b)?;
     Some(Selected {
         scale,
         mode: Mode::Before,
@@ -111,9 +152,14 @@ fn before(r: Rel) -> Option<Selected> {
     })
 }
 
-/// The scale the amounts are whole bars of and fit: the unit written first
-/// when it is a week, month or year, then the finest that does.
-fn fit(rels: &[Rel], fits: impl Fn(&[u64], u64) -> bool) -> Option<(Scale, Vec<u64>)> {
+/// The scale the amounts are whole bars of and fit: `only`, when given;
+/// else the unit written first when it is a week, month or year, then the
+/// finest that does.
+fn fit(
+    rels: &[Rel],
+    only: Option<Scale>,
+    fits: impl Fn(&[u64], u64) -> bool,
+) -> Option<(Scale, Vec<u64>)> {
     let written = match rels[0].unit {
         Unit::Week => Some(Scale::Week),
         Unit::Month => Some(Scale::Month),
@@ -121,7 +167,11 @@ fn fit(rels: &[Rel], fits: impl Fn(&[u64], u64) -> bool) -> Option<(Scale, Vec<u
         _ => None,
     }
     .filter(|_| rels.iter().all(|r| r.unit == rels[0].unit));
-    written.into_iter().chain(SCALES).find_map(|scale| {
+    let all: Vec<Scale> = match only {
+        Some(s) => vec![s],
+        None => written.into_iter().chain(SCALES).collect(),
+    };
+    all.into_iter().find_map(|scale| {
         let bar = i64::from(scale.days()) * DAY;
         let n: Option<Vec<u64>> = rels
             .iter()

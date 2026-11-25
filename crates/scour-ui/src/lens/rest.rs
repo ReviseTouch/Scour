@@ -39,6 +39,19 @@ pub fn field_terms(text: &str, field: &str) -> Vec<Term> {
         .collect()
 }
 
+/// `term` at the end of `text`, one space before it whatever `text` ends
+/// with, and the caret after it.
+pub(super) fn appended(text: &str, term: &str) -> (String, usize) {
+    let base = text.trim_end();
+    let out = if base.is_empty() {
+        term.to_string()
+    } else {
+        format!("{base} {term}")
+    };
+    let caret = out.len();
+    (out, caret)
+}
+
 /// `rest` and one more term, one space between: a count's query.
 pub fn with_term(rest: &str, term: &str) -> String {
     match (rest.trim(), term.trim()) {
