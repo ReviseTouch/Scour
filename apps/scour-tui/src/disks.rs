@@ -4,7 +4,7 @@
 
 use scour_proto::{Disk, DiskState};
 
-use crate::app::{App, Want};
+use crate::app::{App, Panel, Want};
 
 /// The answers, in the order they are drawn, as the service takes them.
 const ANSWERS: [(&str, &str); 3] = [
@@ -40,10 +40,14 @@ impl App {
         self.answers() + self.disks.len()
     }
 
-    pub fn disks_came(&mut self, disks: Vec<Disk>) {
+    /// The disks came; the place lens, when open, counts any it has not yet.
+    pub fn disks_came(&mut self, disks: Vec<Disk>) -> Want {
         self.disks = disks;
-        self.panel_at = self.panel_at.min(self.disk_lines().saturating_sub(1));
+        if matches!(self.panel, Panel::Disks | Panel::Lens) {
+            self.panel_at = self.panel_at.min(self.panel_lines().saturating_sub(1));
+        }
         self.dirty = true;
+        self.disk_counts()
     }
 
     /// How many wait for an answer, from a status: when that moves, the list.
@@ -113,7 +117,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Panel;
     use scour_proto::{Volume, VolumeKind};
 
     fn disk(id: &str, state: DiskState) -> Disk {

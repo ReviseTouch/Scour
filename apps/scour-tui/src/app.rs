@@ -233,6 +233,17 @@ pub enum Want {
     },
     /// Subfolders of a directory for the Miller Place lens.
     Tree(String),
+    /// The place lens opened on this folder: its subfolders, the disks and
+    /// the sources, for this opening.
+    Place {
+        dir: String,
+        opening: u64,
+    },
+    /// Count the files on these disks, `(id, query)`, for this opening.
+    DiskCounts {
+        opening: u64,
+        asks: Vec<(String, String)>,
+    },
     /// On-demand bounded grep inside matching files.
     Grep {
         generation: u64,

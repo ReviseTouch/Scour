@@ -155,12 +155,18 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             KeyCode::Right | KeyCode::Tab => return app.lens_press(true),
             KeyCode::Left | KeyCode::Backspace if app.v2.place_mode => return app.lens_climb_up(),
             KeyCode::Char('!') if !ctrl && app.v2.place_mode => {
-                app.panel_at = 1;
+                app.panel_at = app.place_line(1);
                 return app.lens_press(false);
             }
             KeyCode::Char('o') if !ctrl && app.v2.place_mode => {
-                app.panel_at = 2;
+                app.panel_at = app.place_line(2);
                 return app.lens_press(false);
+            }
+            // An answer's letter, while the cursor is on that disk's answers.
+            KeyCode::Char(c) if !ctrl && app.v2.place_mode => {
+                if let Some(want) = app.disk_key(c) {
+                    return want;
+                }
             }
             _ => {}
         }

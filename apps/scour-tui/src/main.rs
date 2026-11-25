@@ -209,7 +209,7 @@ fn snap(
                 builtin,
                 off,
             })) => state.ruled(added, config, builtin, off),
-            Ok(Beat::Reply(Got::Disks(disks))) => state.disks_came(disks),
+            Ok(Beat::Reply(Got::Disks(disks))) => act(state.disks_came(disks), link),
             // A picture of a machine with no service running shows the same
             // line the interactive loop would.
             Ok(Beat::Reply(Got::Booting)) => state.booting(),
@@ -441,7 +441,13 @@ fn run(
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
-            Beat::Reply(Got::Disks(disks)) => state.disks_came(disks),
+            Beat::Reply(Got::Disks(disks)) => act(state.disks_came(disks), link),
+            Beat::Reply(Got::Sources { opening, sources }) => {
+                act(state.sources_came(opening, sources), link);
+            }
+            Beat::Reply(Got::DiskCounted { opening, id, total }) => {
+                state.disk_counted(opening, &id, total);
+            }
             Beat::Reply(Got::Hotkey {
                 desktop,
                 key,
@@ -552,7 +558,13 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
-            Beat::Reply(Got::Disks(disks)) => state.disks_came(disks),
+            Beat::Reply(Got::Disks(disks)) => act(state.disks_came(disks), link),
+            Beat::Reply(Got::Sources { opening, sources }) => {
+                act(state.sources_came(opening, sources), link);
+            }
+            Beat::Reply(Got::DiskCounted { opening, id, total }) => {
+                state.disk_counted(opening, &id, total);
+            }
             Beat::Reply(Got::Hotkey {
                 desktop,
                 key,
@@ -708,6 +720,18 @@ fn act(want: Want, link: &Link) {
         Want::Hotkey(deed) => link.later(Ask::Hotkey(deed)),
         Want::Export { query, to } => link.later(Ask::Export { query, to }),
         Want::Tree(path) => link.later(Ask::Tree { path }),
+        // In the lane's order: the folders, then the disks, then the sources
+        // the disks are read against.
+        Want::Place { dir, opening } => {
+            link.later(Ask::Tree { path: dir });
+            link.later(Ask::Volumes);
+            link.later(Ask::Sources { opening });
+        }
+        Want::DiskCounts { opening, asks } => {
+            for (id, query) in asks {
+                link.later(Ask::DiskCount { opening, id, query });
+            }
+        }
         Want::Grep {
             generation,
             append,

@@ -8,6 +8,8 @@ use scour_ui::lens::{self, Lens};
 use crate::app::{App, Panel, Want};
 use crate::draw::PanelLine;
 
+mod place;
+
 #[derive(Debug, Clone, Default)]
 pub struct V2 {
     pub grep_open: bool,
@@ -26,6 +28,8 @@ pub struct V2 {
     pub lens_items: Vec<(String, String, String, Option<String>)>,
     /// A heading over each item, empty for none: the launcher's groups.
     pub lens_heads: Vec<String>,
+    /// The place lens's disks, above its folders.
+    pub disks: place::Disks,
 }
 
 fn home() -> String {
@@ -37,7 +41,7 @@ pub fn home_form(p: &str) -> String {
 }
 
 fn quote_if(s: &str) -> String {
-    if s.chars().any(char::is_whitespace) {
+    if s.chars().any(|c| c.is_whitespace() || c == '|') {
         format!("\"{s}\"")
     } else {
         s.to_string()
@@ -59,7 +63,8 @@ impl App {
         self.panel = Panel::Lens;
         self.panel_at = 0;
         self.dirty = true;
-        Want::Tree(dir)
+        let opening = self.place_opened();
+        Want::Place { dir, opening }
     }
 
     pub fn open_context_lens(&mut self) -> Want {
@@ -88,13 +93,13 @@ impl App {
             let cur = self.v2.place_dir.clone();
             let shown = home_form(&cur);
             out.push((
-                format!("✓ {} ({shown})", self.say("Include folder")),
+                format!("+ {} ({shown})", self.say("Add")),
                 "Enter".into(),
                 format!("under:{}", quote_if(&shown)),
                 None,
             ));
             out.push((
-                format!("! {} ({shown})", self.say("Exclude folder")),
+                format!("! {} ({shown})", self.say("Exclude")),
                 "!".into(),
                 format!("!under:{}", quote_if(&shown)),
                 None,
@@ -204,8 +209,24 @@ impl App {
         true
     }
 
+    /// How many lines the lens has: the place lens's disks, then its items.
+    pub fn lens_len(&self) -> usize {
+        self.disk_row_count() + self.v2.lens_items.len()
+    }
+
+    /// The line of the place lens's items that is `k`-th after the disks.
+    pub fn place_line(&self, k: usize) -> usize {
+        self.disk_row_count() + k
+    }
+
     pub fn lens_press(&mut self, drill: bool) -> Want {
-        let Some((_, _, term, dir)) = self.v2.lens_items.get(self.panel_at).cloned() else {
+        let disks = self.disk_row_count();
+        if self.panel_at < disks {
+            let row = self.disk_rows(&self.place_tiles())[self.panel_at];
+            return self.disk_press(row, drill);
+        }
+        let at = self.panel_at - disks;
+        let Some((_, _, term, dir)) = self.v2.lens_items.get(at).cloned() else {
             return Want::Nothing;
         };
         if drill && let Some(next_dir) = dir {
@@ -216,28 +237,15 @@ impl App {
             self.dirty = true;
             return Want::Tree(next_dir);
         }
-        if term == "__pick__" {
-            let start = std::path::Path::new(&self.v2.place_dir);
-            if let Some(p) = scour_openers::pick_folder(Some(start)) {
-                let norm = scour_core::path::from_path(std::path::Path::new(&p));
-                self.v2.place_dir = norm.clone();
-                self.query = scour_ui::query::toggle(
-                    &self.query,
-                    &format!("under:{}", quote_if(&home_form(&norm))),
-                );
-                self.caret = self.query.len();
-                self.panel = Panel::None;
-                return self.typed();
-            }
-            return Want::Nothing;
+        if self.v2.place_mode {
+            return self.place_press(at, dir);
         }
-        if !self.v2.place_mode && self.enter_held(&term) {
+        if self.enter_held(&term) {
             self.rebuild_lens();
             return self.typed();
         }
         let c = self.caret.min(self.query.len());
-        if !self.v2.place_mode
-            && let Some(t) = lens::term_at(&self.query, c)
+        if let Some(t) = lens::term_at(&self.query, c)
             && lens::lens_of(&self.query, &t).is_some()
         {
             let (q, caret) = lens::replace(&self.query, &t, &term);
@@ -252,6 +260,33 @@ impl App {
         } else {
             self.rebuild_lens();
         }
+        self.typed()
+    }
+
+    /// Press a folder line of the place lens: "Add" puts the folder into the
+    /// place group, "Exclude" writes `!under:`, any other folder is the only
+    /// place searched. The lens closes on it.
+    fn place_press(&mut self, at: usize, dir: Option<String>) -> Want {
+        let home = home();
+        let here = self.v2.place_dir.clone();
+        let (q, caret) = match (at, dir) {
+            (0, _) => lens::place_toggle(&self.query, &home, &here, lens::Pick::Also),
+            (1, _) => excluded(&self.query, &home, &here),
+            (2, _) => {
+                let start = std::path::Path::new(&here);
+                let Some(p) = scour_openers::pick_folder(Some(start)) else {
+                    return Want::Nothing;
+                };
+                let norm = scour_core::path::from_path(std::path::Path::new(&p));
+                self.v2.place_dir = norm.clone();
+                lens::place_toggle(&self.query, &home, &norm, lens::Pick::Only)
+            }
+            (_, Some(d)) => lens::place_toggle(&self.query, &home, &d, lens::Pick::Only),
+            (_, None) => return Want::Nothing,
+        };
+        self.query = q;
+        self.caret = caret;
+        self.panel = Panel::None;
         self.typed()
     }
 
@@ -271,7 +306,8 @@ impl App {
         Want::Tree(up)
     }
 
-    pub fn lens_panel_lines(&self) -> (String, Vec<PanelLine>) {
+    /// The lens's title and lines; `wide` is the characters a line has.
+    pub fn lens_panel_lines(&self, wide: usize) -> (String, Vec<PanelLine>) {
         let title = if self.v2.place_mode {
             format!(
                 "{} · {}",
@@ -285,23 +321,30 @@ impl App {
                 sparkline_bar(&self.strip)
             )
         };
-        let lines = self
-            .v2
-            .lens_items
-            .iter()
-            .enumerate()
-            .map(|(at, (lbl, key, _, _))| {
-                let head = self.v2.lens_heads.get(at).cloned().unwrap_or_default();
-                PanelLine {
-                    text: lbl.clone(),
-                    key: key.clone(),
-                    dimmed: false,
-                    careful: lbl.starts_with('!'),
-                    rule: !head.is_empty(),
-                    head,
-                }
-            })
-            .collect();
+        let mut lines = match self.v2.place_mode {
+            true => self.disk_list_lines(wide),
+            false => Vec::new(),
+        };
+        let disks = lines.len();
+        lines.extend(
+            self.v2
+                .lens_items
+                .iter()
+                .enumerate()
+                .map(|(at, (lbl, key, _, _))| {
+                    let head = self.v2.lens_heads.get(at).cloned().unwrap_or_default();
+                    PanelLine {
+                        text: lbl.clone(),
+                        key: key.clone(),
+                        dimmed: false,
+                        careful: lbl.starts_with('!'),
+                        // The folders under a rule of their own, below the disks.
+                        rule: !head.is_empty() || (at == 0 && disks > 0),
+                        head,
+                        mark: None,
+                    }
+                }),
+        );
         (title, lines)
     }
 
@@ -407,6 +450,26 @@ impl App {
     }
 }
 
+/// The query with `!under:` this folder, or without it when it is there.
+fn excluded(text: &str, home: &str, dir: &str) -> (String, usize) {
+    let path = scour_ui::path::untrailed(dir);
+    if let Some(h) = lens::scope(text, home)
+        .outside
+        .into_iter()
+        .find(|h| h.path == path)
+    {
+        return lens::remove_term(text, &h.term);
+    }
+    let gap = match text.is_empty() || text.ends_with(char::is_whitespace) {
+        true => "",
+        false => " ",
+    };
+    let shown = scour_ui::path::home_form(home, path);
+    let out = format!("{text}{gap}!under:{}", quote_if(&shown));
+    let caret = out.len();
+    (out, caret)
+}
+
 pub fn sparkline_bar(strip: &[(u32, u64)]) -> String {
     const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     if strip.is_empty() {
@@ -436,7 +499,7 @@ mod tests {
         let mut app = App::default();
         let want = app.open_place_lens();
         assert_eq!(app.panel, Panel::Lens);
-        assert!(matches!(want, Want::Tree(_)));
+        assert!(matches!(want, Want::Place { opening: 1, .. }));
 
         app.v2.place_dir = "/home/demo/Projeler".into();
         app.tree_landed(
@@ -504,7 +567,7 @@ mod tests {
             ..Default::default()
         };
         app.open_context_lens();
-        let (_, lines) = app.lens_panel_lines();
+        let (_, lines) = app.lens_panel_lines(60);
         let heads: Vec<&str> = lines.iter().map(|l| l.head.as_str()).collect();
         assert_eq!(heads, ["Narrow", "", "", "", "", "How it searches", ""]);
         assert!(
@@ -516,7 +579,7 @@ mod tests {
 
         // A press lands on the line drawn there, not on the heading above it.
         let area = ratatui::layout::Rect::new(0, 0, 100, 40);
-        let top = crate::draw::panel_rect(area, lines.len() + 2).y + 2;
+        let top = crate::draw::panel_rect(&app, area, lines.len() + 2).y + 2;
         assert_eq!(crate::draw::panel_line_at(&app, area, 50, top), None);
         assert_eq!(crate::draw::panel_line_at(&app, area, 50, top + 1), Some(0));
         assert_eq!(crate::draw::panel_line_at(&app, area, 50, top + 6), None);

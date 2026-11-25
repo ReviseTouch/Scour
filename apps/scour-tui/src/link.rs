@@ -91,6 +91,17 @@ pub enum Ask {
     OffRules(Vec<String>),
     /// The disks, and what each is.
     Volumes,
+    /// The sources and their roots, for this opening of the place lens.
+    Sources {
+        opening: u64,
+    },
+    /// The files on one disk, for this opening of the place lens: no
+    /// generation of the query's, so typing neither drops it nor is dropped.
+    DiskCount {
+        opening: u64,
+        id: String,
+        query: String,
+    },
     /// An answer about a disk: `index`, `leave` or `later`.
     Disk {
         volume: String,
@@ -179,6 +190,17 @@ pub enum Got {
     },
     /// The disks, for the panel and the question.
     Disks(Vec<scour_proto::Disk>),
+    /// The sources, by name and roots, for an opening of the place lens.
+    Sources {
+        opening: u64,
+        sources: Vec<(String, Vec<String>)>,
+    },
+    /// The files on one disk, for an opening of the place lens.
+    DiskCounted {
+        opening: u64,
+        id: String,
+        total: u64,
+    },
     /// Exactly how many match.
     Counted {
         generation: u64,
@@ -464,6 +486,11 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
         // The report asks the same question over its own scope; the answer
         // goes to the report's block, not to the rail.
         let for_report = matches!(ask, Ask::Kinds { .. });
+        let for_place = match &ask {
+            Ask::Sources { opening } => Some((*opening, String::new())),
+            Ask::DiskCount { opening, id, .. } => Some((*opening, id.clone())),
+            _ => None,
+        };
         let request = match ask {
             Ask::Search {
                 query,
@@ -528,6 +555,8 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             },
             Ask::Rules => Request::Rules {},
             Ask::Volumes => Request::Volumes {},
+            Ask::Sources { .. } => Request::Sources {},
+            Ask::DiskCount { query, .. } => count_all(query),
             Ask::Disk { volume, what } => match what.as_str() {
                 "later" => Request::Postpone { volume },
                 how => Request::Choose {
@@ -685,8 +714,19 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Ok(Response::Explain { spans, .. }) => {
                 let _ = out.send(Got::Explained { generation, spans });
             }
-            Ok(Response::Count { total, .. }) => {
-                let _ = out.send(Got::Counted { generation, total });
+            Ok(Response::Count { total, .. }) => match for_place {
+                Some((opening, id)) => {
+                    let _ = out.send(Got::DiskCounted { opening, id, total });
+                }
+                None => {
+                    let _ = out.send(Got::Counted { generation, total });
+                }
+            },
+            Ok(Response::Sources { sources }) => {
+                let _ = out.send(Got::Sources {
+                    opening: for_place.map_or(0, |p| p.0),
+                    sources: sources.into_iter().map(|s| (s.name, s.roots)).collect(),
+                });
             }
             Ok(Response::Status(st)) => {
                 let _ = out.send(Got::Awake(

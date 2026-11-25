@@ -449,7 +449,7 @@ impl App {
             // The two rules, a line a folder, and the one that adds.
             Panel::Later => 3 + self.folders.len(),
             Panel::Searching => 2,
-            Panel::Lens => self.v2.lens_items.len(),
+            Panel::Lens => self.lens_len(),
             Panel::Keys | Panel::About | Panel::None => 0,
         }
     }

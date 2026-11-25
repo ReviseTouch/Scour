@@ -117,7 +117,6 @@ impl Theme {
     }
 
     /// The colour a disk of this kind is drawn in, by the wire's name.
-    #[allow(dead_code, reason = "for the place lens's disk list, still to come")]
     pub fn disk(&self, kind: &str) -> Color {
         self.of(scour_ui::disk_colour(self.palette, kind))
     }

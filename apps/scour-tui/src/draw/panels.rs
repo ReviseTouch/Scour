@@ -19,6 +19,17 @@ pub struct PanelLine {
     pub rule: bool,
     /// Said on the rule's row in place of the rule: a group's heading.
     pub head: String,
+    /// One character of the text drawn in a disk's colour.
+    pub mark: Option<Mark>,
+}
+
+/// A character of a panel line drawn in the colour of a disk kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    /// Which character of the text, counted in characters.
+    pub at: usize,
+    /// The disk kind, as the wire names it.
+    pub kind: &'static str,
 }
 
 impl From<(String, bool)> for PanelLine {
@@ -30,13 +41,20 @@ impl From<(String, bool)> for PanelLine {
             careful: false,
             rule: false,
             head: String::new(),
+            mark: None,
         }
     }
 }
 
-/// How wide a panel is on a screen this wide.
-fn panel_width(area: Rect) -> u16 {
-    66u16.min(area.width.saturating_sub(4))
+/// How wide a panel is on a screen this wide. The place lens is a table of
+/// disks — name, root, state, count — and takes more.
+fn panel_width(app: &App, area: Rect) -> u16 {
+    let most = if app.panel == Panel::Lens && app.v2.place_mode {
+        86
+    } else {
+        66
+    };
+    most.min(area.width.saturating_sub(4))
 }
 
 /// A sentence over as many lines as it takes. A panel line wider than the box
@@ -71,8 +89,8 @@ pub(super) fn wrapped(text: &str, wide: usize, dimmed: bool) -> Vec<PanelLine> {
 
 /// Where a panel of this many lines is drawn. One function, two callers — this
 /// and the mouse — because a panel hit-tested elsewhere drifts from where it is.
-pub fn panel_rect(area: Rect, lines: usize) -> Rect {
-    let wide = panel_width(area);
+pub fn panel_rect(app: &App, area: Rect, lines: usize) -> Rect {
+    let wide = panel_width(app, area);
     let tall = (lines as u16 + 3).min(area.height.saturating_sub(2));
     Rect {
         x: area.x + area.width.saturating_sub(wide) / 2,
@@ -124,6 +142,7 @@ pub(super) fn panel_content(
                         careful: false,
                         rule,
                         head: String::new(),
+                        mark: None,
                     })
                     .collect(),
             )
@@ -153,6 +172,7 @@ pub(super) fn panel_content(
                         careful: false,
                         rule: false,
                         head: String::new(),
+                        mark: None,
                     },
                     PanelLine {
                         text: app.say("Remove").into_owned(),
@@ -161,6 +181,7 @@ pub(super) fn panel_content(
                         careful: true,
                         rule: false,
                         head: String::new(),
+                        mark: None,
                     },
                 ];
                 let below = if app.key_note.is_empty() {
@@ -219,6 +240,7 @@ pub(super) fn panel_content(
                     careful: m.careful,
                     rule: m.rule,
                     head: String::new(),
+                    mark: None,
                 })
                 .collect(),
         ),
@@ -237,6 +259,7 @@ pub(super) fn panel_content(
                         careful: false,
                         rule: false,
                         head: String::new(),
+                        mark: None,
                     }
                 })
                 .chain(std::iter::once(PanelLine {
@@ -246,6 +269,7 @@ pub(super) fn panel_content(
                     careful: false,
                     rule: true,
                     head: String::new(),
+                    mark: None,
                 }))
                 .collect(),
         ),
@@ -281,6 +305,7 @@ pub(super) fn panel_content(
                     careful: false,
                     rule: false,
                     head: String::new(),
+                    mark: None,
                 },
                 (app.say("Cancel").into_owned(), false).into(),
                 PanelLine {
@@ -290,6 +315,7 @@ pub(super) fn panel_content(
                     careful: true,
                     rule: false,
                     head: String::new(),
+                    mark: None,
                 },
             ],
         ),
@@ -305,6 +331,7 @@ pub(super) fn panel_content(
                     careful: false,
                     rule: at == 3,
                     head: String::new(),
+                    mark: None,
                 })
                 .collect(),
         ),
@@ -322,6 +349,7 @@ pub(super) fn panel_content(
                         careful: false,
                         rule: at == 2 || (folders == 0 && at == 2),
                         head: String::new(),
+                        mark: None,
                     })
                     .collect(),
             )
@@ -338,6 +366,7 @@ pub(super) fn panel_content(
                     careful: false,
                     rule: false,
                     head: String::new(),
+                    mark: None,
                 })
                 .chain([(String::new(), true).into()])
                 .chain(wrapped(
@@ -369,7 +398,7 @@ pub(super) fn panel_content(
             ],
         ),
         Panel::Lens => {
-            let (title, lines) = app.lens_panel_lines();
+            let (title, lines) = app.lens_panel_lines(wrap);
             (title.into(), lines)
         }
         Panel::None => return None,
@@ -382,7 +411,7 @@ pub(super) fn panel_content(
 /// shown, scrolled to keep the cursor on it: the skip list is long.
 fn panel_frame(app: &App, area: Rect, lines: &[PanelLine]) -> (Rect, usize, usize) {
     let rules = lines.iter().filter(|l| l.rule).count();
-    let box_area = panel_rect(area, lines.len() + rules);
+    let box_area = panel_rect(app, area, lines.len() + rules);
     let room = (box_area.height.saturating_sub(3) as usize).saturating_sub(rules);
     let from = app.panel_at.saturating_sub(room.saturating_sub(1));
     (box_area, from, room)
@@ -391,7 +420,7 @@ fn panel_frame(app: &App, area: Rect, lines: &[PanelLine]) -> (Rect, usize, usiz
 /// The line of the open panel drawn at this cell, if it can be pressed: the
 /// drawing's own arithmetic, so a rule or a heading answers to nothing.
 pub fn panel_line_at(app: &App, area: Rect, col: u16, row: u16) -> Option<usize> {
-    let wrap = panel_width(area).saturating_sub(6) as usize;
+    let wrap = panel_width(app, area).saturating_sub(6) as usize;
     let (_, lines) = panel_content(app, wrap)?;
     let (box_area, from, room) = panel_frame(app, area, &lines);
     let inside = col >= box_area.x
@@ -420,7 +449,7 @@ pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
     // The same six the drawing takes off below: the indent, the border and the
     // gap the shortcut sits in.
-    let wrap = panel_width(area).saturating_sub(6) as usize;
+    let wrap = panel_width(app, area).saturating_sub(6) as usize;
     let Some((title, lines)) = panel_content(app, wrap) else {
         return;
     };
@@ -469,21 +498,17 @@ pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 room_for_text.saturating_sub(line.text.chars().count() + line.key.chars().count());
             format!("{}{}{}", line.text, " ".repeat(pad), line.key)
         };
-        drawn.push(
-            Line::from(Span::styled(
-                format!("{}{body}", if on { " ▸ " } else { "   " }),
-                Style::new().fg(if on {
-                    theme.key()
-                } else if line.careful {
-                    theme.danger()
-                } else if *dimmed {
-                    theme.ink_3()
-                } else {
-                    theme.ink_2()
-                }),
-            ))
-            .style(lit),
-        );
+        let ink = Style::new().fg(if on {
+            theme.key()
+        } else if line.careful {
+            theme.danger()
+        } else if *dimmed {
+            theme.ink_3()
+        } else {
+            theme.ink_2()
+        });
+        let body = format!("{}{body}", if on { " ▸ " } else { "   " });
+        drawn.push(Line::from(marked(body, line.mark, ink, theme)).style(lit));
     }
     f.render_widget(
         Paragraph::new(drawn).block(
@@ -493,4 +518,24 @@ pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ),
         box_area,
     );
+}
+
+/// A line's spans: one, or three with the marked character in its disk's
+/// colour. `body` starts with the three columns of the cursor.
+fn marked(body: String, mark: Option<Mark>, ink: Style, theme: &Theme) -> Vec<Span<'static>> {
+    let Some(m) = mark else {
+        return vec![Span::styled(body, ink)];
+    };
+    let chars: Vec<char> = body.chars().collect();
+    let at = (m.at + 3).min(chars.len());
+    let piece = |a: usize, b: usize| {
+        chars[a.min(chars.len())..b.min(chars.len())]
+            .iter()
+            .collect::<String>()
+    };
+    vec![
+        Span::styled(piece(0, at), ink),
+        Span::styled(piece(at, at + 1), ink.fg(theme.disk(m.kind))),
+        Span::styled(piece(at + 1, chars.len()), ink),
+    ]
 }
