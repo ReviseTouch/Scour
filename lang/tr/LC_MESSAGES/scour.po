@@ -2462,8 +2462,8 @@ msgstr "Süzgeç ekle"
 msgid "Type a few letters to narrow it. Enter starts the filter."
 msgstr "Birkaç harfle daralt. Enter süzgeci başlatır."
 
-msgid "below a folder"
-msgstr "bir klasörün altında"
+msgid "which disk, which folder"
+msgstr "hangi diskte, hangi klasörde"
 
 msgid "Type"
 msgstr "Tür"
@@ -2483,8 +2483,14 @@ msgstr "Benzer yazım"
 msgid "one letter off still matches"
 msgstr "bir harf farkla da bulur"
 
-msgid "reads the files"
-msgstr "dosyaları okur"
+msgid "looks inside the file, not at its name"
+msgstr "adına değil, dosyanın içine bakar"
+
+msgid "How it searches"
+msgstr "Arama biçimi"
+
+msgid "in the query"
+msgstr "sorguda"
 
 msgid "When it last changed"
 msgstr "Ne zaman değişti"

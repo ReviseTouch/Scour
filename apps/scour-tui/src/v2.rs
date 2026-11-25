@@ -147,11 +147,11 @@ impl App {
                 }
             }
             _ => {
-                for (f, lbl, about) in lens::LAUNCH {
+                for f in lens::LAUNCH {
                     out.push((
-                        format!("{} ({f})", self.say(lbl)),
-                        self.say(about).into_owned(),
-                        (*f).to_owned(),
+                        format!("{} ({}:)", self.say(f.label), f.field),
+                        self.say(f.about).into_owned(),
+                        format!("{}:", f.field),
                         None,
                     ));
                 }

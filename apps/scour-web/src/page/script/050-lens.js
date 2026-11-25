@@ -21,13 +21,13 @@
     fuzzy: "fuzzy", typo: "fuzzy", benzer: "fuzzy", letters: "letters", harfler: "letters",
   };
   const LENS_LAUNCH = [
-    ["under:", "Location", "below a folder"],
+    ["under:", "Location", "which disk, which folder"],
     ["dm:", "Modified", "when it last changed"],
     ["kind:", "Type", "document, code, image…"],
     ["ext:", "Extension", "pdf, rs, docx…"],
     ["size:", "Size", "how big"],
     ["fuzzy:", "Similar spelling", "one letter off still matches"],
-    ["content:", "Inside", "reads the files"],
+    ["content:", "Inside", "looks inside the file, not at its name"],
   ];
   const LENS_TIMES = [
     ["today", "today"], ["yesterday", "yesterday"], ["7d", "last 7 days"],

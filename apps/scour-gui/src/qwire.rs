@@ -128,27 +128,19 @@ fn send(link: &Link, generation: u64, wants: Vec<(u32, scour_proto::Request)>) {
 /// What a header drawn as a picture stands for: the filter's name in the list
 /// `:` opens, and what it does.
 fn field_tip(cat: &Catalogue, field: &str) -> String {
-    let key = if field == "parent" { "under" } else { field };
-    lens::LAUNCH
-        .iter()
-        .find(|(f, ..)| f.strip_suffix(':') == Some(key))
-        .map_or_else(
-            || format!("{field}:"),
-            |(_, label, hint)| format!("{} — {}", cat.get(label), cat.get(hint)),
-        )
+    lens::filter_of(field).map_or_else(
+        || format!("{field}:"),
+        |f| format!("{} — {}", cat.get(f.label), cat.get(f.about)),
+    )
 }
 
 /// The name a header drawn as a picture carries beside it: the filter's, as
 /// the list `:` opens says it. An ≈ says itself.
 fn head_label(cat: &Catalogue, field: &str) -> String {
-    let key = if field == "parent" { "under" } else { field };
-    if key == "fuzzy" {
+    if field == "fuzzy" {
         return String::new();
     }
-    lens::LAUNCH
-        .iter()
-        .find(|(f, ..)| f.strip_suffix(':') == Some(key))
-        .map_or_else(String::new, |(_, label, _)| cat.get(label).into_owned())
+    lens::filter_of(field).map_or_else(String::new, |f| cat.get(f.label).into_owned())
 }
 
 /// What an empty filter asks for, in the place its value will be.

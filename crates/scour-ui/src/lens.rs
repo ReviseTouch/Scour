@@ -6,6 +6,9 @@
 //! Which lens a term opens is a decision about the window, not a reading of
 //! the query: the service still says what every term means.
 
+mod launch;
+pub use launch::*;
+
 /// A term of the query, by byte offsets into it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Term {
@@ -235,30 +238,6 @@ impl Choice {
             stays: false,
         }
     }
-}
-
-/// The filters `:` starts, as field, msgid and the line that says what it does.
-pub const LAUNCH: &[(&str, &str, &str)] = &[
-    ("under:", "Location", "below a folder"),
-    ("dm:", "Modified", "when it last changed"),
-    ("kind:", "Type", "document, code, image…"),
-    ("ext:", "Extension", "pdf, rs, docx…"),
-    ("size:", "Size", "how big"),
-    ("fuzzy:", "Similar spelling", "one letter off still matches"),
-    ("content:", "Inside", "reads the files"),
-];
-
-/// What `:` and the letters after it offer, matched against the field and
-/// the name a person reads (`name` is the translated label).
-pub fn launch(typed: &str, name: impl Fn(&str) -> String) -> Vec<Choice> {
-    let want = typed.trim_start_matches(':').to_lowercase();
-    LAUNCH
-        .iter()
-        .filter(|(f, l, _)| {
-            want.is_empty() || f.starts_with(&want) || name(l).to_lowercase().starts_with(&want)
-        })
-        .map(|(f, l, about)| Choice::new(l, about, f.to_string()))
-        .collect()
 }
 
 fn neg(t: &Term) -> &'static str {

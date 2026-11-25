@@ -121,23 +121,114 @@ fn bands_and_places_write_whole_terms() {
     assert_eq!(place_parts(""), (String::new(), String::new()));
 }
 
+/// The launcher's labels as the Turkish catalogue says them.
+fn turkish(m: &str) -> String {
+    match m {
+        "Location" => "Konum",
+        "Modified" => "Değişme",
+        "Type" => "Tür",
+        "Extension" => "Uzantı",
+        "Size" => "Boyut",
+        "Similar spelling" => "Benzer yazım",
+        "Inside" => "İçinde",
+        other => other,
+    }
+    .into()
+}
+
 #[test]
 fn the_launcher_narrows_by_field_or_by_name() {
-    let all = launch(":", |m| m.to_string());
+    let all = launch("", ":", |m| m.to_string());
     assert_eq!(all.len(), LAUNCH.len());
-    let d = launch(":d", |m| m.to_string());
+    let d = launch("", ":d", |m| m.to_string());
     assert_eq!(
-        d.iter().map(|c| c.term.as_str()).collect::<Vec<_>>(),
+        d.iter().map(|c| c.choice.term.as_str()).collect::<Vec<_>>(),
         ["dm:"]
     );
-    let tr = launch(":kon", |m| {
-        if m == "Location" {
-            "Konum".into()
-        } else {
-            m.into()
-        }
-    });
-    assert_eq!(tr[0].term, "under:");
+    let tr = launch("", ":kon", turkish);
+    assert_eq!(tr[0].choice.term, "under:");
+    // A capital İ is the i a person types.
+    let tr = launch("", ":iç", turkish);
+    assert_eq!(tr.len(), 1);
+    assert_eq!(tr[0].choice.term, "content:");
+}
+
+#[test]
+fn the_launcher_lists_narrowing_first_then_how_it_searches() {
+    let all = launch("", ":", |m| m.to_string());
+    let fields: Vec<&str> = all.iter().map(|s| s.choice.term.as_str()).collect();
+    assert_eq!(
+        fields,
+        [
+            "under:", "dm:", "kind:", "ext:", "size:", "fuzzy:", "content:"
+        ]
+    );
+    let groups: Vec<Group> = all.iter().map(|s| s.group).collect();
+    assert_eq!(groups[..5], [Group::Narrow; 5]);
+    assert_eq!(groups[5..], [Group::How; 2]);
+    let icons: Vec<&str> = all.iter().map(|s| s.icon).collect();
+    assert_eq!(
+        icons,
+        ["folder", "clock", "shapes", "ext", "size", "approx", "read"]
+    );
+    assert_eq!(Group::Narrow.heading(), "Narrow");
+    assert_eq!(filter_of("parent").map(|f| f.icon), Some("folder"));
+}
+
+#[test]
+fn a_shortcut_is_the_fewest_letters_that_leave_its_line_alone() {
+    let keys = |name: fn(&str) -> String| -> Vec<String> {
+        launch("", ":", name).into_iter().map(|s| s.key).collect()
+    };
+    assert_eq!(
+        keys(|m| m.to_string()),
+        [":l", ":m", ":t", ":e", ":siz", ":f", ":i"]
+    );
+    // `k` is Konum and `kind:` both, `u` is `under:` and Uzantı both.
+    assert_eq!(keys(turkish), [":ko", ":d", ":t", ":e", ":s", ":f", ":i"]);
+    for (s, key) in launch("", ":", turkish).iter().zip(keys(turkish)) {
+        let only = launch("", &key, turkish);
+        assert_eq!(only.len(), 1, "{key}");
+        assert_eq!(only[0].choice.term, s.choice.term, "{key}");
+    }
+}
+
+#[test]
+fn a_filter_the_query_holds_is_marked_whatever_its_spelling() {
+    let held_fields = |q: &str| -> Vec<String> {
+        launch(q, ":", |m| m.to_string())
+            .into_iter()
+            .filter(|s| s.held)
+            .map(|s| s.choice.term)
+            .collect()
+    };
+    assert!(held_fields("rapor :").is_empty());
+    assert_eq!(held_fields("rapor !ext:pdf :"), ["ext:"]);
+    assert_eq!(held_fields("tür:doc : rapor"), ["kind:"]);
+    assert_eq!(held_fields("parent:/srv :"), ["under:"]);
+    assert_eq!(held_fields("İÇERİK:\"a b\" dm:7d"), ["dm:", "content:"]);
+    // The launcher's own letters are not a field.
+    assert!(held_fields(":kind").is_empty());
+}
+
+#[test]
+fn choosing_a_held_filter_takes_the_caret_into_it() {
+    let q = "rapor !ext:pdf :";
+    let colon = term_at(q, q.len()).unwrap();
+    assert_eq!(
+        into_held(q, &colon, "ext"),
+        Some(("rapor !ext:pdf".into(), 14))
+    );
+    let q = "rapor :ty tür:doc;code dm:7d";
+    let colon = term_at(q, 9).unwrap();
+    let (text, caret) = into_held(q, &colon, "kind").unwrap();
+    assert_eq!(text, "rapor tür:doc;code dm:7d");
+    assert_eq!(&text[..caret], "rapor tür:doc;code");
+    assert_eq!(term_at(&text, caret).unwrap().field, Some("kind"));
+    assert_eq!(
+        into_held("rapor :", &term_at("rapor :", 7).unwrap(), "dm"),
+        None
+    );
 }
 
 #[test]

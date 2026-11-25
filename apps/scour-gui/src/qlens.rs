@@ -217,7 +217,7 @@ impl Lenses {
             }
             _ => {}
         }
-        o.items = items(o, env);
+        o.items = items(o, q, env);
         if !reads(&rest) {
             for (i, it) in o.items.iter_mut().enumerate() {
                 if !it.count {
@@ -452,18 +452,18 @@ fn it(label: String, hint: &str, term: String) -> Item {
     }
 }
 
-fn items(o: &mut Open, env: &Env) -> Vec<Item> {
+fn items(o: &mut Open, q: &str, env: &Env) -> Vec<Item> {
     let tr = env.tr;
     let t = &o.term;
     match o.kind {
         Lens::Launch => {
             o.title = tr("Add a filter");
             o.foot = tr("Type a few letters to narrow it. Enter starts the filter.");
-            lens::launch(&o.raw, |m| tr(m))
+            lens::launch(q, &o.raw, |m| tr(m))
                 .into_iter()
-                .map(|c| Item {
+                .map(|s| Item {
                     launch: true,
-                    ..it(tr(&c.label), &tr(&c.hint), c.term)
+                    ..it(tr(&s.choice.label), &tr(&s.choice.hint), s.choice.term)
                 })
                 .collect()
         }
