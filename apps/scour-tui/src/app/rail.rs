@@ -3,6 +3,16 @@
 
 use super::*;
 
+/// The rail's size bands: the shared three, with `size:0` — which is every
+/// size — as the size panel's Empty.
+pub fn rail_sizes() -> [(&'static str, &'static str); 3] {
+    let empty = &scour_ui::lens::SIZE_PRESETS[0];
+    scour_ui::query::SIZES.map(|(label, term)| match term {
+        "size:0" => (empty.label, empty.term),
+        _ => (label, term),
+    })
+}
+
 impl App {
     /// How many kinds and how many places the rail has room for, counted from
     /// the terminal's height. Both the drawing and the hit test ask this.
@@ -36,7 +46,7 @@ impl App {
                 .map(|(label, path)| (label.clone(), scour_ui::query::of_place(path))),
         );
         out.extend(
-            scour_ui::query::SIZES
+            rail_sizes()
                 .iter()
                 .map(|(label, term)| ((*label).to_string(), (*term).to_string())),
         );
@@ -47,7 +57,7 @@ impl App {
     /// and blanks are not stops; the shape here has to agree with `draw::side`.
     pub fn rail_hit(&self, line: usize) -> Option<usize> {
         let (kinds, places) = self.rail_room();
-        let sizes = scour_ui::query::SIZES.len();
+        let sizes = rail_sizes().len();
         // heading, kinds…, blank, heading, places…, blank, heading, sizes…
         let mut at = 0usize;
         let mut row = 0usize;

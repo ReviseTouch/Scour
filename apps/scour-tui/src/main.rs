@@ -220,6 +220,7 @@ fn snap(
     }
     for name in press.split(',').filter(|n| !n.trim().is_empty()) {
         act(keys::press(state, named(name.trim())), link);
+        ask_lens(state, link);
         // Everything waiting, not one answer: pairing a key with the next reply
         // drifts by one the moment a key asks for nothing.
         settle(state, link, waiting, 400);
@@ -253,6 +254,7 @@ fn snap(
             act(keys::mouse(state, press, (w, h)), link);
             act(keys::mouse(state, release, (w, h)), link);
         }
+        ask_lens(state, link);
         settle(state, link, waiting, 400);
     }
     // A last, longer wait for whatever the final key set going: sorting by size
@@ -475,6 +477,8 @@ fn run(
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
+            Beat::Reply(Got::LensFaceted { tag, reply }) => state.lens_faceted(tag, &reply),
+            Beat::Reply(Got::LensCounted { tag, total }) => state.lens_counted(tag, total),
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
@@ -512,8 +516,17 @@ fn run(
             state.dirty = false;
             terminal.draw(|f| draw::frame(f, state, theme))?;
         }
+        // A panel's counts after it is drawn, never before.
+        ask_lens(state, link);
     }
     Ok(())
+}
+
+/// Send what the open panel asked for, on its own lane.
+fn ask_lens(state: &mut App, link: &Link) {
+    for ask in state.take_lens_asks() {
+        link.lens(ask);
+    }
 }
 
 /// Take everything the service has said, until it says nothing for `quiet`
@@ -581,6 +594,8 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
+            Beat::Reply(Got::LensFaceted { tag, reply }) => state.lens_faceted(tag, &reply),
+            Beat::Reply(Got::LensCounted { tag, total }) => state.lens_counted(tag, total),
             Beat::Reply(Got::Awake(revision, walked, stale, asking, unwritten)) => {
                 state.scanning = walked;
                 state.unwritten = unwritten;

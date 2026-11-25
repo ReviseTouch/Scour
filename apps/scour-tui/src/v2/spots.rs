@@ -70,6 +70,7 @@ impl App {
             rule: false,
             head: String::new(),
             mark: None,
+            lit: None,
         }
     }
 }

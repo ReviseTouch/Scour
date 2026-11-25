@@ -1,6 +1,7 @@
 //! A run of `under:` terms in the query line drawn as one unit, `⛁ CACHY ·
 //! Depo`, from `scour_ui::lens::place_caps`, while the caret is outside it.
 //! The text stays the query; this only says which bytes are drawn as what.
+//! The other filters' words are `valuecap`'s; both are [`Folded`].
 
 use scour_ui::lens;
 
@@ -15,12 +16,16 @@ pub struct Folded {
     pub kind: Option<&'static str>,
     /// What follows the `⛁ `: the parts, and "+N" for those not shown.
     pub label: String,
+    /// A place run, drawn after the disk glyph; any other is its words.
+    pub place: bool,
+    /// Written with `!`: the words are drawn as left out.
+    pub not: bool,
 }
 
 impl Folded {
     /// The characters it is drawn in.
     pub fn width(&self) -> usize {
-        2 + self.label.chars().count()
+        usize::from(self.place) * 2 + self.label.chars().count()
     }
 }
 
@@ -51,6 +56,8 @@ pub fn folded(app: &App, room: usize) -> Vec<Folded> {
                 end: cap.end,
                 kind: cap.parts.iter().find(|p| p.shown).and_then(|p| p.spot.kind),
                 label: label(&cap),
+                place: true,
+                not: false,
             }
         })
         .collect()

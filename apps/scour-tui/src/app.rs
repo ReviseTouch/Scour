@@ -14,6 +14,7 @@ mod columns;
 mod menu;
 mod order;
 mod rail;
+pub use rail::rail_sizes;
 mod selection;
 mod settings;
 mod weighing;

@@ -1,8 +1,9 @@
 //! The connection to the service, on a thread of its own.
 //!
 //! The interface never waits: requests go out on worker threads and answers
-//! arrive as events on the keyboard's channel. Three lanes, because `scour-ipc`
-//! is one call at a time and a 20 ms facet count must not queue before a key.
+//! arrive as events on the keyboard's channel. Four lanes, because `scour-ipc`
+//! is one call at a time and a 20 ms facet count must not queue before a key,
+//! nor a panel's 200 ms walk before the rail.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -133,6 +134,8 @@ pub enum Ask {
         descending: bool,
         offset: u32,
     },
+    /// A time, type or size panel's question, on the lens lane.
+    Lens(crate::v2::LensAsk),
     /// Stop: the terminal is closing.
     Done,
 }
@@ -201,6 +204,16 @@ pub enum Got {
         id: String,
         total: u64,
     },
+    /// A panel's facets, by the tag it was asked with.
+    LensFaceted {
+        tag: u64,
+        reply: Box<scour_core::FacetResponse>,
+    },
+    /// A panel's count, by its tag.
+    LensCounted {
+        tag: u64,
+        total: u64,
+    },
     /// Exactly how many match.
     Counted {
         generation: u64,
@@ -254,6 +267,7 @@ pub struct Link {
     asks: Sender<Ask>,
     slow: Sender<Ask>,
     wait: Sender<Ask>,
+    lens: Sender<Ask>,
     /// The slow lane's thread, so what was queued on it can be waited for. Only
     /// this one: it carries a preference and an export, either of which somebody
     /// may quit immediately after asking for.
@@ -268,6 +282,7 @@ impl Link {
         let (asks, inbox) = channel::<Ask>();
         let (slow, waiting) = channel::<Ask>();
         let (wait, dozing) = channel::<Ask>();
+        let (lens, looking) = channel::<Ask>();
         let (gots, answers) = channel::<Got>();
         // Said from a thread of its own: the lanes below block inside `boot`,
         // and the line has to be on screen before they do.
@@ -289,12 +304,15 @@ impl Link {
         let slow_out = gots.clone();
         let slow_log = log.clone();
         let slow_thread = thread::spawn(move || serve(&slow_addr, &slow_log, &waiting, &slow_out));
+        let (lens_addr, lens_out, lens_log) = (addr.clone(), gots.clone(), log.clone());
+        thread::spawn(move || serve(&lens_addr, &lens_log, &looking, &lens_out));
         thread::spawn(move || serve(&addr, &log, &dozing, &gots));
         (
             Link {
                 asks,
                 slow,
                 wait,
+                lens,
                 slow_thread: std::sync::Mutex::new(Some(slow_thread)),
             },
             answers,
@@ -312,6 +330,12 @@ impl Link {
         let _ = self.slow.send(ask);
     }
 
+    /// A panel's question: a lane of its own, so it neither waits behind
+    /// typing nor holds the rail up.
+    pub fn lens(&self, ask: crate::v2::LensAsk) {
+        let _ = self.lens.send(Ask::Lens(ask));
+    }
+
     /// The long poll, which holds a connection of its own.
     pub fn doze(&self, ask: Ask) {
         let _ = self.wait.send(ask);
@@ -323,6 +347,7 @@ impl Link {
     pub fn finish(&self) {
         let _ = self.slow.send(Ask::Done);
         let _ = self.asks.send(Ask::Done);
+        let _ = self.lens.send(Ask::Done);
         let handle = self.slow_thread.lock().ok().and_then(|mut h| h.take());
         let Some(handle) = handle else { return };
         let waited = std::time::Instant::now();
@@ -445,6 +470,19 @@ fn next_ask(inbox: &Receiver<Ask>, queued: &mut std::collections::VecDeque<Ask>)
     }
     let newest = queued.iter().filter_map(generation_of).max();
     queued.retain(|a| generation_of(a).is_none_or(|g| Some(g) >= newest));
+    // A panel's question that a later opening or a later one for the same
+    // numbers has replaced.
+    let lens: Vec<crate::v2::LensAsk> = queued
+        .iter()
+        .filter_map(|a| match a {
+            Ask::Lens(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect();
+    queued.retain(|a| match a {
+        Ask::Lens(l) => !lens.iter().any(|o| l.stale_beside(o)),
+        _ => true,
+    });
     queued.pop_front()
 }
 
@@ -486,6 +524,10 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
         // The report asks the same question over its own scope; the answer
         // goes to the report's block, not to the rail.
         let for_report = matches!(ask, Ask::Kinds { .. });
+        let for_lens = match &ask {
+            Ask::Lens(l) => Some(l.tag),
+            _ => None,
+        };
         let for_place = match &ask {
             Ask::Sources { opening } => Some((*opening, String::new())),
             Ask::DiskCount { opening, id, .. } => Some((*opening, id.clone())),
@@ -557,6 +599,10 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Ask::Volumes => Request::Volumes {},
             Ask::Sources { .. } => Request::Sources {},
             Ask::DiskCount { query, .. } => count_all(query),
+            Ask::Lens(l) => match l.asked {
+                crate::v2::Asked::Facets { query, by } => Request::Facets { query, by },
+                crate::v2::Asked::Count { query } => count_all(query),
+            },
             Ask::Disk { volume, what } => match what.as_str() {
                 "later" => Request::Postpone { volume },
                 how => Request::Choose {
@@ -634,6 +680,22 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             "{name} gen {generation} answered in {} ms",
             asked_at.elapsed().as_millis()
         ));
+        if let Some(tag) = for_lens {
+            // An answer that cannot be had leaves the count blank: the panel
+            // has nothing to say about it, and the counter line no business.
+            match reply {
+                Ok(Response::Facets(reply)) => {
+                    let reply = Box::new(reply);
+                    let _ = out.send(Got::LensFaceted { tag, reply });
+                }
+                Ok(Response::Count { total, .. }) => {
+                    let _ = out.send(Got::LensCounted { tag, total });
+                }
+                Ok(_) => {}
+                Err(_) => conn.lost(),
+            }
+            continue;
+        }
         match reply {
             Ok(Response::Search(reply)) => {
                 let _ = out.send(Got::Search {

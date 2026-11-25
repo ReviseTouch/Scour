@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Paragraph};
 use scour_ui::format;
 
 use super::placecap::{self, Folded};
+use super::valuecap;
 
 /// The query line: the brand, what has been typed, and the caret.
 pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -25,7 +26,9 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     };
     let triggers_shown = !app.v2.grep_open && area.width >= 96;
     let room = (area.width as usize).saturating_sub(7 + if triggers_shown { 18 } else { 0 });
-    let folds = placecap::folded(app, room);
+    let mut folds = placecap::folded(app, room);
+    folds.extend(valuecap::folded(app, room));
+    folds.sort_by_key(|f| f.start);
     let typed = if app.query.is_empty() {
         // Quiet and short: a hint as bright as a query reads as one.
         vec![Span::styled(
@@ -194,8 +197,8 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
 }
 
-/// `runs` of the query as spans, each folded place run as its label in the
-/// place of its bytes.
+/// `runs` of the query as spans, each folded run as its label in the place
+/// of its bytes.
 fn with_folds(
     query: &str,
     runs: Vec<(usize, usize, Style)>,
@@ -208,11 +211,14 @@ fn with_folds(
         while at < to {
             match folds.iter().find(|f| f.start <= at && at < f.end) {
                 Some(f) => {
-                    if at == f.start {
-                        let cap = Style::new().bg(theme.hover()).add_modifier(Modifier::BOLD);
+                    let cap = Style::new().bg(theme.hover()).add_modifier(Modifier::BOLD);
+                    if at == f.start && f.place {
                         let disk = f.kind.map_or(theme.key(), |k| theme.disk(k));
                         out.push(Span::styled("⛁", cap.fg(disk)));
                         out.push(Span::styled(format!(" {}", f.label), cap.fg(theme.val())));
+                    } else if at == f.start {
+                        let ink = if f.not { theme.not() } else { theme.val() };
+                        out.push(Span::styled(f.label.clone(), cap.fg(ink)));
                     }
                     at = f.end.min(to);
                 }

@@ -1,5 +1,5 @@
-//! Terminal lenses (Place/Tree explorer, Sparkline & Fuzzy choices) and the
-//! on-demand inline Grep capsule.
+//! Terminal lenses (the place explorer; the time, type and size panels;
+//! word choices) and the on-demand inline Grep capsule.
 
 use scour_core::{EntryId, FoundLine, Hit, SourceId};
 use scour_proto::{GrepFile, GrepMode, GrepResponse};
@@ -8,8 +8,15 @@ use scour_ui::lens::{self, Lens};
 use crate::app::{App, Panel, Want};
 use crate::draw::PanelLine;
 
+mod filters;
+mod kinds;
 mod place;
+mod sizes;
 mod spots;
+mod time;
+mod time_keys;
+
+pub use filters::{Asked, Filters, LensAsk, unix_now};
 
 #[derive(Debug, Clone, Default)]
 pub struct V2 {
@@ -38,6 +45,8 @@ pub struct V2 {
     pub lens_heads: Vec<String>,
     /// The place lens's disks, above its folders.
     pub disks: place::Disks,
+    /// The time, type and size panels.
+    pub filters: Filters,
 }
 
 fn home() -> String {
@@ -86,9 +95,10 @@ impl App {
 
     pub fn open_context_lens(&mut self) -> Want {
         self.v2.place_mode = false;
+        self.v2.filters.view = None;
+        self.panel_at = 0;
         self.rebuild_lens();
         self.panel = Panel::Lens;
-        self.panel_at = 0;
         self.dirty = true;
         Want::Nothing
     }
@@ -152,6 +162,11 @@ impl App {
                 ));
             }
             self.v2.lens_items = out;
+            self.v2.filters.view = None;
+            return;
+        }
+        if self.filters_rebuild() {
+            self.v2.lens_items = out;
             return;
         }
 
@@ -160,20 +175,6 @@ impl App {
             Some(Lens::Word) => {
                 if let Some(t) = t {
                     for c in lens::word(&t) {
-                        out.push((self.say(&c.label).into_owned(), c.hint, c.term, None));
-                    }
-                }
-            }
-            Some(Lens::Time) => {
-                if let Some(t) = t {
-                    for c in lens::bands(&t, lens::TIMES) {
-                        out.push((self.say(&c.label).into_owned(), c.hint, c.term, None));
-                    }
-                }
-            }
-            Some(Lens::Size) => {
-                if let Some(t) = t {
-                    for c in lens::bands(&t, lens::SIZES) {
                         out.push((self.say(&c.label).into_owned(), c.hint, c.term, None));
                     }
                 }
@@ -235,6 +236,9 @@ impl App {
 
     /// How many lines the lens has: the place lens's disks, then its items.
     pub fn lens_len(&self) -> usize {
+        if let Some(n) = self.filter_len() {
+            return n;
+        }
         self.disk_row_count() + self.v2.lens_items.len()
     }
 
@@ -244,6 +248,9 @@ impl App {
     }
 
     pub fn lens_press(&mut self, drill: bool) -> Want {
+        if let Some(want) = self.filter_press() {
+            return want;
+        }
         let disks = self.disk_row_count();
         if self.panel_at < disks {
             let row = self.disk_rows(&self.place_tiles())[self.panel_at];
@@ -337,6 +344,9 @@ impl App {
 
     /// The lens's title and lines; `wide` is the characters a line has.
     pub fn lens_panel_lines(&self, wide: usize) -> (String, Vec<PanelLine>) {
+        if let Some(out) = self.filter_lines(wide) {
+            return out;
+        }
         let title = if self.v2.place_mode {
             format!(
                 "{} · {}",
@@ -371,6 +381,7 @@ impl App {
                         rule: !head.is_empty() || (at == 0 && disks > 0),
                         head,
                         mark: None,
+                        lit: None,
                     }
                 }),
         );

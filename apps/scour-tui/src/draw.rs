@@ -11,6 +11,7 @@ mod placecap;
 mod settings;
 mod side;
 mod top;
+mod valuecap;
 mod weighed;
 pub use list::*;
 pub use menu::*;

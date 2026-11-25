@@ -151,6 +151,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
 
     // A panel takes the arrows and `Enter`; the query still types under it.
     if app.panel == Panel::Lens {
+        if let Some(want) = app.filter_key(key.code, key.modifiers) {
+            return want;
+        }
         match key.code {
             KeyCode::Right | KeyCode::Tab => return app.lens_press(true),
             KeyCode::Left | KeyCode::Backspace if app.v2.place_mode => return app.lens_climb_up(),
@@ -663,6 +666,15 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.press_filter(&scour_ui::query::of_age(days))
                 }
                 Spot::Panel(at) => {
+                    let area = ratatui::layout::Rect::new(0, 0, size.0, size.1);
+                    let cell = crate::draw::panel_cell_at(app, area, m.column, m.row);
+                    let shift = m.modifiers.contains(KeyModifiers::SHIFT);
+                    if app.panel == Panel::Lens
+                        && let Some((_, ch)) = cell
+                        && let Some(want) = app.filter_click(at, ch, shift)
+                    {
+                        return want;
+                    }
                     app.panel_at = at;
                     panel_press(app)
                 }

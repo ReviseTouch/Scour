@@ -194,7 +194,8 @@ pub(super) fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (c
     }
     lines.push(Line::from(""));
     lines.push(head(&app.say("SIZE")));
-    for (label, term) in scour_ui::query::SIZES {
+    for (label, term) in crate::app::rail_sizes() {
+        let label = app.say(label);
         let on = app.filter.as_deref() == Some(term);
         let cursor = here(at, app);
         let lit = touched(at, app);

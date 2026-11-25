@@ -280,6 +280,7 @@ impl App {
             rule: false,
             head: String::new(),
             mark: None,
+            lit: None,
         };
         let mut out: Vec<PanelLine> = rows
             .iter()

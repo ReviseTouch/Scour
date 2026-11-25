@@ -186,3 +186,53 @@ fn a_place_run_is_drawn_as_one_unit_while_the_caret_is_outside_it() {
     let (row, _) = query_line(&app, 30);
     assert!(row.starts_with(" SCOUR ⛁ Depo +3 rapor"), "{row}");
 }
+
+/// A time, type or size term reads as its words while the caret is
+/// elsewhere, as typed once the caret is in it; the caret stays on its byte.
+#[test]
+fn a_filter_term_is_drawn_as_its_words_while_the_caret_is_outside_it() {
+    let mut app = App {
+        query: "dm:7d rapor".into(),
+        caret: 11,
+        mode: Mode::Search,
+        ..Default::default()
+    };
+    let (row, caret) = query_line(&app, 80);
+    let drawn = " SCOUR last 7 days rapor";
+    assert!(row.starts_with(drawn), "{row}");
+    assert_eq!(caret as usize, drawn.chars().count());
+
+    app.caret = 3;
+    let (row, caret) = query_line(&app, 80);
+    assert!(row.starts_with(" SCOUR dm:7d rapor"), "{row}");
+    assert_eq!(caret, 7 + 3);
+
+    app.query = "rapor kind:doc;code !kind:build ext:pdf ; odt size:<100kb empty:".into();
+    app.caret = 5;
+    let (row, caret) = query_line(&app, 95);
+    assert_eq!(
+        row.trim_end(),
+        " SCOUR rapor Document · Code !Build output .pdf · .odt under 100 KB Empty"
+    );
+    assert_eq!(caret, 7 + 5);
+
+    // Narrow, the values that do not fit are a count.
+    app.query = "kind:doc;code;image x".into();
+    app.caret = app.query.len();
+    let (row, caret) = query_line(&app, 30);
+    assert_eq!(row.trim_end(), " SCOUR Document · Code +1 x");
+    assert_eq!(caret as usize, row.trim_end().chars().count());
+
+    // The whole line fits: the longest list gives up its values first.
+    app.query = "rapor kind:doc;code;image !kind:build ext:pdf;md dm:7d size:<100kb x".into();
+    app.caret = app.query.len();
+    let (row, caret) = query_line(&app, 80);
+    let drawn = " SCOUR rapor Document +2 !Build output .pdf · .md last 7 days under 100 KB x";
+    assert_eq!(row.trim_end(), drawn);
+    assert_eq!(caret as usize, drawn.chars().count());
+
+    // A kind the words do not know stays as typed.
+    app.query = "kind:dco x".into();
+    app.caret = app.query.len();
+    assert!(query_line(&app, 80).0.starts_with(" SCOUR kind:dco x"));
+}
