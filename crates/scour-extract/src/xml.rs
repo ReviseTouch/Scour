@@ -16,6 +16,32 @@ pub fn udf_cdata(xml: &[u8]) -> Option<&[u8]> {
     None
 }
 
+/// The `attr` of every `<tag …>` in `xml`, a line each, into `out`: the
+/// names of a workbook's sheets, which live in attributes, not in text.
+pub fn attribute_values(xml: &[u8], tag: &[u8], attr: &[u8], out: &mut Vec<u8>, cap: usize) {
+    out.clear();
+    let open: Vec<u8> = [b"<".as_slice(), tag].concat();
+    let key: Vec<u8> = [b" ".as_slice(), attr, b"=\""].concat();
+    for at in memmem::find_iter(xml, &open) {
+        let rest = &xml[at + open.len()..];
+        if !rest.first().is_some_and(|b| b.is_ascii_whitespace()) {
+            continue;
+        }
+        let end = memchr(b'>', rest).unwrap_or(rest.len());
+        let head = &rest[..end];
+        let Some(k) = memmem::find(head, &key) else {
+            continue;
+        };
+        let value = &head[k + key.len()..];
+        let value = &value[..memchr(b'"', value).unwrap_or(value.len())];
+        append_text(value, out, cap);
+        out.push(b'\n');
+        if out.len() >= cap {
+            break;
+        }
+    }
+}
+
 /// Strip XML tags into `out` (reusing its capacity) up to `cap` bytes, joining
 /// split inline runs (`<w:t>...</w:t>`) and turning block tags into newlines.
 pub fn strip_xml(xml: &[u8], out: &mut Vec<u8>, cap: usize) {
@@ -172,6 +198,14 @@ fn append_text(span: &[u8], out: &mut Vec<u8>, cap: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sheet_names_are_taken_from_their_attributes() {
+        let xml = br#"<workbook><sheets><sheet name="Gelen &amp; Giden" sheetId="1"/><sheets2/><sheet  name="2024"/></sheets></workbook>"#;
+        let mut out = Vec::new();
+        attribute_values(xml, b"sheet", b"name", &mut out, 1 << 10);
+        assert_eq!(out, b"Gelen & Giden\n2024\n");
+    }
 
     #[test]
     fn udf_cdata_extracts_zero_copy_slice() {

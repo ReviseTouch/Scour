@@ -160,6 +160,7 @@ fn run(
             read_budget,
             max_size,
             timeout_ms,
+            rate_mib,
         } => {
             let needle = needle_of(mode, pattern)?;
             let ask = scour_engine::GrepAsk {
@@ -175,6 +176,8 @@ fn run(
                 read_budget,
                 max_size,
                 timeout: std::time::Duration::from_millis(timeout_ms),
+                rate: u64::from(rate_mib) << 20,
+                background: false,
             };
             // Every reading thread reads as the person asking; see `preview`.
             let enter: scour_grep::Enter = std::sync::Arc::new(crate::as_owner::for_a_read);
@@ -263,6 +266,48 @@ fn run(
         Request::Stats {} => Response::Stats(engine.stats()?),
         Request::Reread { from_start } => {
             engine.reread(from_start);
+            Response::Accepted
+        }
+        Request::Texts {} => {
+            let settings = kept
+                .settings
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            match crate::documents::shared() {
+                Some(documents) => {
+                    let held = documents.held(&settings);
+                    Response::Texts {
+                        on: held.on,
+                        dir: held.dir,
+                        max_mb: held.max_mb,
+                        documents: held.stats.documents,
+                        no_text: held.stats.no_text,
+                        failed: held.stats.failed,
+                        disk: held.stats.disk,
+                        dead: held.stats.dead,
+                        reader: true,
+                    }
+                }
+                None => Response::Texts {
+                    on: false,
+                    dir: String::new(),
+                    max_mb: 0,
+                    documents: 0,
+                    no_text: 0,
+                    failed: 0,
+                    disk: 0,
+                    dead: 0,
+                    reader: false,
+                },
+            }
+        }
+        Request::ForgetTexts {} => {
+            if let Some(documents) = crate::documents::shared() {
+                documents.forget().map_err(|e| scour_core::Error::Io {
+                    detail: e.to_string(),
+                })?;
+            }
             Response::Accepted
         }
         Request::Rescan { path } => {

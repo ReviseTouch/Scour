@@ -46,6 +46,11 @@ pub struct Settings {
     /// The same for a network disk — SMB, NFS, SSHFS. Not validated here.
     #[serde(default)]
     pub network: String,
+    /// The same for a CD, DVD or Blu-ray, but **`""` leaves it out**: `ask`
+    /// asks, `always` indexes it. A disc is read slowly and mostly holds what
+    /// is somewhere else too.
+    #[serde(default)]
+    pub optical: String,
     /// Folders indexed on their own, added from a face: a disk is the usual
     /// unit, and this is the one for "only this folder of that disk". Absolute
     /// paths. One already inside an indexed disk adds nothing.
@@ -86,6 +91,21 @@ pub struct Settings {
     /// keeps `config.toml`'s `commit_idle_ms`.
     #[serde(default)]
     pub fresh_within: u32,
+    /// Documents' text — PDF, legacy Office, e-mail — not kept: every
+    /// search reads them again.
+    #[serde(default)]
+    pub texts_off: bool,
+    /// Megabytes of compressed text kept at most; zero is the service's default.
+    #[serde(default)]
+    pub texts_max_mb: u32,
+    /// Where it is kept: a `scour-texts` folder inside this one; empty is
+    /// beside the index's settings.
+    #[serde(default)]
+    pub texts_dir: String,
+    /// Read documents' text ahead of any search, while nobody uses the
+    /// machine: slowly, at the lowest priority.
+    #[serde(default)]
+    pub texts_ahead: bool,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]

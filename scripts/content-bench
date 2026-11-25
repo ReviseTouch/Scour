@@ -23,7 +23,7 @@ out="$here/../docs/bench/content-$label.txt"
 [ -x "$scan" ] || { echo "build it first: derle cargo build --release -p scour-grep --example scan" >&2; exit 1; }
 mkdir -p "$(dirname "$out")"
 
-keys=(files found clean binary too_big unreadable cold_kept seconds mib mib_per_s files_per_s cpu_s peak_rss_mib)
+keys=(files found clean binary too_big header_only no_reader locked unreadable cold_kept seconds mib mib_per_s files_per_s cpu_s peak_rss_mib)
 
 {
     echo "# content bench · $label · $(date '+%Y-%m-%d %H:%M') · $(git -C "$here/.." rev-parse --short HEAD)"

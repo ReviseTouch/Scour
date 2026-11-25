@@ -687,6 +687,7 @@ pub(super) fn awake(cx: &Cx, got: Got) {
     disks_moved(state, link, st.asking);
     if w.get_panel() == "settings" && w.get_settings_section() == "index" {
         link.send(Ask::IndexFacts);
+        link.send(Ask::Texts);
     }
     // Free: a wait is answered with the whole status. The total too,
     // or the meter kept dividing by what the index held at start-up.
@@ -811,6 +812,40 @@ pub(super) fn places(cx: &Cx, got: Got) {
             ));
         }
         w.set_index_facts(facts.into());
+        return;
+    }
+    if let Response::Texts {
+        on,
+        dir,
+        documents,
+        no_text,
+        failed,
+        disk,
+        max_mb,
+        reader,
+        ..
+    } = &*reply
+    {
+        w.set_texts_on(*on);
+        w.set_texts_dir(dir.as_str().into());
+        let facts = if !reader {
+            t(cat, "No document reader is installed.").to_string()
+        } else if !on {
+            t(cat, "Not kept: every search reads them again.").to_string()
+        } else {
+            format!(
+                "{dir}\n{} {} · {} {} · {} {} · {} / {}",
+                grouped(*documents),
+                t(cat, "with text"),
+                grouped(*no_text),
+                t(cat, "without text"),
+                grouped(*failed),
+                t(cat, "would not open"),
+                compact_bytes(*disk),
+                compact_bytes(u64::from(*max_mb) << 20),
+            )
+        };
+        w.set_texts_facts(facts.into());
         return;
     }
     if matches!(&*reply, Response::Accepted) {

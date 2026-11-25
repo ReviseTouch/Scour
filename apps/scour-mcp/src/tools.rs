@@ -98,7 +98,9 @@ pub struct GrepArgs {
     /// The pattern is a regular expression, matched a line at a time.
     #[serde(default)]
     pub regex: bool,
-    /// The pattern is bytes in hex, 'DE AD BE EF'. Implies `binary`.
+    /// The pattern is bytes in hex, 'DE AD BE EF'; '??' is any byte, and a leading
+    /// '^' means at the start of the file ('^25 50 44 46' finds PDFs). Reads every
+    /// file, pictures and binaries included.
     #[serde(default)]
     pub hex: bool,
     /// Upper and lower case differ. Default false.
@@ -246,8 +248,11 @@ impl Scour {
                        newest first — prefer this over grep -r or rg across the filesystem, \
                        and narrow the query ('ext:py /project/') so little is read. Bounded: \
                        it stops at a gigabyte or ten seconds and the reply says where to go \
-                       on from. Files skipped for not being text or for being over 64 MB are \
-                       counted in the reply, so no find is not proof of absence."
+                       on from. Office, OpenDocument, EPUB, RTF and UYAP .udf documents are \
+                       read for their text, and old Turkish files in Windows-1254 are \
+                       understood. Files skipped — not text, over 64 MB, pictures and video, \
+                       PDF and legacy .doc/.xls/.ppt (no text reader yet) — are counted in \
+                       the reply, so no find is not proof of absence."
     )]
     fn scour_grep(&self, Parameters(a): Parameters<GrepArgs>) -> Result<String, String> {
         self.call(Request::Grep {
@@ -268,6 +273,7 @@ impl Scour {
             read_budget: 1 << 30,
             max_size: 64 << 20,
             timeout_ms: 10_000,
+            rate_mib: 0,
         })
     }
 

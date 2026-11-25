@@ -92,7 +92,7 @@ thread_local! {
 }
 
 /// Hand one answer to the window. Runs on the UI thread and nowhere else.
-fn deliver(got: Got) {
+pub(crate) fn deliver(got: Got) {
     // Cloned out of the cell first: the handler can re-enter this function.
     let handler = INBOX.with(|slot| slot.borrow().clone());
     if let Some(f) = handler {
@@ -598,6 +598,8 @@ fn main() -> Result<()> {
     window.set_refresh_choice(kept.refresh_after().as_secs().to_string().into());
     window.set_memory_choice(kept.memory.as_str().into());
     window.set_narrow_on(!kept.narrow_off);
+    window.set_texts_on(!kept.texts_off);
+    window.set_texts_ahead_on(kept.texts_ahead);
     window.set_threads_choice(kept.search_threads.to_string().into());
     window.set_fresh_choice(kept.fresh_within.to_string().into());
     window.set_every_choice(
@@ -609,6 +611,7 @@ fn main() -> Result<()> {
         .into(),
     );
     window.set_network_choice(kept.network.as_str().into());
+    window.set_optical_choice(kept.optical.as_str().into());
     let folders = Rc::new(RefCell::new(kept.folders.clone()));
     // Which of them are switched off, and which only walked: replaced whole
     // when either changes, as `Change` carries them.
@@ -890,6 +893,14 @@ fn apply(
         }
         Got::PickedFolder { a, b, prefix, path } => {
             qwire::picked_folder(w, state, a, b, prefix, path);
+        }
+        Got::TextsDir(dir) => {
+            let change = scour_settings::Change {
+                texts_dir: Some(dir),
+                ..Default::default()
+            };
+            link.send(Ask::Remember { change });
+            link.send(Ask::Texts);
         }
         Got::Down(why) => {
             let mut s = state.borrow_mut();

@@ -21,6 +21,7 @@ pub fn kind(token: &str) -> &'static str {
         "system" => "system disk",
         "removable" => "plugged in",
         "network" => "on the network",
+        "optical" => "CD or DVD",
         _ => "built in",
     }
 }

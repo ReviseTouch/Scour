@@ -34,6 +34,9 @@ pub enum Kind {
     Removable,
     /// Reached over a network: asked about first.
     Network,
+    /// A CD, DVD or Blu-ray in its drive: left out unless
+    /// `scour_settings::Settings::optical` says otherwise.
+    Optical,
 }
 
 impl Kind {
@@ -49,6 +52,7 @@ impl Kind {
             Kind::Fixed => "fixed",
             Kind::Removable => "removable",
             Kind::Network => "network",
+            Kind::Optical => "optical",
         }
     }
 }

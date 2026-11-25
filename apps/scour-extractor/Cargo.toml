@@ -1,0 +1,18 @@
+[package]
+name        = "scour-extractor"
+description = "Scour's document reader, in a process of its own: bytes on standard input, text on standard output."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# The only thing that links the document libraries. The service starts it,
+# bounds it and starts it again when it dies; it opens no file itself.
+[dependencies]
+scour-doctext = { workspace = true }
+scour-extract = { workspace = true }

@@ -19,7 +19,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 base="${SCOUR_RELEASE_BASE:-docker.io/library/rust:1-bullseye}"
 cargo_home="${SCOUR_CARGO_HOME:-${CARGO_HOME:-$HOME/.cargo}}"
 target="$root/target/container"
-bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp)
+bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp scour-extractor)
 mode=build
 
 while [ $# -gt 0 ]; do

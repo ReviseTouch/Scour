@@ -2,7 +2,7 @@
 //! reading them cost. For measuring: `scour -n 100000 'ext:rs' | …`.
 //!
 //!     cargo run --release -p scour-grep --example scan -- \
-//!         [--binary] [--regex | --hex] [--cold] [--list] NEEDLE
+//!         [--binary] [--regex | --hex] [--cold] [--list] [--quiet] NEEDLE
 //!
 //! `--cold` asks the kernel to drop each file from the page cache first; a
 //! file it would not drop is counted, so a "cold" run says how cold it was.
@@ -14,7 +14,9 @@ use scour_grep::{Budget, File, Ground, Needle, Options, Outcome, Pattern, Scanne
 
 struct Args {
     binary: bool,
-    /// The paths with a find, on standard error.
+    /// Read at the lowest priority, as a long reading does.
+    quiet: bool,
+    /// The paths with a find and the line of the first, on standard error.
     list: bool,
     cold: bool,
     needle: Needle,
@@ -28,12 +30,13 @@ fn args() -> Args {
             .map(|i| rest.remove(i))
             .is_some()
     };
-    let (binary, cold, regex, hex, list) = (
+    let (binary, cold, regex, hex, list, quiet) = (
         flag("--binary"),
         flag("--cold"),
         flag("--regex"),
         flag("--hex"),
         flag("--list"),
+        flag("--quiet"),
     );
     let Some(text) = rest.pop() else {
         eprintln!("usage: scan [--binary] [--regex | --hex] [--cold] NEEDLE < paths");
@@ -49,6 +52,7 @@ fn args() -> Args {
     };
     Args {
         binary,
+        quiet,
         list,
         cold,
         needle,
@@ -65,6 +69,7 @@ fn main() {
         .map(|line| File {
             path: line.into(),
             size: None,
+            class: None,
         })
         .collect();
     let kept = if args.cold { drop_cached(&files) } else { 0 };
@@ -77,13 +82,32 @@ fn main() {
         .collect();
     roots.sort();
     roots.dedup();
+    // `SCAN_ROOTS=/a:/b` names the mounts outright; the top directory of a
+    // path is not one under `/run/media`.
+    if let Some(given) = std::env::var_os("SCAN_ROOTS") {
+        roots = std::env::split_paths(&given).collect();
+    }
     let options = Options {
         binary: args.binary,
+        quiet: args.quiet,
         max_size: 0,
         ..Options::default()
     };
+    for root in &roots {
+        eprintln!(
+            "# {} {:?}",
+            root.display(),
+            surefoot::probe::medium_of(root)
+        );
+    }
     let scanner = Scanner::new(pattern, options, Ground::probe(&roots));
-    let (budget, began, cpu_before) = (Budget::unlimited(), Instant::now(), usage());
+    // `SCAN_RATE_MIB` paces the reading, as `rate_mib` does a service's.
+    let pace = std::env::var("SCAN_RATE_MIB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let budget = Budget::unlimited().paced(pace << 20);
+    let (began, cpu_before) = (Instant::now(), usage());
     let outcomes = scanner.scan(&files, &budget);
     let took = began.elapsed().as_secs_f64();
     let (cpu_after, peak_kib) = (usage(), peak_rss_kib());
@@ -93,18 +117,16 @@ fn main() {
     println!("files {}", files.len());
     println!("found {}", count(&|o| matches!(o, Outcome::Found { .. })));
     println!("clean {}", count(&|o| matches!(o, Outcome::Clean)));
-    println!(
-        "binary {}",
-        count(&|o| *o == Outcome::Skipped(Skip::Binary))
-    );
-    println!(
-        "too_big {}",
-        count(&|o| *o == Outcome::Skipped(Skip::TooBig))
-    );
-    println!(
-        "not_a_file {}",
-        count(&|o| *o == Outcome::Skipped(Skip::NotAFile))
-    );
+    for (key, skip) in [
+        ("binary", Skip::Binary),
+        ("too_big", Skip::TooBig),
+        ("not_a_file", Skip::NotAFile),
+        ("header_only", Skip::HeaderOnly),
+        ("no_reader", Skip::NoReader),
+        ("locked", Skip::Locked),
+    ] {
+        println!("{key} {}", count(&|o| *o == Outcome::Skipped(skip)));
+    }
     println!(
         "unreadable {}",
         count(&|o| matches!(o, Outcome::Unreadable(_)))
@@ -118,8 +140,9 @@ fn main() {
     println!("peak_rss_mib {:.1}", peak_kib as f64 / 1024.0);
     if args.list {
         for (file, outcome) in files.iter().zip(&outcomes) {
-            if matches!(outcome, Outcome::Found { .. }) {
-                eprintln!("{}", file.path.display());
+            if let Outcome::Found { hits, .. } = outcome {
+                let line = hits.first().and_then(|h| h.line).unwrap_or(0);
+                eprintln!("{}\t{line}", file.path.display());
             }
         }
     }

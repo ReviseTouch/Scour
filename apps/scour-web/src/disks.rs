@@ -87,6 +87,39 @@ pub fn api_index(stream: &mut TcpStream, client: &Pool) {
     }
 }
 
+/// Documents' kept text: what is kept, or with `forget=1` forget all of it.
+pub fn api_texts(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
+    if req.param("forget") == Some("1") {
+        return match call(client, Request::ForgetTexts {}) {
+            Ok(Response::Accepted) => http::json(stream, &serde_json::json!({ "ok": true })),
+            Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+            Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+        };
+    }
+    match call(client, Request::Texts {}) {
+        Ok(Response::Texts {
+            on,
+            dir,
+            max_mb,
+            documents,
+            no_text,
+            failed,
+            disk,
+            dead,
+            reader,
+        }) => http::json(
+            stream,
+            &serde_json::json!({
+                "on": on, "dir": dir, "max_mb": max_mb, "documents": documents,
+                "no_text": no_text, "failed": failed, "disk": disk, "dead": dead,
+                "reader": reader,
+            }),
+        ),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 /// The Index section's buttons: `do` is `reorganize`, `reset` or `open` —
 /// the last opens the folder, so it is behind `--no-launch` like any opening.
 pub fn api_index_do(stream: &mut TcpStream, client: &Pool, req: &http::Req, launch: bool) {

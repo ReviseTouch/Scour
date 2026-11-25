@@ -29,50 +29,30 @@ pub fn inflate_whole(
                 .ok()
                 .filter(|&n| n > 0 && n <= cap);
             if let Some(exact) = want {
-                // Single-call SIMD fast-path (`inflate_fast` with `Finish`): avoids
-                // 32 KiB sliding-window copies inside `zlib-rs`.
-                let need = (exact + 64).max(64 << 10).min(cap + 64);
-                if out.capacity() < need {
-                    out.reserve(need - out.len());
-                }
-                if let Ok(Status::StreamEnd) =
-                    inflate.decompress_vec(comp, out, FlushDecompress::Finish)
-                {
-                    if out.len() > cap {
-                        out.truncate(cap);
-                    }
+                // One call, `Finish`: `zlib-rs`'s fast path, no window copies.
+                let need = (exact + 64).min(cap + 64);
+                if let Ok(Status::StreamEnd) = into_window(inflate, comp, out, need, true) {
+                    out.truncate(cap);
                     return true;
                 }
                 out.clear();
                 inflate.reset(false);
             }
-            // Not `clamp`: near the end of an archive's budget the cap is under
-            // 64 KiB, and a clamp whose floor passes its ceiling panics.
-            let init = comp
-                .len()
-                .saturating_mul(3)
-                .max(64 << 10)
-                .min(cap.min(1 << 20));
-            if out.capacity() < init {
-                out.reserve(init - out.len());
-            }
             let mut in_pos = 0usize;
             loop {
                 if out.len() >= cap {
+                    out.truncate(cap);
                     return true;
                 }
-                if out.capacity() == out.len() {
-                    let add = out.len().max(32 << 10).min(cap - out.len());
-                    out.reserve(add);
-                }
-                let before_in = inflate.total_in();
-                let status = inflate.decompress_vec(&comp[in_pos..], out, FlushDecompress::None);
+                let room = out.len().max(64 << 10).min(cap - out.len());
+                let (before_in, before_len) = (inflate.total_in(), out.len());
+                let status = into_window(inflate, &comp[in_pos..], out, room, false);
                 let consumed = (inflate.total_in() - before_in) as usize;
                 in_pos += consumed;
                 match status {
                     Ok(Status::StreamEnd) => return true,
-                    Ok(_) if consumed == 0 && out.len() == out.capacity() => continue,
-                    Ok(_) if consumed == 0 => return !out.is_empty(),
+                    // Neither in nor out moved: the stream is cut short.
+                    Ok(_) if consumed == 0 && out.len() == before_len => return !out.is_empty(),
                     Ok(_) => {}
                     Err(_) => return false,
                 }
@@ -80,4 +60,28 @@ pub fn inflate_whole(
         }
         _ => false,
     }
+}
+
+/// Inflate into at most `room` more bytes of `out`. The inflater is handed
+/// exactly that window: given a buffer's whole spare capacity it costs time
+/// in proportion to it, and a buffer kept between entries grows to the
+/// largest entry seen — a 1 KiB part read after a 30 MiB sheet paid for 30.
+fn into_window(
+    inflate: &mut Decompress,
+    comp: &[u8],
+    out: &mut Vec<u8>,
+    room: usize,
+    finish: bool,
+) -> Result<Status, flate2::DecompressError> {
+    let start = out.len();
+    out.resize(start + room, 0);
+    let before = inflate.total_out();
+    let flush = if finish {
+        FlushDecompress::Finish
+    } else {
+        FlushDecompress::None
+    };
+    let status = inflate.decompress(comp, &mut out[start..], flush);
+    out.truncate(start + (inflate.total_out() - before) as usize);
+    status
 }

@@ -1,0 +1,21 @@
+[package]
+name        = "scour-doctext"
+description = "The words of a PDF, a legacy Office file or an e-mail, through libraries that live in a process of their own."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **Nothing of Scour's.** Linked by `apps/scour-extractor` alone: these
+# libraries parse what anybody can put on a disk, so they run in a process
+# that may crash, and the service never links them. Pinned exactly — each
+# release of a 0.x library is a change to measure (`docs/bench/phase-0.md`).
+[dependencies]
+pdf_oxide    = { version = "=0.3.78", default-features = false }
+office_oxide = { version = "=0.1.17", default-features = false }
+mail-parser  = { version = "=0.11.9", default-features = false, features = ["full_encoding"] }

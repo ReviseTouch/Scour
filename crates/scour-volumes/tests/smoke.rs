@@ -114,18 +114,22 @@ fn a_share_is_not_asked_for_its_size_and_a_disk_is() {
 }
 
 #[test]
-fn a_disc_and_a_disk_under_media_are_plugged_in() {
+fn a_disc_is_a_disc_wherever_it_is_mounted_and_a_disk_under_media_is_plugged_in() {
     let table = "\
 40 1 8:1 / / rw - ext4 /dev/sda1 rw
 41 40 11:0 / /media/cdrom ro - iso9660 /dev/sr0 ro
 42 40 8:33 / /data rw - ext4 /dev/sdc1 rw
+43 40 11:1 / /run/media/u/FILM ro - udf /dev/sr1 ro
+44 40 8:49 / /media/usb rw - vfat /dev/sdd1 rw
 ";
     let v = volumes(&parse_mountinfo(table), &Fixed);
-    assert_eq!(
-        at(&v, "/media/cdrom").map(|x| x.kind),
-        Some(Kind::Removable)
-    );
-    assert_eq!(at(&v, "/data").map(|x| x.kind), Some(Kind::Fixed));
+    let kind = |root| at(&v, root).map(|x| x.kind);
+    assert_eq!(kind("/media/cdrom"), Some(Kind::Optical));
+    assert_eq!(kind("/run/media/u/FILM"), Some(Kind::Optical));
+    assert_eq!(kind("/media/usb"), Some(Kind::Removable));
+    assert_eq!(kind("/data"), Some(Kind::Fixed));
+    assert!(!Kind::Optical.is_built_in());
+    assert_eq!(Kind::Optical.as_str(), "optical");
 }
 
 #[cfg(target_os = "linux")]

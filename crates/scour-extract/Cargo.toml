@@ -17,3 +17,4 @@ workspace = true
 [dependencies]
 flate2 = { workspace = true }
 memchr = { workspace = true }
+icu_normalizer = { workspace = true }

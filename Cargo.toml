@@ -16,6 +16,8 @@ members = [
     "crates/scour-dupes",
     "crates/scour-grep",
     "crates/scour-extract",
+    "crates/scour-doctext",
+    "crates/scour-textcache",
     "crates/scour-trash",
     "crates/scour-clip",
     "crates/scour-drag",
@@ -41,6 +43,7 @@ members = [
     "apps/scour-gui",
     "apps/scour-tui",
     "apps/scour-watch",
+    "apps/scour-extractor",
 ]
 
 [workspace.package]
@@ -51,7 +54,7 @@ members = [
 # version without a suffix is a promise about all of that.
 version      = "0.2.0-alpha.12"
 edition      = "2024"
-rust-version = "1.88"          # rmcp's MSRV, the highest of any dependency
+rust-version = "1.92"          # structured-zstd's MSRV, the highest of any dependency
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/ReviseTouch/Scour"
 publish      = false
@@ -78,6 +81,8 @@ scour-preview       = { path = "crates/scour-preview" }
 scour-dupes         = { path = "crates/scour-dupes" }
 scour-grep          = { path = "crates/scour-grep" }
 scour-extract       = { path = "crates/scour-extract" }
+scour-doctext       = { path = "crates/scour-doctext" }
+scour-textcache     = { path = "crates/scour-textcache" }
 scour-trash         = { path = "crates/scour-trash" }
 scour-clip           = { path = "crates/scour-clip" }
 scour-drag           = { path = "crates/scour-drag" }
@@ -112,6 +117,17 @@ ratatui     = "0.30.2"
 # what the roots are standing on and reads through the open directory.
 surefoot    = { git = "https://github.com/ReviseTouch/surefoot", tag = "v0.1.0" }
 notify      = "8"
+
+# The text cache's compression: zstd at any level, written and read in pure
+# Rust, so every target builds without a C compiler (Apache-2.0). Its frames
+# are libzstd's, the same size at each level, and C reads them: a switch back
+# to the C library loses nothing. Measured against libzstd, ruzstd, brotli
+# and lz4 in `docs/MEASUREMENTS.md`.
+structured-zstd = { version = "=0.4.4", default-features = false, features = ["std", "hash", "kernel-scalar", "kernel-sse", "kernel-bmi2", "kernel-avx2", "kernel-neon"] }
+
+# Unicode composition for `scour-extract`'s one normal form. Already in the
+# tree through Slint; Unicode-3.0 licence, like every Unicode table.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
 
 # Platform config/data directories. Replaces the hand-rolled XDG logic, which
 # put macOS config in ~/.config instead of ~/Library/Application Support.

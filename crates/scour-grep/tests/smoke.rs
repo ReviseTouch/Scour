@@ -1,30 +1,11 @@
 //! The public surface against real files in a temp directory.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use scour_grep::{Budget, File, Ground, Medium, Needle, Options, Outcome, Pattern, Scanner, Skip};
 
-fn put(dir: &Path, name: &str, bytes: &[u8]) -> File {
-    let path = dir.join(name);
-    std::fs::write(&path, bytes).unwrap();
-    File {
-        path,
-        size: Some(bytes.len() as u64),
-    }
-}
-
-fn scanner(needle: Needle, options: Options, root: &Path) -> Scanner {
-    let ground = Ground::of([(root.to_path_buf(), Some("disk".into()), Medium::Solid)]);
-    Scanner::new(Pattern::new(&needle, false).unwrap(), options, ground)
-}
-
-fn text(needle: &str) -> Needle {
-    Needle::Text(needle.into())
-}
-
-fn utf16le(text: &str) -> Vec<u8> {
-    text.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
+mod support;
+use support::*;
 
 #[test]
 fn outcomes_come_back_in_the_order_asked() {
@@ -154,10 +135,12 @@ fn limits_are_kept_and_said() {
         File {
             path: dir.path().join("gone.txt"),
             size: None,
+            class: None,
         },
         File {
             path: dir.path().to_path_buf(),
             size: None,
+            class: None,
         },
     ];
     let options = Options {
@@ -198,10 +181,11 @@ fn limits_are_kept_and_said() {
 #[test]
 fn a_spent_budget_leaves_the_rest_unread() {
     let dir = tempfile::tempdir().unwrap();
-    let files: Vec<File> = (0..64)
+    let files: Vec<File> = (0..32)
         .map(|i| put(dir.path(), &format!("{i:02}"), &vec![b'a'; 64 << 10]))
         .collect();
-    // One lane of one reader, so the order read is the order given.
+    // One lane of one reader, so the order read is the order given: a disk
+    // said to spin, with too few files to be asked again what it is.
     let ground = Ground::of([(dir.path().to_path_buf(), None, Medium::Spinning)]);
     let scanner = Scanner::new(
         Pattern::new(&text("zzz"), false).unwrap(),
@@ -268,6 +252,7 @@ fn a_pipe_is_not_waited_on() {
     let files = [File {
         path: pipe,
         size: None,
+        class: None,
     }];
     let got = scanner(text("x"), Options::default(), dir.path()).scan(&files, &Budget::unlimited());
     assert_eq!(got[0], Outcome::Skipped(Skip::NotAFile));
@@ -300,57 +285,6 @@ fn a_line_with_two_finds_is_shown_once() {
     };
     let lines: Vec<_> = hits.iter().map(|hit| hit.line).collect();
     assert_eq!((lines, *more), (vec![Some(1), Some(3)], false));
-}
-
-fn make_zip(entries: &[(&str, u16, &[u8])]) -> Vec<u8> {
-    use flate2::{Compress, Compression, FlushCompress};
-    let mut out = Vec::new();
-    let mut cd = Vec::new();
-    for &(name, method, raw) in entries {
-        let data = if method == 8 {
-            let mut c = Compress::new(Compression::fast(), false);
-            let mut dst = Vec::with_capacity(raw.len() + 64);
-            c.compress_vec(raw, &mut dst, FlushCompress::Finish)
-                .unwrap();
-            dst
-        } else {
-            raw.to_vec()
-        };
-        let local_off = out.len() as u32;
-        let nb = name.as_bytes();
-        // Local file header
-        out.extend_from_slice(&[0x50, 0x4B, 0x03, 0x04, 20, 0, 0, 0]);
-        out.extend_from_slice(&method.to_le_bytes());
-        out.extend_from_slice(&[0; 8]); // mtime/mdate/crc
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(raw.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(nb.len() as u16).to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(nb);
-        out.extend_from_slice(&data);
-
-        // Central directory header
-        cd.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02, 20, 0, 20, 0, 0, 0]);
-        cd.extend_from_slice(&method.to_le_bytes());
-        cd.extend_from_slice(&[0; 8]);
-        cd.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        cd.extend_from_slice(&(raw.len() as u32).to_le_bytes());
-        cd.extend_from_slice(&(nb.len() as u16).to_le_bytes());
-        cd.extend_from_slice(&[0; 12]);
-        cd.extend_from_slice(&local_off.to_le_bytes());
-        cd.extend_from_slice(nb);
-    }
-    let cd_off = out.len() as u32;
-    let cd_len = cd.len() as u32;
-    out.extend_from_slice(&cd);
-    out.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0]);
-    let cnt = entries.len() as u16;
-    out.extend_from_slice(&cnt.to_le_bytes());
-    out.extend_from_slice(&cnt.to_le_bytes());
-    out.extend_from_slice(&cd_len.to_le_bytes());
-    out.extend_from_slice(&cd_off.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out
 }
 
 #[test]

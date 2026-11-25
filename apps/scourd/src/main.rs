@@ -4,6 +4,7 @@
 
 mod as_owner;
 mod disks;
+mod documents;
 mod handle;
 mod live;
 #[cfg(windows)]
@@ -139,6 +140,10 @@ pub(crate) fn run(args: Args) -> Result<()> {
         .unwrap_or_else(|| wire::state_dir(&config));
     let kept = handle::Kept::open(state, config.clone());
     let plan = kept.plan();
+    documents::start(
+        &kept.settings.lock().unwrap_or_else(|p| p.into_inner()),
+        &kept.dir,
+    );
     let index = match wire::open(&config) {
         Ok(index) => index,
         // Somebody already serves this index — a face started one, or the
@@ -205,6 +210,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
     };
     live::start(live.engine(), walk);
     live::follow_disks(Arc::clone(&live), Arc::clone(&kept));
+    documents::ahead::start(Arc::clone(&live), Arc::clone(&kept));
     {
         // Ctrl-C, and systemd's SIGTERM, have to reach the accept loop, which is
         // blocked in `accept`. Setting the flag and connecting once wakes it.
@@ -246,6 +252,9 @@ pub(crate) fn run(args: Args) -> Result<()> {
             Arc::clone(&stop),
         );
         live.shutdown();
+        if let Some(documents) = documents::shared() {
+            documents.flush();
+        }
     };
     // A Mac's key is held on the main thread, where Carbon delivers it, so
     // the accept loop takes another; when that ends, so does the process.

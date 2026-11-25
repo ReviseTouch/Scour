@@ -65,6 +65,19 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Folds new files into the ordered part of the index. Nothing is removed and searching goes on; it happens by itself when the machine is idle.",
     ));
     w.set_set_index_tidy_push(t(cat, "Reorganize"));
+    w.set_set_texts(t(cat, "Keep documents' text"));
+    w.set_set_texts_note(t(
+        cat,
+        "PDF, Word, Excel and PowerPoint files of the old kind and e-mail are read by a helper; kept, the next search finds their words without opening them. Off, every search reads them again.",
+    ));
+    w.set_set_texts_kept(t(cat, "Documents' text kept"));
+    w.set_set_texts_clear(t(cat, "Clear"));
+    w.set_set_texts_move(t(cat, "Move…"));
+    w.set_set_texts_ahead(t(cat, "Read ahead while idle"));
+    w.set_set_texts_ahead_note(t(
+        cat,
+        "When nobody has searched for five minutes and the machine is quiet, documents are read and kept before they are asked for: slowly, at the lowest priority.",
+    ));
     w.set_set_index_reset(t(cat, "Reset and scan again"));
     w.set_set_index_reset_note(t(
         cat,
@@ -241,6 +254,9 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "SMB, NFS, SSHFS. Walked again as often as the folders below.",
     ));
     w.set_network_labels(list(&["Ask", "Never"]));
+    w.set_set_optical(t(cat, "CD and DVD discs"));
+    w.set_set_optical_note(t(cat, "Left out unless chosen: a disc is slow to read."));
+    w.set_optical_labels(list(&["Never", "Ask", "Always scan"]));
     w.set_set_folders(t(cat, "Folders added"));
     w.set_set_folders_note(t(
         cat,

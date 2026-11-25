@@ -101,6 +101,9 @@ pub fn engine(
     );
     // Whatever reads file contents reads as the person asking; see `preview`.
     engine.read_files_as(Arc::new(crate::as_owner::for_a_read));
+    if let Some(documents) = crate::documents::shared() {
+        engine.read_documents_with(Arc::clone(documents) as Arc<dyn scour_grep::Texts>);
+    }
     engine
 }
 

@@ -13,6 +13,7 @@ pub(super) fn set_settings(
 ) -> Response {
     let replan = change.moves_sources();
     let tunes = change.tunes();
+    let texts = change.moves_texts();
     let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
     let before = rules_of(&held);
     // Folded in, not assigned: what it does not name is another
@@ -30,6 +31,9 @@ pub(super) fn set_settings(
     engine.set_reading(crate::wire::reading(&held));
     if tunes {
         crate::wire::tune(&held);
+    }
+    if texts && let Some(documents) = crate::documents::shared() {
+        documents.configure(&held, &kept.dir);
     }
     if before != after {
         let was = engine.scan_options();

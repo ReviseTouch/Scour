@@ -9,7 +9,7 @@
 #   RUSTFLAGS="-C target-feature=+crt-static" \
 #       cargo xwin build --release --target x86_64-pc-windows-msvc --workspace
 #
-# Six programs: `scour-watch` is Linux only. The two readmes and the sample
+# Seven programs: `scour-watch` is Linux only. The two readmes and the sample
 # config come from packaging/windows with the version filled in.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,7 @@ name="scour-$version-windows-x86_64"
 built="${SCOUR_WIN_DIR:-$here/target/x86_64-pc-windows-msvc/release}"
 dist="$here/dist"; stage="$dist/$name"
 rm -rf "$stage"; mkdir -p "$stage"
-for b in scour scourd scour-gui scour-tui scour-web scour-mcp; do
+for b in scour scourd scour-gui scour-tui scour-web scour-mcp scour-extractor; do
     [ -f "$built/$b.exe" ] || { echo "missing $built/$b.exe — build first" >&2; exit 1; }
     install -m755 "$built/$b.exe" "$stage/$b.exe"
 done

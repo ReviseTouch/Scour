@@ -16,11 +16,22 @@ pub enum Needle {
     Regex(String),
     /// These bytes, wherever they are.
     Bytes(Vec<u8>),
+    /// Bytes with gaps: `None` is any byte. `at_start`: only at offset zero.
+    Wild {
+        bytes: Vec<Option<u8>>,
+        at_start: bool,
+    },
 }
 
 impl Needle {
-    /// `DE AD be-ef` → the four bytes. None unless it is whole pairs of hex digits.
+    /// `DE AD be-ef` → the four bytes; `?? ` is any byte, and a leading `^`
+    /// says at the start of the file. None unless it is whole pairs.
     pub fn hex(text: &str) -> Option<Needle> {
+        let text = text.trim();
+        let (at_start, text) = match text.strip_prefix('^') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
         let digits: Vec<u8> = text
             .bytes()
             .filter(|b| !matches!(b, b' ' | b'-' | b':' | b'_'))
@@ -29,13 +40,22 @@ impl Needle {
             return None;
         }
         let nibble = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
-        digits
+        let bytes = digits
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|p| Some(nibble(p[0])? << 4 | nibble(p[1])?))
-            .collect::<Option<Vec<u8>>>()
-            .map(Needle::Bytes)
+            .map(|p| match p {
+                [b'?', b'?'] => Some(None),
+                _ => Some(Some(nibble(p[0])? << 4 | nibble(p[1])?)),
+            })
+            .collect::<Option<Vec<Option<u8>>>>()?;
+        if bytes.iter().all(Option::is_none) {
+            return None;
+        }
+        if !at_start && bytes.iter().all(Option::is_some) {
+            return Some(Needle::Bytes(bytes.into_iter().flatten().collect()));
+        }
+        Some(Needle::Wild { bytes, at_start })
     }
 }
 
@@ -65,6 +85,8 @@ pub struct Pattern {
     narrow: Regex,
     wide: Option<Wide>,
     raw_bytes: bool,
+    /// Matches only at a file's first byte.
+    at_start: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,8 +97,10 @@ struct Wide {
     any: Regex,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Encoding {
+    /// Windows' Turkish code page, for text files that are not UTF-8.
+    Cp1254,
     Utf8,
     Utf16Le,
     Utf16Be,
@@ -89,12 +113,29 @@ impl Pattern {
             Needle::Text(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Regex(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Bytes(bytes) if bytes.is_empty() => Err(BadPattern::Empty),
+            Needle::Wild { bytes, .. } if bytes.is_empty() => Err(BadPattern::Empty),
             Needle::Text(text) => Self::any_text(std::slice::from_ref(text), exact_case),
             Needle::Bytes(bytes) => Ok(Pattern {
                 narrow: raw(&escaped(bytes))?,
                 wide: None,
                 raw_bytes: true,
+                at_start: false,
             }),
+            Needle::Wild { bytes, at_start } => {
+                let mut expr = String::from(if *at_start { "\\A" } else { "" });
+                for b in bytes {
+                    match b {
+                        Some(b) => expr.push_str(&escaped(&[*b])),
+                        None => expr.push_str("(?s:.)"),
+                    }
+                }
+                Ok(Pattern {
+                    narrow: raw(&expr)?,
+                    wide: None,
+                    raw_bytes: true,
+                    at_start: *at_start,
+                })
+            }
             Needle::Regex(text) => RegexBuilder::new(text)
                 .case_insensitive(!exact_case)
                 .multi_line(true)
@@ -103,6 +144,7 @@ impl Pattern {
                     narrow,
                     wide: None,
                     raw_bytes: false,
+                    at_start: false,
                 })
                 .map_err(|e| BadPattern::Regex(e.to_string())),
         }
@@ -118,32 +160,48 @@ impl Pattern {
         if non_empty.is_empty() {
             return Err(BadPattern::Empty);
         }
-        let join_enc = |enc: Encoding| -> String {
-            if let [only] = non_empty[..] {
-                return spelled(only, enc, exact_case);
-            }
-            non_empty
+        let join_enc = |enc: Encoding| -> Option<String> {
+            let spelled: Vec<String> = non_empty
                 .iter()
-                .map(|t| format!("(?:{})", spelled(t, enc, exact_case)))
-                .collect::<Vec<_>>()
-                .join("|")
+                .filter_map(|t| spelled(t, enc, exact_case))
+                .collect();
+            match spelled.as_slice() {
+                [] => None,
+                [only] => Some(only.clone()),
+                many => Some(
+                    many.iter()
+                        .map(|t| format!("(?:{t})"))
+                        .collect::<Vec<_>>()
+                        .join("|"),
+                ),
+            }
         };
-        let utf8 = join_enc(Encoding::Utf8);
-        let le = join_enc(Encoding::Utf16Le);
-        let be = join_enc(Encoding::Utf16Be);
+        let utf8 = join_enc(Encoding::Utf8).ok_or(BadPattern::Empty)?;
+        let le = join_enc(Encoding::Utf16Le).ok_or(BadPattern::Empty)?;
+        let be = join_enc(Encoding::Utf16Be).ok_or(BadPattern::Empty)?;
+        // Only when it differs: an ASCII needle is the same bytes in 1254.
+        let narrow = match join_enc(Encoding::Cp1254) {
+            Some(legacy) if legacy != utf8 => format!("(?:{utf8})|(?:{legacy})"),
+            _ => utf8.clone(),
+        };
         Ok(Pattern {
-            narrow: raw(&utf8)?,
             wide: Some(Wide {
-                any: raw(&format!("(?:{utf8})|(?:{le})|(?:{be})"))?,
+                any: raw(&format!("(?:{narrow})|(?:{le})|(?:{be})"))?,
                 le: raw(&le)?,
                 be: raw(&be)?,
             }),
+            narrow: raw(&narrow)?,
             raw_bytes: false,
+            at_start: false,
         })
     }
 
     pub(crate) fn is_raw_bytes(&self) -> bool {
         self.raw_bytes
+    }
+
+    pub(crate) fn at_start(&self) -> bool {
+        self.at_start
     }
 
     /// The expression that reads a file of this kind.
@@ -187,25 +245,55 @@ fn escaped(bytes: &[u8]) -> String {
     out
 }
 
-/// `text` in one encoding, each character every way its case may be written.
-fn spelled(text: &str, encoding: Encoding, exact_case: bool) -> String {
+/// `text` in one encoding, each character every way its case may be written
+/// and, in Unicode, composed or not. None when the encoding cannot write it.
+fn spelled(text: &str, encoding: Encoding, exact_case: bool) -> Option<String> {
     let mut out = String::new();
     for c in text.chars() {
-        let forms = if exact_case { vec![c] } else { cases(c) };
-        if let [one] = forms[..] {
-            out.push_str(&escaped(&encoded(one, encoding)));
-            continue;
-        }
-        out.push_str("(?:");
-        for (i, form) in forms.iter().enumerate() {
-            if i > 0 {
-                out.push('|');
+        // A space in a phrase is any run of blanks and line breaks: a PDF's
+        // text breaks lines mid-phrase (15 % of phrases in 300 court PDFs).
+        match (c, encoding) {
+            // Tab, line breaks, form feed, the no-break and the typographic spaces.
+            (' ', Encoding::Utf8) => {
+                out.push_str("(?:[\\t\\n\\x0B\\x0C\\r ]|\\xC2\\xA0|\\xE2\\x80[\\x80-\\x8A\\xAF])+");
+                continue;
             }
-            out.push_str(&escaped(&encoded(*form, encoding)));
+            (' ', Encoding::Cp1254) => {
+                out.push_str("[\\t\\n\\x0B\\x0C\\r \\xA0]+");
+                continue;
+            }
+            _ => {}
         }
-        out.push(')');
+        let forms = if exact_case { vec![c] } else { cases(c) };
+        let mut ways: Vec<Vec<u8>> = Vec::new();
+        for form in forms {
+            ways.extend(encoded(form, encoding));
+            if encoding != Encoding::Cp1254
+                && let Some(nfd) = scour_extract::decomposed(form)
+            {
+                let mut bytes = Vec::new();
+                for part in nfd.chars() {
+                    bytes.extend(encoded(part, encoding)?);
+                }
+                ways.push(bytes);
+            }
+        }
+        match ways.as_slice() {
+            [] => return None,
+            [one] => out.push_str(&escaped(one)),
+            many => {
+                out.push_str("(?:");
+                for (i, way) in many.iter().enumerate() {
+                    if i > 0 {
+                        out.push('|');
+                    }
+                    out.push_str(&escaped(way));
+                }
+                out.push(')');
+            }
+        }
     }
-    out
+    Some(out)
 }
 
 /// The ways one character is written when case is set aside. `i`, `I`, `İ`
@@ -228,8 +316,8 @@ fn cases(c: char) -> Vec<char> {
     forms
 }
 
-fn encoded(c: char, encoding: Encoding) -> Vec<u8> {
-    match encoding {
+fn encoded(c: char, encoding: Encoding) -> Option<Vec<u8>> {
+    Some(match encoding {
         Encoding::Utf8 => c.encode_utf8(&mut [0; 4]).as_bytes().to_vec(),
         Encoding::Utf16Le => c
             .encode_utf16(&mut [0; 2])
@@ -241,7 +329,8 @@ fn encoded(c: char, encoding: Encoding) -> Vec<u8> {
             .iter()
             .flat_map(|u| u.to_be_bytes())
             .collect(),
-    }
+        Encoding::Cp1254 => vec![scour_extract::cp1254_byte(c)?],
+    })
 }
 
 #[cfg(test)]

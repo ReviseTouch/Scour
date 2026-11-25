@@ -2,10 +2,14 @@
 //! files, newest first; `scour-grep` reads them; this decides how far to go
 //! before answering, and says where it stopped.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scour_core::{Ast, Error, Index, Kind, Meta, Page, Result, SearchRequest, SortKey, Span};
-use scour_grep::{Budget, Enter, Expr, File, Ground, Hit, Needle, Options, Outcome, Skip};
+use scour_grep::{
+    Budget, Class, Enter, Expr, File, Ground, Hit, Needle, Options, Outcome, Skip, Texts,
+    is_disk_image,
+};
 
 /// The first page is small, so a find among the newest files answers at once.
 const FIRST: u32 = 64;
@@ -31,6 +35,11 @@ pub struct GrepAsk {
     pub read_budget: u64,
     pub max_size: u64,
     pub timeout: Duration,
+    /// Bytes a second at most; zero is as fast as the disks go.
+    pub rate: u64,
+    /// Nobody waits on it: every thread gives way from the first file, and
+    /// the reading does not count as somebody using the index.
+    pub background: bool,
 }
 
 #[derive(Debug, Default)]
@@ -43,6 +52,12 @@ pub struct Grepped {
     pub binary: u64,
     pub too_big: u64,
     pub unreadable: u64,
+    pub header_only: u64,
+    pub no_reader: u64,
+    pub locked: u64,
+    pub offline: u64,
+    pub no_text: u64,
+    pub broken: u64,
     /// The offset to go on from. None: everything the query names was read.
     pub next: Option<u32>,
     pub misread: Vec<Span>,
@@ -65,20 +80,21 @@ pub(crate) fn run(
     count_cap: u32,
     ask: &GrepAsk,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
 ) -> Result<Grepped> {
     let began = Instant::now();
     let expr = Expr::new(&ask.needle, ask.exact_case).map_err(|e| Error::QuerySyntax {
         at: 0,
         expected: e.to_string(),
     })?;
-    let options = Options {
+    let mut options = Options {
         binary: ask.binary,
         max_size: ask.max_size,
         hits_per_file: ask.hits as usize,
         ..Options::default()
     };
     let ground = Ground::probe(roots.iter().map(|root| scour_core::path::to_path(root)));
-    let budget = Budget::new(ask.read_budget, Some(began + ask.timeout));
+    let budget = Budget::new(ask.read_budget, Some(began + ask.timeout)).paced(ask.rate);
     let mut out = Grepped::default();
     // No wider than the finds wanted need: every file of a batch is read.
     let (mut at, mut width) = (ask.offset, ask.top.clamp(8, FIRST));
@@ -104,11 +120,14 @@ pub(crate) fn run(
                 out.next = Some(start);
                 break 'pages;
             }
+            // Past the first batch the reading is a long one, and gives way.
+            options.quiet = ask.background || start > ask.offset;
             if let Some(next) = read(
                 &expr,
                 &options,
                 &ground,
                 enter.clone(),
+                texts.clone(),
                 &budget,
                 batch,
                 ask.top,
@@ -141,6 +160,7 @@ fn read(
     options: &Options,
     ground: &Ground,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
     budget: &Budget,
     rows: &[scour_core::Hit],
     top: u32,
@@ -148,7 +168,7 @@ fn read(
 ) -> Option<u32> {
     let (places, files) = files_of(rows);
     for (k, outcome) in expr
-        .scan(options, ground, enter, &files, budget)
+        .scan(options, ground, enter, texts, &files, budget)
         .into_iter()
         .enumerate()
     {
@@ -158,6 +178,12 @@ fn read(
             Outcome::Skipped(Skip::Binary) => out.binary += 1,
             Outcome::Skipped(Skip::TooBig) => out.too_big += 1,
             Outcome::Skipped(Skip::NotAFile) => {}
+            Outcome::Skipped(Skip::HeaderOnly) => out.header_only += 1,
+            Outcome::Skipped(Skip::NoReader) => out.no_reader += 1,
+            Outcome::Skipped(Skip::Locked) => out.locked += 1,
+            Outcome::Skipped(Skip::Offline) => out.offline += 1,
+            Outcome::Skipped(Skip::NoText) => out.no_text += 1,
+            Outcome::Skipped(Skip::Broken) => out.broken += 1,
             Outcome::Unreadable(_) => out.unreadable += 1,
             Outcome::Found { hits, more } => {
                 out.scanned += 1;
@@ -181,15 +207,75 @@ fn read(
 /// The files among these rows, and the row each came from: directories are
 /// in an answer and not in a reading.
 pub(crate) fn files_of(rows: &[scour_core::Hit]) -> (Vec<u32>, Vec<File>) {
+    let mut seen = std::collections::HashSet::new();
     rows.iter()
         .enumerate()
-        .filter(|(_, hit)| !hit.is_dir)
+        // A link is read through its target, which is a row of its own; and
+        // no file is read twice in one reading.
+        .filter(|(_, hit)| !hit.is_dir && !is_link(hit.meta.mode) && seen.insert(&hit.id))
         .map(|(row, hit)| {
             // A row never stat'ed says zero, which is not "empty".
             let known = hit.meta.mtime != 0 || hit.meta.size != 0;
             let size = known.then_some(hit.meta.size.max(0) as u64);
             let path = scour_core::path::to_path(&hit.path);
-            (row as u32, File { path, size })
+            let class = class_of(hit.kind, &path);
+            (row as u32, File { path, size, class })
         })
         .unzip()
+}
+
+/// What the index already knows of a file's kind, as the reader takes it.
+fn class_of(kind: Kind, path: &std::path::Path) -> Option<Class> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match kind {
+        Kind::Image | Kind::Audio | Kind::Video | Kind::Media => Some(Class::HeaderOnly),
+        Kind::Archive if is_disk_image(ext) => Some(Class::HeaderOnly),
+        _ => None,
+    }
+}
+
+/// `S_IFLNK` in a recorded mode; zero, where none was recorded, is not one.
+fn is_link(mode: i64) -> bool {
+    mode & 0o170000 == 0o120000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scour_core::{EntryId, SourceId};
+
+    fn row(ino: u64, path: &str, kind: Kind, mode: i64) -> scour_core::Hit {
+        scour_core::Hit {
+            id: EntryId::inode(SourceId(0), 1, ino),
+            path: path.into(),
+            is_dir: false,
+            kind,
+            meta: Meta {
+                mode,
+                size: 10,
+                ..Meta::UNKNOWN
+            },
+            under: None,
+            found: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn links_repeats_and_media_are_settled_before_reading() {
+        let rows = [
+            row(1, "/a/note.txt", Kind::File, 0o100644),
+            row(1, "/a/again.txt", Kind::File, 0o100644),
+            row(2, "/a/link.txt", Kind::File, 0o120777),
+            row(3, "/a/film.mkv", Kind::Video, 0o100644),
+            row(4, "/a/disk.iso", Kind::Archive, 0o100644),
+            row(5, "/a/pack.zip", Kind::Archive, 0o100644),
+        ];
+        let (places, files) = files_of(&rows);
+        assert_eq!(places, [0, 3, 4, 5]);
+        let classes: Vec<_> = files.iter().map(|f| f.class).collect();
+        assert_eq!(
+            classes,
+            [None, Some(Class::HeaderOnly), Some(Class::HeaderOnly), None]
+        );
+    }
 }

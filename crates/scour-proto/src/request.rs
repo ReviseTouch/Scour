@@ -122,6 +122,10 @@ pub enum Request {
         max_size: u64,
         #[serde(default = "default_grep_timeout")]
         timeout_ms: u64,
+        /// MiB a second at most, so a long reading leaves the disk to others.
+        /// Zero, the default, is as fast as the disks go.
+        #[serde(default)]
+        rate_mib: u32,
     },
     /// What this person's frontends remember: columns, widths, order, the queries they
     /// have run. Held by the service, the only thing all the frontends talk to.
@@ -201,6 +205,10 @@ pub enum Request {
         #[serde(default)]
         from_start: bool,
     },
+    /// What documents' text is kept, where, and how much.
+    Texts {},
+    /// Forget every kept text; the next search reads the documents again.
+    ForgetTexts {},
     /// Walk a source again. `path` narrows it to one subtree.
     Rescan {
         #[serde(default)]
@@ -294,6 +302,7 @@ impl Request {
             // but this predicate is a security boundary, not a classification.
             | Request::Thumbnails { .. }
             | Request::Postpone { .. }
+            | Request::ForgetTexts {}
             | Request::Choose { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
@@ -316,6 +325,7 @@ impl Request {
             | Request::Stats {}
             | Request::Await { .. }
             | Request::Reread { .. }
+            | Request::Texts {}
             | Request::Syntax {} => false,
         }
     }
@@ -349,6 +359,8 @@ impl Request {
             | Request::Stats {}
             | Request::Await { .. }
             | Request::Thumbnails { .. }
+            | Request::Texts {}
+            | Request::ForgetTexts {}
             | Request::Reread { .. }
             | Request::Rescan { .. }
             | Request::Maintain { .. }
@@ -385,6 +397,8 @@ impl Request {
             Request::Stats {} => "stats",
             Request::Await { .. } => "await",
             Request::Reread { .. } => "reread",
+            Request::Texts {} => "texts",
+            Request::ForgetTexts {} => "forget-texts",
             Request::Rescan { .. } => "rescan",
             Request::Recheck { .. } => "recheck",
             Request::Maintain { .. } => "maintain",

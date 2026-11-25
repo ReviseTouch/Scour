@@ -12,7 +12,7 @@ use scour_core::{
     Ast, Error, FoundLine, Hit, Index, Match, Page, ReadingStage, Result, SearchRequest,
     SearchResponse, SortKey,
 };
-use scour_grep::{Budget, Enter, Expr, Ground, Options, Outcome};
+use scour_grep::{Budget, Enter, Expr, Ground, Options, Outcome, Texts};
 
 /// How long a page waits for its rows before answering with what there is.
 const WAIT: Duration = Duration::from_millis(300);
@@ -110,6 +110,7 @@ pub(crate) struct Lent {
     pub index: Arc<dyn Index>,
     pub roots: Vec<String>,
     pub enter: Option<Enter>,
+    pub texts: Option<Arc<dyn Texts>>,
     /// Says a repeated search would now answer differently.
     pub touched: Arc<dyn Fn() + Send + Sync>,
     /// The engine's revision, as it stands.
@@ -254,6 +255,15 @@ impl Contents {
         })
     }
 
+    /// The rows the reading of this query has found so far, in its order;
+    /// None when no reading is of it.
+    pub(crate) fn rows(&self, ast: &Ast) -> Option<Vec<Hit>> {
+        let current = self.current.lock();
+        let reading = current.as_ref().filter(|r| r.ast == *ast)?;
+        let hits = reading.state.lock().hits.clone();
+        Some(hits)
+    }
+
     /// How many files of this query the reading has found, and whether that
     /// is a floor. Nothing yet, and a floor, when it is not the query read.
     pub(crate) fn found(&self, ast: &Ast) -> (u64, bool) {
@@ -315,7 +325,7 @@ impl Contents {
                     expected: e.to_string(),
                 }
             })?;
-        let options = Options {
+        let mut options = Options {
             hits_per_file: FOUND_PER_FILE,
             ..Options::default()
         };
@@ -336,11 +346,14 @@ impl Contents {
                 if !self.wanted(reading) {
                     return Ok(false);
                 }
+                // Past the first batch nobody is waiting on this: it gives way.
+                options.quiet = reading.state.lock().at > 0;
                 let (read, holding) = holding(
                     &expr,
                     &options,
                     &ground,
                     lent.enter.clone(),
+                    lent.texts.clone(),
                     &reading.budget,
                     batch,
                 );
@@ -391,12 +404,13 @@ fn holding(
     options: &Options,
     ground: &Ground,
     enter: Option<Enter>,
+    texts: Option<Arc<dyn Texts>>,
     budget: &Budget,
     batch: &[Hit],
 ) -> (usize, Vec<(usize, Vec<FoundLine>)>) {
     let (places, files) = crate::grep::files_of(batch);
     let mut settled = batch.len();
-    let outcomes = expr.scan(options, ground, enter, &files, budget);
+    let outcomes = expr.scan(options, ground, enter, texts, &files, budget);
     let mut rows = Vec::new();
     for (k, outcome) in outcomes.into_iter().enumerate() {
         match outcome {

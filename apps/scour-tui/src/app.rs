@@ -362,6 +362,7 @@ pub struct App {
     pub language_choice: String,
     pub removable: String,
     pub network: String,
+    pub optical: String,
     pub folders: Vec<String>,
     /// How the service reads words: `Settings::accents_exact` and `typos`.
     pub accents_exact: bool,
@@ -510,6 +511,7 @@ impl Default for App {
             language_choice: String::new(),
             removable: String::new(),
             network: String::new(),
+            optical: String::new(),
             folders: Vec::new(),
             accents_exact: false,
             typos: String::new(),

@@ -211,6 +211,12 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 (g.binary, "not text"),
                 (g.too_big, "too large"),
                 (g.unreadable, "unreadable"),
+                (g.header_only, "media"),
+                (g.no_reader, "documents not read"),
+                (g.locked, "locked"),
+                (g.offline, "not downloaded"),
+                (g.no_text, "without text"),
+                (g.broken, "would not open"),
             ] {
                 if n > 0 {
                     said.push_str(&format!(" · {n} {}", t(what)));
@@ -458,6 +464,34 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             );
         }
         Response::Accepted => println!("{}", t("accepted")),
+        Response::Texts {
+            on,
+            dir,
+            max_mb,
+            documents,
+            no_text,
+            failed,
+            disk,
+            dead,
+            reader,
+        } => {
+            if !*reader {
+                println!("no document reader is installed: PDF and legacy Office are not read");
+            } else if !*on {
+                println!("documents' text is not kept: every search reads them again");
+            } else {
+                println!("kept in   {dir}");
+                println!(
+                    "documents {documents} with text · {no_text} without · {failed} would not open"
+                );
+                println!(
+                    "on disk   {} of {} · {} left by changed documents",
+                    format_size(*disk, BINARY),
+                    format_size(u64::from(*max_mb) << 20, BINARY),
+                    format_size(*dead, BINARY),
+                );
+            }
+        }
         Response::Text { text } => println!("{text}"),
         // An export never arrives here; `run_export` in `main.rs` writes its
         // pieces as they come. Named rather than covered by a `_`, so the next

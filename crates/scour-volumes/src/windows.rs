@@ -46,7 +46,8 @@ fn drive(letter: char, system: &str) -> Option<Volume> {
         DRIVE_FIXED if format!("{letter}:").eq_ignore_ascii_case(system) => Kind::System,
         DRIVE_FIXED if plugged_in(letter) => Kind::Removable,
         DRIVE_FIXED => Kind::Fixed,
-        DRIVE_REMOVABLE | DRIVE_CDROM => Kind::Removable,
+        DRIVE_REMOVABLE => Kind::Removable,
+        DRIVE_CDROM => Kind::Optical,
         DRIVE_REMOTE => Kind::Network,
         _ => return None,
     };

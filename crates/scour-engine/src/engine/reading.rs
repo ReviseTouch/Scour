@@ -50,6 +50,18 @@ impl Engine {
         *self.shared.enter.write() = Some(enter);
     }
 
+    /// How long since a question last read the index: what "nobody is using
+    /// it" means to work that waits for that.
+    pub fn idle_for(&self) -> std::time::Duration {
+        self.shared.last_read.lock().elapsed()
+    }
+
+    /// Documents no reader in `scour-grep` opens go to `texts`, which may keep
+    /// their words. Without it they are counted, not read.
+    pub fn read_documents_with(&self, texts: Arc<dyn scour_grep::Texts>) {
+        *self.shared.texts.write() = Some(texts);
+    }
+
     /// The reading of a `content:` query goes on from where it stopped, or
     /// begins again: every face waiting is told to ask once more.
     pub fn reread(&self, from_start: bool) {
@@ -65,6 +77,7 @@ impl Engine {
             index: Arc::clone(&self.shared.index),
             roots: self.roots(),
             enter: self.shared.enter.read().clone(),
+            texts: self.shared.texts.read().clone(),
             revision: self.shared.revision.load(Ordering::Acquire),
             touched: Arc::new(move || shared.touched()),
         }
@@ -87,10 +100,13 @@ impl Engine {
         ask: &crate::GrepAsk,
         enter: Option<scour_grep::Enter>,
     ) -> Result<crate::Grepped> {
-        self.shared.reading();
+        if !ask.background {
+            self.shared.reading();
+        }
         let (index, roots) = (self.shared.index.as_ref(), self.roots());
         // What reads the rest of the query reads this one too, `content:` aside.
         let ast = crate::content::without(self.shared.ast(query));
-        crate::grep::run(index, &roots, ast, CANDIDATES, ask, enter)
+        let texts = self.shared.texts.read().clone();
+        crate::grep::run(index, &roots, ast, CANDIDATES, ask, enter, texts)
     }
 }

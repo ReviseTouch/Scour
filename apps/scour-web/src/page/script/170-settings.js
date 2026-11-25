@@ -85,6 +85,17 @@
       if (KEPT.narrow_off) { CHIPS = []; drawNarrow(); }
       drawSettings();
     });
+    seg("seg-texts", [["on", T("On")], ["off", T("Off")]], k.texts_off ? "off" : "on", (v) => {
+      KEPT.texts_off = v === "off";
+      keep({ texts_off: KEPT.texts_off });
+      setTimeout(loadTexts, 300);
+      drawSettings();
+    });
+    seg("seg-texts-ahead", [["on", T("On")], ["off", T("Off")]], k.texts_ahead ? "on" : "off", (v) => {
+      KEPT.texts_ahead = v === "on";
+      keep({ texts_ahead: KEPT.texts_ahead });
+      drawSettings();
+    });
     seg("seg-threads",
       [["0", T("Automatic")], ["1", "1"], ["2", "2"], ["4", "4"], ["8", "8"]],
       String(k.search_threads || 0),
@@ -140,6 +151,8 @@
       k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
     seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
       k.network || "", (v) => { KEPT.network = v; keep({ network: v }); loadDisks(); drawSettings(); });
+    seg("seg-optical", [["", T("Never")], ["ask", T("Ask")], ["always", T("Always scan")]],
+      k.optical || "", (v) => { KEPT.optical = v; keep({ optical: v }); loadDisks(); drawSettings(); });
     seg("seg-every",
       [["1", T("1 min")], ["5", T("5 min")], ["10", T("10 min")], ["30", T("30 min")], ["60", T("1 hour")]],
       String(k.folders_every || 10),
@@ -159,8 +172,39 @@
       where.append(st.dir || "", document.createElement("br"), facts);
       document.getElementById("index-open").disabled = !st.dir;
     }).catch(() => {});
+    loadTexts();
     drawIndexReset();
   }
+  /* Documents' kept text, beside the index it serves. */
+  function loadTexts() {
+    SERVICE.get("texts", {}).then((x) => {
+      const facts = document.getElementById("texts-facts");
+      TEXTS_DIR = x.dir || "";
+      facts.textContent = !x.reader
+        ? T("No document reader is installed.")
+        : !x.on
+          ? T("Not kept: every search reads them again.")
+          : `${x.dir}\n${fmt(x.documents)} ${T("with text")} · ${fmt(x.no_text)} ${T("without text")} · ` +
+            `${fmt(x.failed)} ${T("would not open")} · ${bytes(x.disk)} / ${bytes(x.max_mb * 1048576)}`;
+      document.getElementById("texts-clear").disabled = !x.on;
+      document.getElementById("texts-move").disabled = !x.on;
+    }).catch(() => {});
+  }
+  let TEXTS_DIR = "";
+  document.getElementById("texts-move").addEventListener("click", () => {
+    SERVICE.pickFolder(TEXTS_DIR).then((r) => {
+      if (!r || !r.path) return;
+      KEPT.texts_dir = r.path;
+      keep({ texts_dir: r.path });
+      setTimeout(loadTexts, 300);
+    }).catch((err) => console.warn("texts:", err));
+  });
+  document.getElementById("texts-clear").addEventListener("click", () => {
+    fetch(`/api/texts?${new URLSearchParams({ forget: "1", t: TOKEN })}`, {
+      method: "POST",
+      cache: "no-store",
+    }).then(loadTexts).catch((err) => console.warn("texts:", err));
+  });
   function drawIndexReset() {
     document.getElementById("index-reset-desc").textContent = INDEX_SURE
       ? T("Searches will find little until the scan is done, a minute or a few on most machines.")

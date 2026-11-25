@@ -161,6 +161,29 @@ pub(crate) fn wire(wiring: &Wiring) {
         let weak = window.as_weak();
         let link = Rc::clone(link);
         let cat = Rc::clone(cat);
+        window.on_texts_move({
+            let weak = window.as_weak();
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                let start = w.get_texts_dir().to_string();
+                std::thread::spawn(move || {
+                    let at = std::path::Path::new(&start);
+                    let start = at.parent().filter(|p| p.is_dir());
+                    if let Some(chosen) = scour_openers::pick_folder(start) {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            crate::deliver(Got::TextsDir(chosen));
+                        });
+                    }
+                });
+            }
+        });
+        window.on_texts_forget({
+            let link = Rc::clone(&link);
+            move || {
+                link.send(Ask::ForgetTexts);
+                link.send(Ask::Texts);
+            }
+        });
         window.on_index_tidy(move || {
             let Some(w) = weak.upgrade() else { return };
             link.send(Ask::Reorganize);
@@ -283,6 +306,16 @@ pub(crate) fn wire(wiring: &Wiring) {
                     w.set_threads_choice(value.clone());
                     change.search_threads = value.parse().ok();
                 }
+                "texts" => {
+                    let on = value == "on";
+                    w.set_texts_on(on);
+                    change.texts_off = Some(!on);
+                }
+                "texts-ahead" => {
+                    let on = value == "on";
+                    w.set_texts_ahead_on(on);
+                    change.texts_ahead = Some(on);
+                }
                 _ => {
                     w.set_fresh_choice(value.clone());
                     change.fresh_within = value.parse().ok();
@@ -303,6 +336,9 @@ pub(crate) fn wire(wiring: &Wiring) {
             } else if kind == "network" {
                 w.set_network_choice(value.clone());
                 change.network = Some(value.to_string());
+            } else if kind == "optical" {
+                w.set_optical_choice(value.clone());
+                change.optical = Some(value.to_string());
             } else {
                 w.set_removable_choice(value.clone());
                 change.removable = Some(value.to_string());

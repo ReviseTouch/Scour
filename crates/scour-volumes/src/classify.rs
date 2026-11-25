@@ -140,11 +140,9 @@ fn volume(m: &Mount, probe: &dyn Probe) -> Volume {
         Kind::System
     } else if network {
         Kind::Network
-    } else if probe.removable(&m.source)
-        || within(&m.at, "/run/media")
-        || within(&m.at, "/media")
-        || matches!(m.fs.as_str(), "iso9660" | "udf")
-    {
+    } else if is_optical(m) {
+        Kind::Optical
+    } else if probe.removable(&m.source) || within(&m.at, "/run/media") || within(&m.at, "/media") {
         Kind::Removable
     } else {
         Kind::Fixed
@@ -162,6 +160,18 @@ fn volume(m: &Mount, probe: &dyn Probe) -> Volume {
         fs: m.fs.clone(),
         size: if network { 0 } else { probe.size(&m.at) },
     }
+}
+
+/// A disc in an optical drive: by its filesystem, or by the drive it was
+/// mounted from (`/dev/sr0`, `/dev/cdrom`). A disc image mounted through a
+/// loop device has the same filesystem, and is the same thing to a person.
+fn is_optical(m: &Mount) -> bool {
+    matches!(m.fs.as_str(), "iso9660" | "udf")
+        || m.source
+            .strip_prefix("/dev/sr")
+            .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        || m.source == "/dev/cdrom"
+        || m.source == "/dev/dvd"
 }
 
 /// `path` is `base` or somewhere under it.

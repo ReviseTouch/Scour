@@ -48,6 +48,8 @@ pub struct Change {
     /// See [`Settings::removable`] and [`Settings::network`].
     pub removable: Option<String>,
     pub network: Option<String>,
+    /// See [`Settings::optical`].
+    pub optical: Option<String>,
     /// Replace the list outright. See [`Settings::folders`].
     pub folders: Option<Vec<String>>,
     /// Replace the list outright. See [`Settings::folders_off`].
@@ -66,6 +68,14 @@ pub struct Change {
     pub search_threads: Option<u32>,
     /// See [`Settings::fresh_within`].
     pub fresh_within: Option<u32>,
+    /// See [`Settings::texts_off`].
+    pub texts_off: Option<bool>,
+    /// See [`Settings::texts_max_mb`].
+    pub texts_max_mb: Option<u32>,
+    /// See [`Settings::texts_dir`].
+    pub texts_dir: Option<String>,
+    /// See [`Settings::texts_ahead`].
+    pub texts_ahead: Option<bool>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -86,11 +96,20 @@ impl Change {
         self.memory.is_some() || self.search_threads.is_some() || self.fresh_within.is_some()
     }
 
+    /// Whether this changes how documents' text is kept.
+    pub fn moves_texts(&self) -> bool {
+        self.texts_off.is_some()
+            || self.texts_max_mb.is_some()
+            || self.texts_dir.is_some()
+            || self.texts_ahead.is_some()
+    }
+
     /// Whether this changes what is indexed — the disks asked about, the
     /// folders added — so the service plans its sources again.
     pub fn moves_sources(&self) -> bool {
         self.removable.is_some()
             || self.network.is_some()
+            || self.optical.is_some()
             || self.folders.is_some()
             || self.folders_off.is_some()
             || self.folders_unwatched.is_some()
@@ -188,6 +207,9 @@ impl Change {
         if let Some(v) = self.removable {
             to.removable = v;
         }
+        if let Some(v) = self.optical {
+            to.optical = v;
+        }
         if let Some(v) = self.network {
             to.network = v;
         }
@@ -214,6 +236,18 @@ impl Change {
         }
         if let Some(v) = self.fresh_within {
             to.fresh_within = v;
+        }
+        if let Some(v) = self.texts_off {
+            to.texts_off = v;
+        }
+        if let Some(v) = self.texts_max_mb {
+            to.texts_max_mb = v;
+        }
+        if let Some(v) = self.texts_dir {
+            to.texts_dir = v;
+        }
+        if let Some(v) = self.texts_ahead {
+            to.texts_ahead = v;
         }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;

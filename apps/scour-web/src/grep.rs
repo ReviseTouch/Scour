@@ -24,6 +24,12 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
                 "binary": 0,
                 "too_big": 0,
                 "unreadable": 0,
+                "header_only": 0,
+                "no_reader": 0,
+                "locked": 0,
+                "offline": 0,
+                "no_text": 0,
+                "broken": 0,
                 "next": serde_json::Value::Null,
                 "took_us": 0,
             }),
@@ -73,6 +79,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
             .and_then(|s| s.parse().ok())
             .unwrap_or(5_000)
             .min(15_000),
+        rate_mib: 0,
     };
     match call(client, request) {
         Ok(Response::Grep(r)) => {
@@ -127,6 +134,12 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
                     "binary": r.binary,
                     "too_big": r.too_big,
                     "unreadable": r.unreadable,
+                    "header_only": r.header_only,
+                    "no_reader": r.no_reader,
+                    "locked": r.locked,
+                    "offline": r.offline,
+                    "no_text": r.no_text,
+                    "broken": r.broken,
                     "next": r.next,
                     "took_us": r.took_us,
                 }),

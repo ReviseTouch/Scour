@@ -113,6 +113,35 @@ fn a_rule_for_plugged_in_and_network_disks_answers_for_them() {
     assert!(states(&p).contains(&("uuid:usb", DiskState::Off)));
 }
 
+/// A disc is left out unless somebody said otherwise; asked, or always.
+#[test]
+fn a_disc_is_left_out_unless_chosen() {
+    let mut volumes = machine();
+    volumes.push(disk("uuid:dvd", "/run/media/u/FILM", Kind::Optical));
+    let state = |optical: &str| {
+        let settings = Settings {
+            optical: optical.into(),
+            ..Settings::default()
+        };
+        let p = plan(&Config::default(), &volumes, &settings, &HashSet::new());
+        states(&p)
+            .into_iter()
+            .find(|(id, _)| *id == "uuid:dvd")
+            .map(|(_, s)| s)
+    };
+    assert_eq!(state(""), Some(DiskState::Off));
+    assert_eq!(state("never"), Some(DiskState::Off));
+    assert_eq!(state("ask"), Some(DiskState::Asking));
+    assert_eq!(state("always"), Some(DiskState::Chosen));
+    // Whatever is said for plugged-in disks says nothing for a disc.
+    let settings = Settings {
+        removable: "always".into(),
+        ..Settings::default()
+    };
+    let p = plan(&Config::default(), &volumes, &settings, &HashSet::new());
+    assert!(states(&p).contains(&("uuid:dvd", DiskState::Off)));
+}
+
 /// A folder added from a face is a source of its own, unless an indexed
 /// disk holds it already; and a relative path is not a folder.
 #[test]

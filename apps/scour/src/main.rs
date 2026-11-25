@@ -136,7 +136,9 @@ enum Command {
         /// The pattern is a regular expression, read a line at a time.
         #[arg(long, short = 'e', conflicts_with = "hex")]
         regex: bool,
-        /// The pattern is bytes, in hex: `"DE AD BE EF"`. Implies `--binary`.
+        /// The pattern is bytes, in hex: `"DE AD BE EF"`; `??` is any byte, and a
+        /// leading `^` means at the start of the file. Reads every file, pictures and
+        /// binaries included.
         #[arg(long)]
         hex: bool,
         /// `a` is not `A`.
@@ -164,6 +166,10 @@ enum Command {
         /// Go on from here: the number a shorter answer ended with.
         #[arg(long, default_value_t = 0)]
         from: u32,
+        /// Read no faster than this many megabytes a second, leaving the disk
+        /// to others. Zero: as fast as it goes.
+        #[arg(long, default_value_t = 0)]
+        rate_mb: u32,
     },
     /// The same file, several times over — largest saving first.
     ///
@@ -242,6 +248,25 @@ enum Command {
         #[arg(long, value_enum)]
         typos: Option<Typos>,
     },
+    /// Documents' kept text — PDF, legacy Office, e-mail: what is kept,
+    /// where, and how much. A flag changes it for every face.
+    Texts {
+        /// Forget every kept text; the next search reads the documents again.
+        #[arg(long)]
+        clear: bool,
+        /// `on` keeps documents' text after a search reads them, `off` does not.
+        #[arg(long, value_enum)]
+        keep: Option<OnOff>,
+        /// Megabytes of compressed text kept at most; zero is the default.
+        #[arg(long)]
+        max_mb: Option<u32>,
+        /// Where it is kept; an empty string is beside the settings.
+        #[arg(long)]
+        dir: Option<String>,
+        /// `on` reads documents ahead of any search while nobody uses the machine.
+        #[arg(long, value_enum)]
+        ahead: Option<OnOff>,
+    },
     /// Print the MCP configuration to paste into a client.
     McpConfig {
         /// Which client: `claude-desktop`, `claude-code`, `codex`, `cursor`, `gemini`, `vscode`.
@@ -250,6 +275,12 @@ enum Command {
     },
     /// Where the settings and the index live.
     Where,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -588,6 +619,7 @@ fn build(args: &Args) -> Result<Request> {
             max_mb,
             seconds,
             from,
+            rate_mb,
         }) => Request::Grep {
             query: join(query),
             pattern: pattern.clone(),
@@ -606,6 +638,7 @@ fn build(args: &Args) -> Result<Request> {
             read_budget: budget_mb.saturating_mul(1024 * 1024),
             max_size: max_mb.saturating_mul(1024 * 1024),
             timeout_ms: seconds.saturating_mul(1000),
+            rate_mib: *rate_mb,
         },
         Some(Command::Dupes {
             under,
@@ -649,6 +682,29 @@ fn build(args: &Args) -> Result<Request> {
             change: scour_settings::Change {
                 accents_exact: accents.map(|a| a == Accents::Exact),
                 typos: typos.map(|t| t.kept().to_owned()),
+                ..Default::default()
+            },
+        },
+        Some(Command::Texts { clear: true, .. }) => Request::ForgetTexts {},
+        Some(Command::Texts {
+            keep: None,
+            max_mb: None,
+            dir: None,
+            ahead: None,
+            ..
+        }) => Request::Texts {},
+        Some(Command::Texts {
+            keep,
+            max_mb,
+            dir,
+            ahead,
+            ..
+        }) => Request::SetSettings {
+            change: scour_settings::Change {
+                texts_off: keep.map(|k| k == OnOff::Off),
+                texts_max_mb: *max_mb,
+                texts_dir: dir.clone(),
+                texts_ahead: ahead.map(|a| a == OnOff::On),
                 ..Default::default()
             },
         },

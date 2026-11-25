@@ -162,7 +162,7 @@ derlendiğini denetler.
 
 ### Kaynaktan
 
-Gerekenler: Rust 1.88 ya da üstü ([rustup](https://rustup.rs)), `pkg-config`
+Gerekenler: Rust 1.92 ya da üstü ([rustup](https://rustup.rs)), `pkg-config`
 ve yalnız pencerenin istediği fontconfig geliştirme başlıkları:
 
 | dağıtım | paketler |

@@ -2317,6 +2317,8 @@ fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
         read_budget: 0,
         max_size: 0,
         timeout: Duration::from_secs(20),
+        rate: 0,
+        background: false,
     };
     let first = f.engine.grep("ext:rs", &ask, None).expect("grep");
     assert_eq!((first.candidates, first.files.len()), (20, 8));
@@ -2464,4 +2466,29 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
     assert_ne!(f.engine.status().revision, before, "nobody was told");
     settle(&f, |_| !ask("ext:rs content:iğne").capped);
     assert_eq!(ask("ext:rs content:iğne").total, 9);
+
+    // Exported as found: the reading the screen has, and one nobody had
+    // asked for yet, read for the export.
+    let export = |q: &str| {
+        let mut csv = String::new();
+        let n = f
+            .engine
+            .export(q, &["name".to_owned()], |piece| {
+                csv.push_str(&piece);
+                true
+            })
+            .expect("export");
+        (n, csv)
+    };
+    let (n, csv) = export("ext:rs content:iğne");
+    assert_eq!(n, 9);
+    assert_eq!(csv.lines().count(), 10, "a header and nine rows: {csv}");
+    assert!(
+        csv.contains("f48.rs") && !csv.contains("f54") && !csv.contains("f53"),
+        "{csv}"
+    );
+    let (n, csv) = export("ext:txt content:alpha content:beta");
+    assert_eq!((n, csv.lines().count()), (30, 31), "{csv}");
+    let (n, csv) = export("content:iğne content:gamma");
+    assert_eq!((n, csv.lines().count()), (0, 1), "{csv}");
 }

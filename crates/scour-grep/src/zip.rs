@@ -7,7 +7,7 @@ use std::fs::File;
 use flate2::{Decompress, FlushDecompress, Status};
 use memchr::{memchr_iter, memrchr};
 use scour_extract::zip::{self, Entry};
-use scour_extract::{inflate_whole, strip_xml, udf_cdata};
+use scour_extract::{attribute_values, inflate_whole, strip_xml, udf_cdata};
 
 use crate::excerpt::{Hit, Kind, around};
 use crate::pattern::Pattern;
@@ -65,6 +65,8 @@ impl EntryMeta {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
     DocXml,
+    /// A workbook's directory: its sheets' names are attributes.
+    SheetNames,
     NestedZip,
     PlainStream,
     SkipBin,
@@ -117,10 +119,11 @@ struct Tally {
 
 impl ZipScratch {
     /// Search a `PK\x03\x04` file. When `eof` is true, `head` already holds the
-    /// entire file in memory and zero extra syscalls are made.
+    /// entire file in memory and zero extra syscalls are made; `file` is only
+    /// read when it is not.
     pub(crate) fn search_file(
         &mut self,
-        file: &mut File,
+        file: Option<&mut File>,
         file_len: u64,
         head: &[u8],
         eof: bool,
@@ -134,11 +137,14 @@ impl ZipScratch {
             bin_skipped: false,
             uncomp_spent: 0,
         };
-        let extra = if eof {
-            self.scan_slice(head, None, 0, pattern, opts, &mut tally);
-            0
-        } else {
-            self.scan_large_file(file, file_len, head, pattern, opts, &mut tally)
+        let extra = match file {
+            Some(file) if !eof => {
+                self.scan_large_file(file, file_len, head, pattern, opts, &mut tally)
+            }
+            _ => {
+                self.scan_slice(head, None, 0, pattern, opts, &mut tally);
+                0
+            }
         };
         let outcome = if !tally.hits.is_empty() || tally.more {
             Outcome::Found {
@@ -274,6 +280,21 @@ impl ZipScratch {
         }
         match e.role {
             Role::SkipBin => tally.bin_skipped = true,
+            Role::SheetNames => {
+                let mut xml_raw = std::mem::take(&mut self.out);
+                if inflate_whole(
+                    &mut self.inflate,
+                    e.method,
+                    comp,
+                    e.uncomp_size,
+                    &mut xml_raw,
+                    1 << 20,
+                ) {
+                    attribute_values(&xml_raw, b"sheet", b"name", &mut self.xml, 64 << 10);
+                    scan_bytes(&self.xml, Kind::Text, label, pattern, opts, tally);
+                }
+                self.out = xml_raw;
+            }
             Role::DocXml => {
                 tally.text_seen = true;
                 let cap = MAX_ENTRY_UNCOMP.min(MAX_ARCHIVE_UNCOMP - tally.uncomp_spent);
@@ -495,6 +516,26 @@ fn collect_in_chunk(
     }
 }
 
+/// Text already in memory — a document's, taken out of it — searched whole.
+pub(crate) fn search_whole(text: &[u8], pattern: &Pattern, opts: &Options) -> Outcome {
+    let mut tally = Tally {
+        hits: Vec::new(),
+        more: false,
+        text_seen: true,
+        bin_skipped: false,
+        uncomp_spent: 0,
+    };
+    scan_bytes(text, Kind::Text, None, pattern, opts, &mut tally);
+    if tally.hits.is_empty() && !tally.more {
+        Outcome::Clean
+    } else {
+        Outcome::Found {
+            hits: tally.hits,
+            more: tally.more,
+        }
+    }
+}
+
 fn scan_bytes(
     hay: &[u8],
     kind: Kind,
@@ -548,7 +589,8 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
                         || n.starts_with(b"word/footer")
                         || n == b"word/footnotes.xml"
                         || n == b"word/endnotes.xml"
-                        || n == b"word/comments.xml")
+                        || n == b"word/comments.xml"
+                        || n.starts_with(b"word/charts/chart"))
                 {
                     e.prio = 1;
                     true
@@ -559,7 +601,14 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
                 if n == b"xl/sharedStrings.xml" {
                     e.prio = 0;
                     true
-                } else if n.starts_with(b"xl/worksheets/sheet") && n.ends_with(b".xml") {
+                } else if (n.starts_with(b"xl/worksheets/sheet")
+                    // Sheet names, cell comments, and the text of charts.
+                    || n == b"xl/workbook.xml"
+                    || n.starts_with(b"xl/comments")
+                    || n.starts_with(b"xl/threadedComments/")
+                    || n.starts_with(b"xl/charts/chart"))
+                    && n.ends_with(b".xml")
+                {
                     e.prio = 1;
                     true
                 } else {
@@ -569,7 +618,11 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
                 if n.starts_with(b"ppt/slides/slide") && n.ends_with(b".xml") {
                     e.prio = 0;
                     true
-                } else if n.starts_with(b"ppt/notesSlides/notesSlide") && n.ends_with(b".xml") {
+                } else if (n.starts_with(b"ppt/notesSlides/notesSlide")
+                    || n.starts_with(b"ppt/charts/chart")
+                    || n.starts_with(b"ppt/comments/"))
+                    && n.ends_with(b".xml")
+                {
                     e.prio = 1;
                     true
                 } else {
@@ -580,7 +633,11 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
                 n == b"content.xml"
             };
             if keep {
-                e.role = Role::DocXml;
+                e.role = if n == b"xl/workbook.xml" {
+                    Role::SheetNames
+                } else {
+                    Role::DocXml
+                };
             }
             keep
         });

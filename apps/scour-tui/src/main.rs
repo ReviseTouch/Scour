@@ -95,6 +95,7 @@ fn main() -> Result<()> {
     state.language_choice = kept.language.clone();
     state.removable = kept.removable.clone();
     state.network = kept.network.clone();
+    state.optical = kept.optical.clone();
     state.folders = kept.folders.clone();
     state.accents_exact = kept.accents_exact;
     state.typos = kept.typos.clone();

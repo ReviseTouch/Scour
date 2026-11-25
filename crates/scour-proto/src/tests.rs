@@ -81,7 +81,13 @@ fn a_disks_wire_names_are_the_ones_serde_writes() {
         assert_eq!(json, format!("\"{}\"", st.as_str()));
     }
     use scour_volumes::Kind;
-    for k in [Kind::System, Kind::Fixed, Kind::Removable, Kind::Network] {
+    for k in [
+        Kind::System,
+        Kind::Fixed,
+        Kind::Removable,
+        Kind::Network,
+        Kind::Optical,
+    ] {
         let json = serde_json::to_string(&k).expect("kind");
         assert_eq!(json, format!("\"{}\"", k.as_str()));
     }
@@ -130,6 +136,7 @@ fn every_request_round_trips() {
             read_budget: 1 << 20,
             max_size: 0,
             timeout_ms: 500,
+            rate_mib: 40,
         },
         Request::Volumes {},
         Request::Postpone {
@@ -143,6 +150,8 @@ fn every_request_round_trips() {
         Request::Status {},
         Request::Stats {},
         Request::Reread { from_start: false },
+        Request::Texts {},
+        Request::ForgetTexts {},
         Request::Await {
             since: 9,
             timeout_ms: 1_000,
@@ -212,6 +221,17 @@ fn every_response_round_trips() {
             folders: vec![],
         },
         Response::Facets(FacetResponse::default()),
+        Response::Texts {
+            on: true,
+            dir: "/s/texts".into(),
+            max_mb: 1024,
+            documents: 3,
+            no_text: 1,
+            failed: 2,
+            disk: 4096,
+            dead: 9,
+            reader: true,
+        },
         Response::Grep(GrepResponse {
             files: vec![GrepFile {
                 path: "/a/b.rs".into(),

@@ -9,7 +9,9 @@ use scour_proto::{Request, Response};
 use std::io::Write;
 use std::net::TcpStream;
 
-pub(super) fn api_search(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
+/// `text`: whether a `content:` find's line is sent with its row. Off under
+/// `--no-preview`, which promises the page no file's contents.
+pub(super) fn api_search(stream: &mut TcpStream, client: &Pool, req: &http::Req, text: bool) {
     let query = req.param("q").unwrap_or_default().to_owned();
     let limit: u32 = req
         .param("limit")
@@ -71,7 +73,7 @@ pub(super) fn api_search(stream: &mut TcpStream, client: &Pool, req: &http::Req)
                         "make": icons::may_thumbnail(&h.path, h.kind),
                         // Where a `content:` query found its text, cut in three
                         // at the find: the page counts in UTF-16, not bytes.
-                        "found": h.found.iter().map(found_json).collect::<Vec<_>>(),
+                        "found": h.found.iter().filter(|_| text).map(found_json).collect::<Vec<_>>(),
                     })
                 })
                 .collect();

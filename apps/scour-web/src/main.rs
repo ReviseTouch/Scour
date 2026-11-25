@@ -62,8 +62,9 @@ struct Args {
     /// one is wrong or there is none to detect. The file's path is appended.
     #[arg(long, value_name = "CMD")]
     quicklook: Option<String>,
-    /// Refuse `/api/preview`, so the page never receives a file's contents:
-    /// the panel then shows what the index knows and nothing else.
+    /// Refuse `/api/preview` and `/api/grep`, and send no `content:` find's
+    /// line, so the page never receives a file's contents: the panel then
+    /// shows what the index knows and nothing else.
     #[arg(long)]
     no_preview: bool,
     /// Never ask the desktop to make a thumbnail it has not made yet. Pictures
@@ -278,6 +279,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         || req.path == "/api/volume"
         || req.path == "/api/rescan"
         || req.path == "/api/reread"
+        || (req.path == "/api/texts" && req.param("forget").is_some())
         || req.path == "/api/index-do"
         || req.path == "/api/pick-folder"
         || (req.path == "/api/settings" && req.param("set").is_some())
@@ -306,7 +308,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
 
     match req.path.as_str() {
         "/" => http::page(&mut stream, page().as_bytes(), nonce()),
-        "/api/search" => api_search(&mut stream, client, &req),
+        "/api/search" => api_search(&mut stream, client, &req, doing.preview),
         "/api/csv" => api_csv(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream, client, &req),
@@ -316,6 +318,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         "/api/volume" => disks::api_volume(&mut stream, client, &req),
         "/api/rescan" => disks::api_rescan(&mut stream, client, &req),
         "/api/reread" => disks::api_reread(&mut stream, client, &req),
+        "/api/texts" => disks::api_texts(&mut stream, client, &req),
         "/api/index" => disks::api_index(&mut stream, client),
         "/api/index-do" => disks::api_index_do(&mut stream, client, &req, doing.launch),
         "/api/rules" => api_rules(&mut stream, client),

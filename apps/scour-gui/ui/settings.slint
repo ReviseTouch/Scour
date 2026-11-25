@@ -144,6 +144,10 @@ export component SettingsPage inherits Rectangle {
     in property <string> set-network-note;
     in property <[string]> network-labels;
     in property <string> network-choice;
+    in property <string> set-optical;
+    in property <string> set-optical-note;
+    in property <[string]> optical-labels;
+    in property <string> optical-choice;
     in property <string> set-folders;
     in property <string> set-folders-note;
     in property <[FolderRow]> folder-rows;
@@ -222,6 +226,18 @@ export component SettingsPage inherits Rectangle {
     in property <string> set-index-tidy-note;
     in property <string> set-index-tidy-push;
     callback index-tidy();
+    in property <string> set-texts;
+    in property <string> set-texts-note;
+    in property <bool> texts-on: true;
+    in property <string> set-texts-kept;
+    in property <string> texts-facts;
+    in property <string> set-texts-clear;
+    callback texts-forget();
+    in property <string> set-texts-ahead;
+    in property <string> set-texts-ahead-note;
+    in property <bool> texts-ahead-on;
+    in property <string> set-texts-move;
+    callback texts-move();
     in property <string> set-index-reset;
     in property <string> set-index-reset-sure;
     in property <string> set-index-reset-note;
@@ -762,6 +778,17 @@ export component SettingsPage inherits Rectangle {
                                         picked(v) => { root.policy-picked("network", v); }
                                     }
                                 }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-optical;
+                                    note: root.set-optical-note;
+                                    Choice {
+                                        labels: root.optical-labels;
+                                        values: ["", "ask", "always"];
+                                        value: root.optical-choice;
+                                        picked(v) => { root.policy-picked("optical", v); }
+                                    }
+                                }
                             }
                             SectionHead { text: root.set-folders; }
                             Text {
@@ -1250,6 +1277,48 @@ export component SettingsPage inherits Rectangle {
 
                         if root.settings-section == "index": VerticalLayout {
                             spacing: 6px;
+                            Card {
+                                SettingRow {
+                                    label: root.set-texts;
+                                    note: root.set-texts-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.texts-on ? "on" : "off";
+                                        picked(v) => { root.perf-picked("texts", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-texts-kept;
+                                    note: root.texts-facts;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Push {
+                                            label: root.set-texts-move;
+                                            plain: true;
+                                            enabled: root.texts-on;
+                                            clicked => { root.texts-move(); }
+                                        }
+                                        Push {
+                                            label: root.set-texts-clear;
+                                            enabled: root.texts-on;
+                                            clicked => { root.texts-forget(); }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-texts-ahead;
+                                    note: root.set-texts-ahead-note;
+                                    Choice {
+                                        labels: root.grid-labels;
+                                        values: ["on", "off"];
+                                        value: root.texts-ahead-on ? "on" : "off";
+                                        picked(v) => { root.perf-picked("texts-ahead", v); }
+                                    }
+                                }
+                            }
                             Card {
                                 SettingRow {
                                     label: root.set-index-where;

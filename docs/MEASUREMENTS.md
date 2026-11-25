@@ -861,6 +861,399 @@ derle cargo build --release -p scour-grep --example scan
 scripts/content-bench baseline /var/tmp/scour-corpus
 ```
 
+## An inflater handed only the room it needs (2026-11-24)
+
+**XLSX ten times faster, EPUB three, DOCX half again.** Each reading thread
+keeps one output buffer between ZIP entries, and it grows to the largest
+entry seen. `flate2`'s `decompress_vec` hands `zlib-rs` the buffer's whole
+spare capacity, and the cost was in proportion to it: a 1 KiB part read
+after a 30 MiB sheet paid for 30 MiB (mean capacity 12 MiB over 2,000
+workbooks, measured inside the branch). `inflate_whole` now gives it a
+window of the entry's size. Found while measuring Phase 1's added parts
+(sheet names cost 35 % more CPU, all of it in this).
+
+Two release binaries of the `scan` example, before (A) and after (N),
+alternated three times, warm cache, needle that is nowhere:
+
+| corpus | A seconds | N seconds | A CPU s | N CPU s | peak MiB A → N |
+|---|---:|---:|---:|---:|---:|
+| XLSX, 3,000 | 2.48–3.17 | 0.29–0.31 | 19.7–23.9 | 1.94–2.04 | 263–309 → 213–216 |
+| EPUB, 1,690 | 1.25–1.53 | 0.43 | 9.5–11.4 | 3.37–3.39 | 57–60 → 53–55 |
+| DOCX, 3,000 | 0.056–0.057 | 0.037–0.039 | 0.39 | 0.25 | 35 → 29–33 |
+| PPTX, 889 | 0.024 | 0.020–0.021 | 0.17 | 0.15 | 18 → 17 |
+
+The files with a find are the same for `mahkeme` in DOCX, ODT, UDF and EPUB;
+N finds four more XLSX, one more PPTX (sheet names, comments, charts) and
+two more RTF (now read as text).
+
+```sh
+derle cargo build --release -p scour-grep --example scan   # once at each commit
+for i in 1 2 3; do A zzqq < doc-xlsx.txt; N zzqq < doc-xlsx.txt; done
+```
+
+## Content search, Phase 1 (2026-11-24)
+
+Against ripgrep on 20,000 source files (`rg -i -F --no-ignore --hidden`,
+one path list, 9 binary files skipped by both): for `unsafe`, `TODO`,
+`pub fn` and `mahkeme` the same files, and the same first line in each.
+Whole process, warm, five alternations: scour 30–34 ms, rg 105–109 ms
+(rg's time includes `xargs`).
+
+A 300 MB file with no newline: 4.9 MiB peak, one reader's buffer. A
+UTF-16LE word in a Windows executable (`CompanyName` in the version
+resource) is found with `--binary` in 1,638 of 3,000 `.exe`/`.dll`.
+Every corpus, cold and warm: `docs/bench/content-phase-1.txt`.
+
+## A spinning disk, in what order (2026-11-24)
+
+PC2 (Windows, NTFS, Seagate ST500DM002 7,200 rpm), the `scan` example over
+five disjoint random sets of 12,000 files under 1 MiB taken from the same
+442,607 on one volume — each set read once, so each run is cold without
+needing to flush the cache (no administrator there). One reader, as the
+spinning-disk rule says. The listing that made the sets had read the
+directories, so the MFT was partly warm for all five alike.
+
+| set | order | seconds | files/s |
+|---|---|---:|---:|
+| 0 | path | 217.8 | 55 |
+| 1 | physical (first extent's LCN, `FSCTL_GET_RETRIEVAL_POINTERS`) | 401.8 | 30 |
+| 2 | physical | 363.8 | 33 |
+| 3 | path | 294.0 | 41 |
+| 4 | given (random) | 318.8 | 38 |
+
+**The physical order lost** — slower than reading at random, the extra open
+and query of every file before reading it costing more than any seek it
+saved — and the plan's rule for a gain under 20 % applied: the code that
+gathered it (`FIEMAP` on Linux, retrieval pointers on Windows) was removed,
+and no column for it goes into the index. The path order stays for a
+spinning disk's large sets (≥ 2,000 files or 64 MiB); a smaller set is
+read as given.
+
+```sh
+SCOUR_GREP_ORDER=path|given scan.exe zzqqxx_absent < setN.txt
+```
+
+## Readers on a solid disk (2026-11-24)
+
+This machine, NVMe btrfs, 30,690 files (source, executables, DOCX, XLSX,
+EPUB; 2.4 GiB), each dropped from the page cache first (`--cold`; 722 would
+not leave, being mapped by running programs), two passes:
+
+| readers | 1 | 2 | 4 | 8 | 12 | 16 | 20 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| seconds, pass 1 | 11.70 | 5.94 | 3.10 | 1.72 | 1.24 | 1.01 | 0.94 |
+| seconds, pass 2 | 10.35 | 5.60 | 3.10 | 1.71 | 1.26 | 1.10 | 0.92 |
+
+It keeps gaining past eight, the old ceiling. A solid disk now gets half
+the cores up to sixteen (ten here); the other half is left to the desk, and
+past its first batch a reading runs at idle disk priority and nice 10.
+
+```sh
+SCOUR_GREP_READERS=N scan --cold zzqq < mixed.txt
+```
+
+## Documents' text, read in another process and kept (2026-11-24)
+
+An isolated service (own socket, own index) over 886 documents copied from
+this machine — 400 PDF, 300 DOC, 150 XLS, 36 EML; 553 MiB — release build,
+`scour grep -n 2000 --lines 0 mahkeme`, twice per round, the cache cleared
+before each round:
+
+| | round 1 | round 2 |
+|---|---:|---:|
+| nothing kept: 842 read, 44 without text, 1 would not open | 19.06 s | 17.42 s |
+| kept: the same 768 files found | 0.116 s, 0 B read | 0.158 s, 0 B read |
+
+The second search opens no document: an inotify watch on the tree saw only
+its five directories opened. The kept text was 10.4 MiB on disk for 40.7 MiB
+of text with `ruzstd`; level 19 made 5.46 MiB of the same text. A changed e-mail was read again (95 B) and its old word no longer
+found; four extractors killed with `kill -9` mid-search left the service up,
+the search finished, and those four documents were counted as would not open.
+Four idle extractors held 430 MB between two searches; they now end after
+20 s idle. The service idle for 60 s afterwards: 3 ticks and 7 threads, the
+installed build on the same index 2 ticks and 6 threads.
+
+**Compression,** measured again on 124.5 MiB of text from 5,973 documents
+(2,000 PDF, 2,000 DOC, 1,000 XLS, 600 PPT, 373 EML from this machine), one
+thread, every block compressed and read back:
+
+| | block | size | ratio | compress | read back |
+|---|---|---:|---:|---:|---:|
+| libzstd 3 | 4 MiB | 24.60 MiB | 5.06× | 492 MB/s | 1,673 MB/s |
+| libzstd 9 | 4 MiB | 21.15 MiB | 5.89× | 123 MB/s | 1,936 MB/s |
+| libzstd 19 | 4 MiB | 18.85 MiB | 6.60× | 5.3 MB/s | 1,949 MB/s |
+| **structured-zstd 19** | 4 MiB | **18.85 MiB** | **6.60×** | 6.4 MB/s | **2,226 MB/s** |
+| structured-zstd 12 | 4 MiB | 20.89 MiB | 5.96× | 81 MB/s | 2,409 MB/s |
+| structured-zstd 19 | 1 MiB | 20.55 MiB | 6.06× | 7.1 MB/s | 2,108 MB/s |
+| ruzstd (fastest only) | 4 MiB | 37.25 MiB | 3.34× | 134 MB/s | 485 MB/s |
+| brotli q9 | 4 MiB | 20.58 MiB | 6.05× | 21 MB/s | 744 MB/s |
+| brotli q11 | 4 MiB | 17.73 MiB | 7.02× | 1.1 MB/s | 704 MB/s |
+| lz4 | 4 MiB | 42.53 MiB | 2.93× | 735 MB/s | 3,434 MB/s |
+
+`structured-zstd` is zstd written in Rust: at every level the same size as
+libzstd, read back faster, and the frames are one format — all 32 blocks of
+the 124.5 MiB came back byte for byte through both decoders. Kept: level 19,
+4 MiB blocks. Compressing at level 19 is slow, so a full block is sealed,
+read from memory meanwhile, and compressed by a thread of its own; a search
+never waits on it. brotli 11 is 6 % smaller and three times slower to read;
+reading is what every search does. An earlier commit of this phase used
+`ruzstd`, which writes only its fastest level: half the ratio, a fifth of
+the read speed.
+
+**Phrases in PDFs.** Five court phrases over the 400 PDFs, a quoted phrase
+against `(?i)` with `\s+` between its words (Turkish `i` spelled out):
+365 of 429 files before, **429 of 429** once a space in a phrase matches any
+run of blanks, line breaks, no-break and typographic spaces. Line breaks were
+the smaller part; `U+00A0` between words the larger.
+
+```sh
+scour --socket S texts --clear
+scour --socket S grep -n 2000 --lines 0 mahkeme          # twice
+scour --socket S grep -n 2000 --lines 0 '"asliye hukuk"' /pdf/
+scour --socket S grep -e -n 2000 --lines 0 '(?i)asl(?:i|İ|ı|I)ye\s+hukuk' /pdf/
+```
+
+## The service idle, phase by phase (2026-11-24)
+
+An isolated service over 3,170 files (source and 200 PDFs), one walk, one
+`grep`, forty seconds to settle, then 120 s with nothing asked. Debug-profile
+builds (optimized, with debug info) of each phase's last commit:
+
+| build | CPU ticks in 120 s | threads | RSS |
+|---|---:|---:|---:|
+| before content search (`55bc3bd`) | 4 | 6 | 8.3 MiB |
+| phase 1 (`a09d828`) | 3 | 6 | 12.2 MiB |
+| phase 2 (`be1113e`) | 2 | 6 | 14.2 MiB |
+| phase 3 (`455c913`) | 3 | 7 | 14.7 MiB |
+| phase 3, as now | 4 | 8 | 7.1 MiB |
+
+The ticks are noise. The two threads added sleep: the cache's tidying every
+five minutes and reading ahead, which looks every five minutes whether it
+may go on and does nothing unless chosen.
+
+## The desk during a cold reading (2026-11-24)
+
+This machine (NVMe, 20 threads): a probe reads 4 KiB of a file dropped from
+the cache and does 5 ms of CPU work every 100 ms, while 13,600 files are read
+cold again and again; normal and lowest priority alternated:
+
+| | small read median / p95 | 5 ms of work |
+|---|---:|---:|
+| nothing running | 0.12 / 1.35 ms | 5.00 ms |
+| reading, normal | 0.10–0.11 / 0.33–0.37 ms | 5.00 ms |
+| reading, lowest priority | 0.10–0.11 / 0.30–0.35 ms | 5.00 ms |
+
+Nothing to feel here, either way. A spinning disk is where it would show.
+
+## A 5,400 rpm disk, every cache dropped (2026-11-24)
+
+A 1 TB 2.5" disk (ST1000LM024) on USB, NTFS through `ntfs3`, BFQ. 10,000
+files under 1 MiB taken at random from one partition, 1.1 GiB; the partition
+unmounted and mounted again before each run, so nothing of it — data or MFT
+— is in memory. The `scan` example, `SCAN_ROOTS` naming the mount:
+
+| order | readers | round 1 | round 2 |
+|---|---:|---:|---:|
+| **where each file lies (`FIEMAP`)** | 1 | **31.7 s** (7.2 s of it asking) | **31.7 s** (7.2 s) |
+| by path | 1 | 60.5 s | 60.7 s |
+| as given (random) | 1 | 65.3 s | 65.2 s |
+| by path | 2 | 61.5 s | 61.4 s |
+| by path | 4 | 64.6 s | 80.5 s |
+
+The physical order is **1.9× faster**, its cost included, so it is back for
+a spinning disk on Linux — the plan's 20 % rule, applied the other way from
+PC2's. That measurement read each order on a different set with the MFT
+already warm from listing them, and Windows' retrieval pointers are another
+code path; Windows reads by path until it is repeated with the cache truly
+cold. One reader stays right: two gain nothing, four lose.
+
+**The desk beside it.** A probe reading 4 KiB of other cold files on the
+same disk every 100 ms, while the set is read cold over and over:
+
+| reading | small read, median / p95 |
+|---|---:|
+| nothing | 11.0 / 16.1 ms |
+| normal priority | 20.2 / 32.2 ms, 20.0 / 31.1 ms |
+| idle I/O class, nice 10 | 19.4 / 33.3 ms, 18.5 / 32.1 ms |
+| idle class, 16 MiB/s | 13.3 / 26.8 ms |
+| idle class, 8 MiB/s | 12.3 / 23.1 ms |
+| idle class, 4 MiB/s | 11.4 / 17.2 ms |
+
+The idle I/O class changed nothing even under BFQ; a pace does. Reading
+ahead, which nobody waits on, now goes at 4 MiB/s. Every run had a stall of
+about 1.7 s, with nothing of ours reading too: the disk's or its bridge's.
+
+```sh
+udisksctl unmount -b /dev/sdX5; udisksctl mount -b /dev/sdX5
+SCAN_ROOTS=/run/media/$USER/LABEL SCOUR_GREP_ORDER=physical|path|given \
+  SCOUR_GREP_READERS=1 scan zzqq < set.txt
+```
+
+## Flash behind USB, which says it spins (2026-11-25)
+
+A USB stick ("UDisk", 7.5 GB) and a class 4 card in a USB reader (7.4 GB),
+both FAT, both reporting `rotational` 1 — so Scour took both for spinning
+disks: one reader, files in place order. 3,000 small files (30 MiB) on
+each, the volume remounted before every run.
+
+The first 4 KiB of a file just dropped from the cache, median of 200: the
+stick 0.42 ms, the card 0.97 ms; the 5,400 rpm disk above, 11 ms.
+
+| readers, order as given | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|
+| stick, round 1 / 2 | 2.57 / 2.53 s | **2.51 / 1.93 s** | 2.07 / 2.08 s | 2.13 / 2.60 s |
+| card, round 1 / 2 | 4.61 / 4.64 s | **4.05 / 4.05 s** | 5.95 / 5.69 s | 4.21 / 4.22 s |
+
+Path and place order made no difference on either (within 2 %). So a disk
+that says it spins is asked again before a read of 64 files or more: the
+first 4 KiB of up to five of them, each dropped from the cache first, and a
+median under 3 ms is flash — two readers, the order given. Asked once a
+disk for the life of the process. The two binaries alternated, nothing set
+by hand:
+
+| | before | after |
+|---|---:|---:|
+| stick | 2.42 / 2.50 s | 2.20 / 2.06 s |
+| card | 4.63 / 4.71 s | 4.07 / 4.26 s |
+
+The walk asks `surefoot` the same question and still reads these with one
+thread; the same check belongs there, in a release of `surefoot`.
+
+## Windows: a 7,200 rpm disk in place order, and the volume read raw (2026-11-25)
+
+PC2 (Windows, NTFS, ST500DM002). Every set is 12,000 files under 1 MiB that
+nothing of ours had read, picked from the service's own index (an export,
+so the disk is not walked to list them); a set read a second time took
+2.7 s against its first 266 s, so the first readings were cold.
+
+**Place order, through the system** (`scan`, one reader, ABBA):
+
+| set | order | total | asking where each file is | reading |
+|---|---|---:|---:|---:|
+| 0 | place | 314.7 s | 215.9 s | ~99 s |
+| 1 | path | 278.4 s | — | 278 s |
+| 2 | path | 266.0 s | — | 266 s |
+| 3 | place | 300.8 s | 204.3 s | ~96 s |
+
+Read in place order the files come 2.8× faster, but asking for each file's
+place by opening it to read costs 17 ms a file on Windows and eats all of
+it. Windows reads by path.
+
+**The volume read raw** (`tools/ntfsraw`, elevated): each file opened for its
+attributes only and its extents asked for, the volume opened as a device
+and read uncached in place order in spans of up to 4 MiB (gaps under
+256 KiB read through); files inside their MFT record taken from the record;
+compressed, encrypted and sparse files the normal way:
+
+| | total | asking | reading |
+|---|---:|---:|---:|
+| through the system, never-read set | 264.6 s | — | 264.6 s |
+| **raw, never-read set** | **173.9 s** | 66.8 s | 107.1 s |
+| **raw again, the MFT warm** | **75.4 s** | 0.9 s | 74.5 s |
+
+Every one of the 10,484 files read both ways was the same, 4 KiB block by
+block. The 1,516 the asking account may not open were not read raw either:
+the open for attributes is refused first. The asking was the cost —
+5.6 ms a file while the MFT is cold — so the MFT itself was read next,
+once from start to end, for every file's extents (`ntfsraw mft`): no file
+is opened at all. 12,000 more never-read entries (10,511 files; the rest
+are folders the export also named, which neither way reads):
+
+| | total | MFT read (507 MB) | files read |
+|---|---:|---:|---:|
+| through the system | 263.4 s | — | 263.4 s |
+| **from the MFT, gaps under 256 KiB read through** | **86.8 s** | 14.7 s | 71.3 s |
+| **from the MFT, gaps under 1 MiB read through** | **75.6 s** | 4.5 s | 70.3 s |
+
+**3.0–3.5× with everything cold**, and the 10,511 files the same both ways,
+block by block (`verify-mft`). Reading through wider gaps made no
+difference (71.3 s against 70.3, more bytes in fewer spans); the MFT read
+itself varied from 4.5 to 28 s between runs, a fixed cost whatever the
+number of files asked for. Without opening files there is no access check
+either: a reading of the service's must check each file's security
+descriptor (`$Secure`) against the asker's token before it reads.
+
+**Queue depth.** The same MFT reading with its spans kept `NTFSRAW_QD` deep
+in flight (overlapped reads, the volume opened `FILE_FLAG_OVERLAPPED`), so
+the disk orders neighbours itself; six more never-read sets, the depths
+run 1, 8, 32, 32, 8, 1:
+
+| depth | total | reading files |
+|---:|---:|---:|
+| 1 | 100.0 s, 75.9 s | 94.0 s, 70.7 s |
+| 8 | 55.0 s, 53.9 s | 49.4 s, 48.6 s |
+| **32** | **49.7 s, 49.4 s** | **44.3 s, 44.1 s** |
+
+Depth 32 reads 1.6–2.1× faster than depth 1: the software sorts the whole
+set, the disk's own queue the next thirty-two by where the platter is.
+Against the system's reading of a never-read set, 263.4 s, that is **5.3×**.
+10,500 files the same both ways at depth 32.
+
+**A USB stick on Windows, FAT32** (3,000 files, 30 MiB; `fsutil volume
+dismount` before every run, so nothing of it is cached): Windows calls it
+solid, rightly. Scour's reader took 2.62–2.67 s with 1, 2, 4 or 8 readers;
+read raw — extents through opens for attributes, FAT32's data region from
+its boot sector — 2.73 s (1.17 s asking, 1.56 s reading). No gain: the
+stick reads about 24 MB/s whatever asks it. All 3,000 files the same both
+ways; LCN 0 is cluster 2 (taken as cluster 0, 2,999 differed).
+
+The same stick and the same 3,000 files, formatted exFAT and then NTFS
+(`format /Q`, the files copied back, dismounted before every run):
+
+| | Scour's reader, 1 / 2 / 4 / 8 | raw, extents by opens | raw, from the MFT |
+|---|---|---:|---:|
+| FAT32 | 2.62–2.67 s | 2.73 s | — |
+| exFAT | 3.10 / 3.13 / 3.08 / 3.09 s | 5.92 s | — |
+| NTFS | 4.47 / 3.52 / 3.44 / 3.46 s | 2.38 s | **1.67 s** |
+
+On exFAT the raw reading loses: its clusters are large, so spans merged
+over gaps read 103 MiB for 30 MiB of files. On NTFS the MFT reading is the
+fastest of all (3 MiB of MFT in 0.14 s, then 1.53 s of reading) — 2× Scour's
+reader there, because the system's opening of NTFS files is the slow part,
+not the stick. One reader is slow on NTFS only. Every file the same in all
+three verifications. The stick is FAT32 again.
+
+```sh
+cd tools/ntfsraw && cargo xwin build --release --target x86_64-pc-windows-msvc
+ntfsraw.exe raw set.txt      # elevated
+ntfsraw.exe normal set.txt
+ntfsraw.exe verify set.txt   # elevated: both ways, every block compared
+ntfsraw.exe mft set.txt      # elevated: extents from the MFT, no file opened
+NTFSRAW_GAP_KIB=1024 ntfsraw.exe mft set.txt
+NTFSRAW_QD=32 ntfsraw.exe mft set.txt   # 32 reads in flight
+```
+
+## The service's own raw lane, PC2 (2026-11-25)
+
+`scour-grep`'s raw lane (`src/raw`), through `examples/scan.rs`, elevated,
+`SCOUR_GREP_RAW_LOG=1`. Sets of 12,000 paths from G:'s index never read
+before, 7,200 rpm, raw and normal in turn:
+
+| set | way | total | of it |
+|---|---|---:|---|
+| svd0 | raw | 192.4 s | 10,403 files raw: MFT 507.5 MiB in 7.0 s, their data in 44.5 s; 1,596 the normal way |
+| svd1 | normal | 219.4 s | |
+
+The 1,596 left are mostly directories — the sets were exported with them,
+and a search never hands one to the reader (`scour-engine/src/grep.rs`
+leaves them out) — opened the normal way on a cold disk at about 90 ms
+each. The raw part itself read 10,403 files in 51.5 s; the comparison
+without directories is still to be run. The MFT's own reading varied from
+7 s to 39 s between runs on the same disk. Every answer the same both ways
+on one set with a needle that is found: 1,048 lines, 0 different.
+
+Two faults found on the way, both fixed: `$SDS` keeps freed descriptors as
+zeros with entries after them (the parser stopped at the first), and
+`%TEMP%` given in its short 8.3 form names nothing the MFT spells (a short
+name is read the normal way; the test now uses the long one).
+
+C: (solid), the component and driver stores, never read: the normal way took
+7.2–11.2 s cold and 0.58 s warm for 12,000 files — opening, not reading, on
+Windows even on flash. The raw lane did not run there: C:'s MFT is in so
+many pieces that its own record holds an attribute list, which the lane now
+follows (`mft::mft_runs`). **Not yet measured on C:**, so raw reading stays
+off by default on a solid disk.
+
 ## Reproducing
 
 ```sh

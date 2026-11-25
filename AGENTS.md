@@ -76,7 +76,7 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `usage` | | `path`, `top` → what a subtree weighs; hard links charged `disk / links` per name |
 | `explain` | | `query`, `cursor` → the sentence, the coloured spans, completions — without running it |
 | `duplicates` | | `under`, `min_size`, `read_budget`, `top` → same-size groups and how many were **read** and proved identical |
-| `grep` | | `query`, `pattern` (in `text` mode supports `;`/`\|` OR, space AND, `!term` NOT, `"phrase"`), `mode` (`text`/`regex`/`hex`), `exact_case`, `binary`, `sort`, `descending`, `offset`, `top`, `hits`, `read_budget`, `max_size`, `timeout_ms` → the files of the query that hold the pattern, in `sort` order, each with `meta`, `kind` and the lines it is on; what was left unread and why (`binary`, `too_big`, `unreadable`); `next`, the `offset` to go on from when it stopped short |
+| `grep` | | `query`, `pattern` (in `text` mode supports `;`/`\|` OR, space AND, `!term` NOT, `"phrase"`), `mode` (`text`/`regex`/`hex`, where `??` is any byte and a leading `^` the file's first byte), `exact_case`, `binary`, `sort`, `descending`, `offset`, `top`, `hits`, `read_budget`, `max_size`, `timeout_ms` → the files of the query that hold the pattern, in `sort` order, each with `meta`, `kind` and the lines it is on; what was left unread and why (`binary`, `too_big`, `unreadable`, `header_only` — pictures, sound, video, disk images, read only for `hex` — `no_reader` — PDF and legacy Office, until they have one — `locked`, `offline`: cloud placeholders and files on FUSE mounts that fetch from elsewhere (rclone, sshfs, cloud drives; not `fuseblk`), which reading would download, `no_text`: documents that opened and hold no text, and `broken`: documents that would not open); `rate_mib` caps how fast it reads, and past its first batch a reading runs at the lowest disk and CPU priority; `next`, the `offset` to go on from when it stopped short |
 | `sources`, `status`, `stats`, `syntax`, `places`, `rules` | | facts, never sentences; `status.asking` counts the disks waiting to be asked about |
 | `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual` |
 | `choose` | ✓ | `volume`, `index` → a yes or a lasting no; kept in the settings as `volumes_on` / `volumes_off` |
@@ -84,6 +84,8 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, `system_icons`, which face opens, and how words are read: `accents_exact`, `typos` (`""` offers, `always`, `off`). A change names only what it touches |
 | `await` | | `since`, `timeout_ms` → a `Status` when the index would answer differently. One blocked thread instead of a poll; also what tells the service somebody is looking |
 | `thumbnails` | ✓ | `files`, optional `size` → starts the desktop's own thumbnailers, at most four at once — bounded here because the bound is the machine's |
+| `texts` | | → whether documents' text is kept (`on`), where (`dir`), `max_mb`, `documents`, `no_text`, `failed`, `disk`, `dead`, and `reader` — false when no `scour-extractor` is installed |
+| `forget-texts` | ✓ | every kept text forgotten; the next search reads the documents again |
 | `reread` | | `from_start` → the reading of the last `content:` query goes on from where it stopped, or is forgotten and begun again; a `search` of such a query carries `reading` (`files`, and `stage`: `running` / `paused` / `done`) |
 | `rescan`, `maintain`, `shutdown` | ✓ | `maintain` is `flush` / `idle` / `compact` / `rebuild` |
 
@@ -117,7 +119,18 @@ the same table it always did.
 it bears — the walk asks the same question — and the disks side by side. It
 is bounded like everything else: `-n` files, `--budget-mb`, `--seconds`, and a
 `--from` to go on with. What it finds goes to standard output, the tally and
-what it skipped to standard error.
+what it skipped to standard error. A space in a phrase matches any run of
+blanks and line breaks, no-break and typographic spaces included.
+
+`texts` says what documents' text is kept; `texts --clear` forgets it, and
+`--keep on|off`, `--max-mb N`, `--dir PATH`, `--ahead on|off` change the
+settings `texts_off`, `texts_max_mb`, `texts_dir`, `texts_ahead` for every
+face. A `texts_dir` gets a `scour-texts` folder of the cache's own inside it,
+and a folder holding anything but a cache is never opened as one.
+`texts_ahead`, off unless chosen, reads documents before they are
+asked for once nobody has searched for five minutes and the load is under a
+quarter of the cores: a background reading that gives way from its first
+file, paced at 4 MiB/s, a minute at a time.
 
 ### MCP — `scour-mcp`
 
@@ -162,7 +175,8 @@ something listens is a function the face passes in.
 `src/wire.rs` names the concrete index and source; nothing else does. The
 sources are `config.toml`'s when a person wrote any; otherwise every disk
 `scour-volumes` finds — built-in ones without asking, plugged-in and network
-ones once chosen — each leaving the others' roots under its own alone, and
+ones once chosen, a CD or DVD (kind `optical`) only when the `optical`
+setting says `ask` or `always` — each leaving the others' roots under its own alone, and
 a disk's source every other disk mounted inside it (`src/disks.rs`). When
 nothing was written and the home folder sits inside an indexed disk, it is
 the `home` source it always was, and the system disk around it is walked no
