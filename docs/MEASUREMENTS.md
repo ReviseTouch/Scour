@@ -1173,6 +1173,30 @@ number of files asked for. Without opening files there is no access check
 either: a reading of the service's must check each file's security
 descriptor (`$Secure`) against the asker's token before it reads.
 
+**Queue depth.** The same MFT reading with its spans kept `NTFSRAW_QD` deep
+in flight (overlapped reads, the volume opened `FILE_FLAG_OVERLAPPED`), so
+the disk orders neighbours itself; six more never-read sets, the depths
+run 1, 8, 32, 32, 8, 1:
+
+| depth | total | reading files |
+|---:|---:|---:|
+| 1 | 100.0 s, 75.9 s | 94.0 s, 70.7 s |
+| 8 | 55.0 s, 53.9 s | 49.4 s, 48.6 s |
+| **32** | **49.7 s, 49.4 s** | **44.3 s, 44.1 s** |
+
+Depth 32 reads 1.6–2.1× faster than depth 1: the software sorts the whole
+set, the disk's own queue the next thirty-two by where the platter is.
+Against the system's reading of a never-read set, 263.4 s, that is **5.3×**.
+10,500 files the same both ways at depth 32.
+
+**A USB stick on Windows, FAT32** (3,000 files, 30 MiB; `fsutil volume
+dismount` before every run, so nothing of it is cached): Windows calls it
+solid, rightly. Scour's reader took 2.62–2.67 s with 1, 2, 4 or 8 readers;
+read raw — extents through opens for attributes, FAT32's data region from
+its boot sector — 2.73 s (1.17 s asking, 1.56 s reading). No gain: the
+stick reads about 24 MB/s whatever asks it. All 3,000 files the same both
+ways; LCN 0 is cluster 2 (taken as cluster 0, 2,999 differed).
+
 ```sh
 cd tools/ntfsraw && cargo xwin build --release --target x86_64-pc-windows-msvc
 ntfsraw.exe raw set.txt      # elevated
@@ -1180,6 +1204,7 @@ ntfsraw.exe normal set.txt
 ntfsraw.exe verify set.txt   # elevated: both ways, every block compared
 ntfsraw.exe mft set.txt      # elevated: extents from the MFT, no file opened
 NTFSRAW_GAP_KIB=1024 ntfsraw.exe mft set.txt
+NTFSRAW_QD=32 ntfsraw.exe mft set.txt   # 32 reads in flight
 ```
 
 ## Reproducing

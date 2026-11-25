@@ -16,6 +16,8 @@
 #[cfg(windows)]
 mod mft;
 #[cfg(windows)]
+mod queue;
+#[cfg(windows)]
 mod win;
 
 fn main() {

@@ -27,6 +27,11 @@ pub(crate) const SPAN: u64 = 4 << 20;
 /// Pieces nearer than this are read in one span, the gap read and dropped.
 const GAP: u64 = 256 << 10;
 
+/// `NTFSRAW_QD`: spans in flight at once, for the disk to order itself.
+fn queue_depth() -> usize {
+    std::env::var("NTFSRAW_QD").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1)
+}
+
 /// `NTFSRAW_GAP_KIB` widens what is read through, for measuring.
 fn gap() -> u64 {
     std::env::var("NTFSRAW_GAP_KIB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(GAP, |k| k << 10)
@@ -144,7 +149,7 @@ fn normal(path: &str) -> Option<(u64, u64)> {
     Some((sum, off))
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
@@ -163,6 +168,7 @@ struct Stats {
     bytes_files: u64,
     mft_mib: f64,
     mft_s: f64,
+    depth: usize,
 }
 
 impl Stats {
@@ -184,6 +190,7 @@ impl Stats {
                 ("file_mib", format!("{:.1}", self.bytes_files as f64 / 1048576.0)),
                 ("mft_mib", format!("{:.1}", self.mft_mib)),
                 ("mft_read_s", format!("{:.3}", self.mft_s)),
+                ("queue_depth", self.depth.to_string()),
             ],
         );
     }
@@ -203,7 +210,13 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
     let letter: String = paths[0].chars().take(2).collect();
     let volume = open_volume(&letter);
     let data = volume_data(volume);
-    let cluster = data.BytesPerCluster as u64;
+    // NTFS, or else FAT32 with its data region's offset as the base.
+    let (cluster, base) = if data.BytesPerCluster != 0 {
+        (data.BytesPerCluster as u64, 0u64)
+    } else {
+        assert!(!from_mft, "mft needs NTFS");
+        fat_layout(volume).expect("neither NTFS nor FAT32")
+    };
     let record_size = data.BytesPerFileRecordSegment as usize;
     assert!(cluster as usize % BLOCK == 0, "cluster {cluster} under 4 KiB");
     let mut stats = Stats {
@@ -221,6 +234,7 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
         bytes_files: 0,
         mft_mib: 0.0,
         mft_s: 0.0,
+        depth: 1,
     };
     let mut sums: HashMap<usize, u64> = HashMap::new();
     let mut sizes: Vec<u64> = vec![0; paths.len()];
@@ -285,7 +299,8 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
                 }
                 _ => {
                     let record = ((info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64) & 0x0000_FFFF_FFFF_FFFF;
-                    match resident_data(volume, record, record_size) {
+                    let resident = if record_size > 0 { resident_data(volume, record, record_size) } else { None };
+                match resident {
                         Some(bytes) if bytes.len() as u64 == size => {
                             stats.resident += 1;
                             let mut sum = 0;
@@ -304,7 +319,8 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
     let t = Instant::now();
     pieces.sort_by_key(|p| p.lcn);
     let gap_limit = gap();
-    let buf = aligned(SPAN as usize + gap_limit as usize + PIECE as usize);
+    // Spans first: each a run of pieces read in one request.
+    let mut spans: Vec<(u64, u64, usize, usize)> = Vec::new();
     let mut i = 0;
     while i < pieces.len() {
         let start = pieces[i].lcn;
@@ -320,17 +336,32 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
             end = new_end;
             j += 1;
         }
-        let len = ((end - start) * cluster) as usize;
-        read_at(volume, start * cluster, &mut buf[..len]);
-        stats.spans += 1;
-        stats.bytes_raw += len as u64;
+        spans.push((start, end, i, j));
+        i = j;
+    }
+    stats.spans = spans.len();
+    let depth = queue_depth();
+    stats.depth = depth;
+    let cap = SPAN as usize + gap_limit as usize + PIECE as usize;
+    let mut take = |buf: &[u8], (start, _end, i, j): (u64, u64, usize, usize)| {
         for p in &pieces[i..j] {
             let from = ((p.lcn - start) * cluster) as usize;
             let to = from + (p.clusters * cluster) as usize;
             let sum = sums.entry(p.file).or_insert(0);
             hash_range(sum, &buf[from..to], p.file_offset, sizes[p.file]);
         }
-        i = j;
+    };
+    if depth <= 1 {
+        let buf = aligned(cap);
+        for &span in &spans {
+            let len = ((span.1 - span.0) * cluster) as usize;
+            read_at(volume, base + span.0 * cluster, &mut buf[..len]);
+            stats.bytes_raw += len as u64;
+            take(&buf[..len], span);
+        }
+    } else {
+        let queued = crate::queue::Queue::open(&letter, depth, cap);
+        stats.bytes_raw += queued.run(&spans, cluster, base, &mut |buf, span| take(buf, span));
     }
     for &f in &normal_way {
         stats.fallback += 1;
@@ -382,8 +413,39 @@ fn volume_data(volume: HANDLE) -> NTFS_VOLUME_DATA_BUFFER {
             std::ptr::null_mut(),
         )
     };
-    assert!(ok != 0, "not NTFS, or not allowed");
+    if ok == 0 {
+        data.BytesPerCluster = 0;
+    }
     data
+}
+
+/// A FAT32 or exFAT volume's layout from its boot sector: bytes a cluster, and where
+/// cluster 2, the first of the data region, begins. `NTFSRAW_FAT_BIAS`
+/// says which cluster number a retrieval pointer's LCN 0 is (default 2).
+fn fat_layout(volume: HANDLE) -> Option<(u64, u64)> {
+    let buf = aligned(4096);
+    read_at(volume, 0, &mut buf[..4096]);
+    let bias: u64 = std::env::var("NTFSRAW_FAT_BIAS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    // exFAT: the cluster heap's offset and the sizes, as powers of two.
+    if &buf[3..11] == b"EXFAT   " {
+        let heap = u32::from_le_bytes(buf[0x58..0x5C].try_into().ok()?) as u64;
+        let bps = 1u64 << buf[0x6C];
+        let cluster = bps << buf[0x6D];
+        return Some((cluster, heap * bps + bias * cluster - 2 * cluster));
+    }
+    if &buf[0x52..0x57] != b"FAT32" {
+        return None;
+    }
+    let bps = u16::from_le_bytes([buf[11], buf[12]]) as u64;
+    let spc = buf[13] as u64;
+    let reserved = u16::from_le_bytes([buf[14], buf[15]]) as u64;
+    let fats = buf[16] as u64;
+    let fat_size = u32::from_le_bytes(buf[36..40].try_into().ok()?) as u64;
+    let cluster = bps * spc;
+    let data_start = (reserved + fats * fat_size) * bps;
+    // LCN 0 is cluster `bias`; cluster 2 sits at the data region's start.
+    let base = data_start + bias * cluster - 2 * cluster;
+    Some((cluster, base))
 }
 
 /// Opened for its attributes only: no data is asked for, so nothing scans it.
