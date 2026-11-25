@@ -45,6 +45,11 @@ export struct Scheme {
     cap-read-ring: brush,
     cap-neg: brush,
     cap-neg-ring: brush,
+    disk-system: brush,
+    disk-fixed: brush,
+    disk-removable: brush,
+    disk-network: brush,
+    disk-optical: brush,
 }
 
 export global Theme {
@@ -112,6 +117,13 @@ export global Theme {
     out property <brush> cap-read-ring: c.cap-read-ring;
     out property <brush> cap-neg: c.cap-neg;
     out property <brush> cap-neg-ring: c.cap-neg-ring;
+
+    // --- disks, by kind: the place lens's strip and tile icons ------------
+    out property <brush> disk-system: c.disk-system;
+    out property <brush> disk-fixed: c.disk-fixed;
+    out property <brush> disk-removable: c.disk-removable;
+    out property <brush> disk-network: c.disk-network;
+    out property <brush> disk-optical: c.disk-optical;
 
     // --- metrics ----------------------------------------------------------
     // Filled from `scour_ui::METRICS`; both virtual lists are built on the pitch.

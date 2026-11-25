@@ -122,6 +122,14 @@ pub struct Palette {
     /// An excluded term's capsule.
     pub cap_neg: Rgba,
     pub cap_neg_ring: Rgba,
+    /// A disk by its kind: its strip segment and its tile's icon. Legible
+    /// on `panel` and `panel_2` at 3:1 or more.
+    pub disk_system: Rgba,
+    pub disk_fixed: Rgba,
+    pub disk_removable: Rgba,
+    pub disk_network: Rgba,
+    /// A disc: a warm grey, since it is rarely indexed at all.
+    pub disk_optical: Rgba,
 }
 
 /// The dark scheme: the desktop's own greys, a dark list under lighter chrome,
@@ -173,6 +181,11 @@ pub const DARK: Palette = Palette {
     cap_read_ring: Rgba::hex(0x6b5523),
     cap_neg: Rgba::hex(0x45262a),
     cap_neg_ring: Rgba::hex(0x6e3a3f),
+    disk_system: Rgba::hex(0x7d9ccb),
+    disk_fixed: Rgba::hex(0x5a9cf0),
+    disk_removable: Rgba::hex(0x3cc49c),
+    disk_network: Rgba::hex(0xa98be0),
+    disk_optical: Rgba::hex(0xaaa194),
 };
 
 /// The light scheme: a white list, grey chrome, no tint. The warm paper tried
@@ -222,6 +235,12 @@ pub const LIGHT: Palette = Palette {
     cap_read_ring: Rgba::hex(0xe5c886),
     cap_neg: Rgba::hex(0xfbe7e5),
     cap_neg_ring: Rgba::hex(0xeab4ad),
+    disk_system: Rgba::hex(0x5b7fb3),
+    disk_fixed: Rgba::hex(0x3584e4),
+    // Darker than the mock's, which fell under 3:1 on `panel_2`.
+    disk_removable: Rgba::hex(0x18906f),
+    disk_network: Rgba::hex(0x8a63c9),
+    disk_optical: Rgba::hex(0x857b70),
 };
 
 /// The numbers that are not colours: pixels at the same nominal scale in both
@@ -297,6 +316,9 @@ pub fn css_vars(p: &Palette) -> String {
     put("cap-read-ring", &p.cap_read_ring);
     put("cap-neg", &p.cap_neg);
     put("cap-neg-ring", &p.cap_neg_ring);
+    for kind in crate::disks::KINDS {
+        put(&format!("disk-{kind}"), &disk_colour(p, kind));
+    }
     s
 }
 
@@ -329,6 +351,19 @@ pub fn kind_colour(token: &str) -> Option<Rgba> {
     })
 }
 
+/// The colour a disk of this kind is drawn in, by the wire's name for the
+/// kind; an unknown one is `fixed`, as the wire's default is. The page reads
+/// it as `--disk-<kind>`.
+pub fn disk_colour(p: &Palette, kind: &str) -> Rgba {
+    match kind {
+        "system" => p.disk_system,
+        "removable" => p.disk_removable,
+        "network" => p.disk_network,
+        "optical" => p.disk_optical,
+        _ => p.disk_fixed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +378,26 @@ mod tests {
         for i in 0..6 {
             assert_ne!(DARK.t[i], LIGHT.t[i], "time band {i} is the same in both");
         }
+        for k in crate::disks::KINDS {
+            assert_ne!(disk_colour(&DARK, k), disk_colour(&LIGHT, k), "{k}");
+        }
+    }
+
+    /// Five kinds, five colours, each a CSS variable of its own.
+    #[test]
+    fn every_disk_kind_has_its_own_colour() {
+        for p in [DARK, LIGHT] {
+            let all: Vec<Rgba> = crate::disks::KINDS
+                .iter()
+                .map(|k| disk_colour(&p, k))
+                .collect();
+            for (i, c) in all.iter().enumerate() {
+                assert!(!all[..i].contains(c), "{c:?} twice");
+            }
+        }
+        let css = css_vars(&LIGHT);
+        assert!(css.contains("--disk-optical: #857b70;"), "{css}");
+        assert!(css.contains("--disk-removable: #18906f;"));
     }
 
     /// The translucent colours stay translucent, and round the way CSS reads.

@@ -51,6 +51,11 @@ pub(crate) fn scheme(p: &scour_ui::Palette) -> Scheme {
         cap_read_ring: c(&p.cap_read_ring),
         cap_neg: c(&p.cap_neg),
         cap_neg_ring: c(&p.cap_neg_ring),
+        disk_system: c(&p.disk_system),
+        disk_fixed: c(&p.disk_fixed),
+        disk_removable: c(&p.disk_removable),
+        disk_network: c(&p.disk_network),
+        disk_optical: c(&p.disk_optical),
     }
 }
 
