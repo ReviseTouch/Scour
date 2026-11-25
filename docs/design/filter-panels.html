@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- Design mock for docs/PLAN-filter-panels.md. A picture, not a spec: its numbers are invented. -->
+<style>body{margin:0}</style>
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Scour Süzgeç Panelleri</title>
+<style>
+/* Düzen: tek sütun; her bölüm bir "sahne" (uygulamanın zemini) içinde gerçek boyutlu panel + yanında gerekçe. */
+:root{
+  --ground:#f0f0f2;--panel:#fff;--panel-2:#e8e8eb;--line:#d6d6da;--line-soft:#e6e6e9;
+  --ink:#1a1a1c;--ink-2:#4a4a50;--ink-3:#707078;--pick:rgba(53,132,228,.18);--focus:#3584e4;
+  --key:#2f6ba3;--not:#c0392b;--bad:#9a6a10;
+  --cap:#e8eef7;--cap-ring:#c3d1e6;--cap-read:#fbf0d6;--cap-read-ring:#e5c886;--cap-neg:#fbe7e5;--cap-neg-ring:#eab4ad;
+  --d-sys:#5b7fb3;--d-fix:#3584e4;--d-usb:#1f9d7a;--d-net:#8a63c9;--d-off:#a9a9b0;
+  --ok:#1f9d55;--warn:#c98a12;--page:#fafafb;--shadow:0 18px 40px -22px rgba(0,0,0,.45);
+  --sans:system-ui,-apple-system,"Segoe UI","Noto Sans",Cantarell,sans-serif;
+  --mono:ui-monospace,"JetBrains Mono","DejaVu Sans Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#2a2a2c;--panel:#1e1e20;--panel-2:#323235;--line:#3d3d41;--line-soft:#2c2c2f;
+  --ink:#fff;--ink-2:#c8c8cc;--ink-3:#9a9aa0;--pick:rgba(53,132,228,.34);--focus:#78aeed;
+  --key:#7fa9e0;--not:#ff6b6b;--bad:#e8a33d;
+  --cap:#2b3444;--cap-ring:#3e4c63;--cap-read:#3d3218;--cap-read-ring:#6b5523;--cap-neg:#45262a;--cap-neg-ring:#6e3a3f;
+  --d-sys:#7d9ccb;--d-fix:#5a9cf0;--d-usb:#3cc49c;--d-net:#a98be0;--d-off:#6a6a70;
+  --ok:#4cc783;--warn:#e8a33d;--page:#19191b;--shadow:0 22px 48px -20px rgba(0,0,0,.8);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --ground:#2a2a2c;--panel:#1e1e20;--panel-2:#323235;--line:#3d3d41;--line-soft:#2c2c2f;
+  --ink:#fff;--ink-2:#c8c8cc;--ink-3:#9a9aa0;--pick:rgba(53,132,228,.34);--focus:#78aeed;
+  --key:#7fa9e0;--not:#ff6b6b;--bad:#e8a33d;
+  --cap:#2b3444;--cap-ring:#3e4c63;--cap-read:#3d3218;--cap-read-ring:#6b5523;--cap-neg:#45262a;--cap-neg-ring:#6e3a3f;
+  --d-sys:#7d9ccb;--d-fix:#5a9cf0;--d-usb:#3cc49c;--d-net:#a98be0;--d-off:#6a6a70;
+  --ok:#4cc783;--warn:#e8a33d;--page:#19191b;--shadow:0 22px 48px -20px rgba(0,0,0,.8);color-scheme:dark}
+
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{background:var(--page);color:var(--ink);font:14px/1.5 var(--sans);padding-block:28px 60px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+main{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:44px}
+h1{font-size:26px;line-height:1.2;margin:0 0 8px;font-weight:650;text-wrap:balance}
+h2{font-size:19px;margin:0 0 4px;font-weight:650;text-wrap:balance}
+h3{font-size:13px;margin:0 0 6px;font-weight:650;color:var(--ink-2)}
+p{margin:0;max-width:68ch}
+.lead{color:var(--ink-2)}
+.tag{display:inline-block;font:600 11px var(--sans);color:var(--key);border:1px solid var(--cap-ring);background:var(--cap);border-radius:5px;padding:1px 6px;margin-right:6px}
+.faults{margin:10px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:6px 22px;color:var(--ink-2)}
+.faults li{padding-left:14px;position:relative}
+.faults li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--not)}
+section{display:flex;flex-direction:column;gap:14px}
+.cols{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:22px;align-items:start}
+@media (max-width:820px){.cols{grid-template-columns:minmax(0,1fr)}}
+.why{display:flex;flex-direction:column;gap:10px;color:var(--ink-2);font-size:13.5px}
+.why b{color:var(--ink)}
+.why ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.stage{background:var(--ground);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.stage-note{font-size:11.5px;color:var(--ink-3)}
+svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+button{font:inherit;color:inherit}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+
+/* sorgu çubuğu */
+.qbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:5px 8px;min-height:44px}
+.qbar.focus{border-color:var(--focus);box-shadow:0 0 0 2px var(--pick)}
+.qbar .w{font:500 15px var(--sans)}
+.caret{width:2px;height:20px;background:var(--focus);border-radius:1px}
+.scope{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px 0 7px;border-radius:8px;border:1px solid var(--line);background:var(--ground);font:600 12.5px var(--sans);color:var(--ink-2);cursor:pointer}
+.scope .dots{display:inline-flex;gap:3px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--d-off);flex:none}
+.dot.sys{background:var(--d-sys)}.dot.fix{background:var(--d-fix)}.dot.usb{background:var(--d-usb)}.dot.net{background:var(--d-net)}
+.dot.new{box-shadow:0 0 0 3px color-mix(in srgb,var(--d-usb) 30%,transparent)}
+
+/* kapsül */
+.cap{display:inline-flex;align-items:stretch;height:30px;border-radius:8px;background:var(--cap);box-shadow:inset 0 0 0 1px var(--cap-ring);max-width:100%;position:relative;--art:var(--key);--ring:var(--cap-ring)}
+.cap .hd{display:inline-flex;align-items:center;gap:5px;padding:0 8px 0 7px;border-radius:8px 0 0 8px;background:color-mix(in srgb,var(--ring) 55%,transparent);box-shadow:inset 0 0 0 1px var(--ring);font:600 12px var(--sans);color:var(--art);white-space:nowrap}
+.cap .bd{display:inline-flex;align-items:center;gap:3px;padding:0 5px;min-width:0;font:600 13.5px var(--sans);overflow:hidden}
+.cap .v{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 7px;border-radius:5px;background:var(--panel);box-shadow:inset 0 0 0 1px var(--ring);white-space:nowrap;font:600 12.5px var(--sans)}
+.cap .v.more{background:none;box-shadow:none;color:var(--ink-3);padding:0 4px}
+.cap .sep{color:var(--ink-3);font:500 11px var(--sans);padding:0 1px}
+.cap .plain{padding:0 6px;white-space:nowrap}
+.cap.read{background:var(--cap-read);--ring:var(--cap-read-ring);--art:var(--bad);box-shadow:inset 0 0 0 1px var(--cap-read-ring)}
+.cap.neg{background:var(--cap-neg);--ring:var(--cap-neg-ring);--art:var(--not);box-shadow:inset 0 0 0 1px var(--cap-neg-ring)}
+.cap.neg .v,.cap.neg .plain{text-decoration:line-through;text-decoration-color:var(--not)}
+.cap.idle{background:none;box-shadow:none;outline:1px dashed var(--line);outline-offset:-1px;--art:var(--ink-3);--ring:var(--line)}
+.cap.idle .plain{color:var(--ink-3);font-weight:400}
+.cap.edit{box-shadow:inset 0 0 0 2px var(--focus)}
+.cap.edit .bd{background:var(--panel);margin:2px 2px 2px 0;border-radius:0 6px 6px 0;font:500 13px var(--mono);padding:0 8px}
+.cap.bad .plain{text-decoration:underline wavy var(--bad);text-underline-offset:3px}
+.cap .st{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.cap .st.poll{background:var(--warn)}.cap .st.off{background:var(--d-off)}
+.cap .flag{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--not);box-shadow:0 0 0 2px var(--panel)}
+.hover-pill{position:absolute;left:0;bottom:calc(100% + 5px);display:inline-flex;align-items:center;gap:2px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:2px;box-shadow:var(--shadow);white-space:nowrap;font:600 11.5px var(--sans);z-index:2}
+.hover-pill span{padding:3px 7px;border-radius:5px;color:var(--ink-2)}
+.hover-pill .x{color:var(--not)}.hover-pill .fx{color:var(--ink-3);font-family:var(--mono);font-weight:500;border-left:1px solid var(--line);border-radius:0}
+.or{display:inline-flex;flex-wrap:wrap;max-width:100%;align-items:center;gap:2px 0;padding:2px;border-radius:10px;outline:1px dashed var(--cap-ring);outline-offset:0}
+.or em{font:600 11px var(--sans);color:var(--ink-3);font-style:normal;padding:0 6px}
+
+/* açılır panel */
+.pop{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);overflow:hidden;font:500 12.5px/1.35 var(--sans);position:relative;min-width:0}
+.pop-h{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);color:var(--ink-2);font-weight:600}
+.pop-h .back{border:0;background:none;color:var(--ink-3);cursor:pointer;padding:2px 6px;border-radius:5px;font-weight:600}
+.pop-h .back:hover{background:var(--line-soft);color:var(--ink)}
+.pop-h .ttl{display:inline-flex;align-items:center;gap:6px;color:var(--key)}
+.pop-h .sum{margin-left:auto;font:500 11.5px var(--mono);color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
+.pop-f{display:flex;flex-wrap:wrap;gap:4px 14px;padding:7px 12px;border-top:1px solid var(--line);color:var(--ink-3);font-size:11.5px}
+kbd{font:600 10.5px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--panel);color:var(--ink-2)}
+.grp{padding:8px 12px 3px;font:600 11px var(--sans);color:var(--ink-3)}
+
+/* süzgeç menüsü */
+.old .row{display:flex;gap:12px;padding:8px 12px;align-items:baseline}
+.old .row.on{background:var(--pick)}
+.old .row b{font-weight:600;font-size:14px}.old .row span{font:500 12.5px var(--mono);color:var(--ink-3)}
+.lrow{display:grid;grid-template-columns:28px minmax(0,1fr) auto 34px;gap:10px;align-items:center;padding:6px 12px;cursor:pointer;border:0;background:none;width:100%;text-align:left}
+.lrow:hover{background:var(--line-soft)}.lrow.on{background:var(--pick)}
+.lrow .ic{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;background:var(--cap);box-shadow:inset 0 0 0 1px var(--cap-ring);color:var(--key)}
+.lrow.read .ic{background:var(--cap-read);box-shadow:inset 0 0 0 1px var(--cap-read-ring);color:var(--bad)}
+.lrow .nm{font-weight:600;font-size:13.5px;color:var(--ink)}
+.lrow .ab{display:block;color:var(--ink-3);font-size:11.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrow .live{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font:500 11.5px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.lrow .k{font:600 11px var(--mono);color:var(--ink-3);text-align:right}
+.lrow .in{font:600 10.5px var(--sans);color:var(--key);border:1px solid var(--cap-ring);border-radius:4px;padding:0 5px}
+.mini{display:inline-flex;align-items:flex-end;gap:2px;height:16px}
+.mini i{width:4px;background:var(--key);opacity:.75;border-radius:1px}
+@media (max-width:560px){.lrow{grid-template-columns:28px minmax(0,1fr) 34px}.lrow .live{display:none}}
+
+/* diskler */
+.uni{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin:10px 12px 4px}
+.uni i{min-width:6px;transition:opacity .15s,flex-grow .4s;cursor:pointer}
+.uni i.dim{opacity:.22}
+.uni-l{display:flex;justify-content:space-between;gap:8px;padding:0 12px 8px;font:500 11px var(--mono);color:var(--ink-3)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;padding:0 12px 10px}
+.tile{position:relative;display:flex;flex-direction:column;gap:5px;padding:9px 10px;border-radius:9px;background:var(--panel);border:1px solid var(--line);cursor:pointer;text-align:left;min-width:0;--c:var(--d-off)}
+.tile.sys{--c:var(--d-sys)}.tile.fix{--c:var(--d-fix)}.tile.usb{--c:var(--d-usb)}.tile.net{--c:var(--d-net)}
+.tile.sel{border-color:var(--c);box-shadow:inset 0 0 0 1px var(--c)}
+.tile.ghost{background:none;border-style:dashed;cursor:default;color:var(--ink-3)}
+.tile .top{display:flex;align-items:center;gap:7px;min-width:0}
+.tile .top svg{color:var(--c);width:20px;height:20px}
+.tile .nm{font:650 13.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .chk{margin-left:auto;width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line);display:grid;place-items:center;font-size:11px;line-height:1;color:transparent;flex:none}
+.tile.sel .chk{background:var(--c);border-color:var(--c);color:#fff}.tile.all .chk{border-color:var(--c);color:var(--c)}
+.tile .mt{font:500 11px var(--mono);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .bar{height:4px;border-radius:2px;background:var(--line-soft);overflow:hidden}
+.tile .bar i{display:block;height:100%;background:var(--c);opacity:.7}
+.tile .ln{display:flex;justify-content:space-between;gap:6px;font:500 11px var(--sans);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.tile .st{display:inline-flex;align-items:center;gap:5px;font:600 11px var(--sans);color:var(--ink-2)}
+.tile .st::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.tile .st.poll::before{background:var(--warn)}.tile .st.off::before{background:var(--d-off)}
+.tile .st.walk::before{background:var(--focus);animation:pulse 1s infinite}
+.tile .roots{display:flex;flex-wrap:wrap;gap:3px}
+.tile .roots span{font:500 10.5px var(--mono);padding:0 5px;border-radius:4px;background:var(--line-soft);color:var(--ink-2)}
+.tile .acts{display:flex;flex-wrap:wrap;gap:5px}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:3px 9px;font:600 11.5px var(--sans);cursor:pointer;color:var(--ink-2)}
+.btn:hover{border-color:var(--ink-3);color:var(--ink)}
+.btn.pri{background:var(--focus);border-color:var(--focus);color:#fff}
+.tile .newb{position:absolute;top:-7px;right:8px;font:700 10px var(--sans);background:var(--d-usb);color:#fff;border-radius:4px;padding:1px 6px}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.tile .st.walk::before{animation:none}.uni i{transition:none}}
+.crumb{display:flex;align-items:center;gap:2px;padding:6px 12px;border-top:1px solid var(--line);font:500 12px var(--mono);color:var(--ink-2);flex-wrap:wrap}
+.crumb b{color:var(--ink)}.crumb .seg{padding:1px 5px;border-radius:4px}
+.crumb .sw{margin-left:auto;display:inline-flex;border:1px solid var(--line);border-radius:6px;padding:1px;background:var(--panel);font:600 11px var(--sans)}
+.crumb .sw span{padding:2px 7px;border-radius:4px;color:var(--ink-3)}.crumb .sw .on{background:var(--line-soft);color:var(--ink)}
+.dir{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:5px 12px}
+.dir:hover{background:var(--line-soft)}
+.dir .wb{position:absolute;left:8px;top:4px;bottom:4px;border-radius:4px;background:color-mix(in srgb,var(--focus) 14%,transparent);pointer-events:none}
+.dir .dn{position:relative;font:500 12.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dir .dc{position:relative;font:500 11.5px var(--mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.dir .da{position:relative;display:inline-flex;gap:4px}
+.dir .da button{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:2px 7px;font:600 11px var(--sans);cursor:pointer;color:var(--ink-2)}
+.dir .da .inc:hover{border-color:var(--key);color:var(--key)}.dir .da .exc:hover{border-color:var(--not);color:var(--not)}
+.basket{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 12px;border-top:1px solid var(--line);background:var(--ground);min-height:42px}
+.basket .lbl{font:600 11px var(--sans);color:var(--ink-3)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 4px 0 8px;border-radius:6px;background:var(--cap);box-shadow:inset 0 0 0 1px var(--cap-ring);font:600 12px var(--mono)}
+.chip.no{background:var(--cap-neg);box-shadow:inset 0 0 0 1px var(--cap-neg-ring);text-decoration:line-through;text-decoration-color:var(--not)}
+.chip button{border:0;background:none;cursor:pointer;color:var(--ink-3);padding:0 4px;font-size:13px;line-height:1;text-decoration:none}
+.sim{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* histogram */
+.pre{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px 4px}
+.pc{display:inline-flex;align-items:baseline;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:4px 10px;cursor:pointer;font:600 12.5px var(--sans)}
+.pc small{font:500 11px var(--mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.pc.on{border-color:var(--focus);box-shadow:inset 0 0 0 1px var(--focus);background:var(--cap)}
+.pc.no{border-color:var(--not);box-shadow:inset 0 0 0 1px var(--not);background:var(--cap-neg);text-decoration:line-through;text-decoration-color:var(--not)}
+.hist{display:flex;align-items:flex-end;gap:3px;height:74px;padding:8px 12px 0;touch-action:none;user-select:none;cursor:ew-resize}
+.hist i{flex:1;min-width:2px;border-radius:3px 3px 1px 1px;background:var(--ink-3);opacity:.4}
+.hist i.in{background:var(--focus);opacity:1}
+.hl{display:flex;justify-content:space-between;padding:4px 12px 8px;font:500 10.5px var(--mono);color:var(--ink-3)}
+.segs{display:inline-flex;border:1px solid var(--line);border-radius:7px;padding:1px;background:var(--panel)}
+.segs button{border:0;background:none;padding:3px 9px;border-radius:5px;font:600 11.5px var(--sans);color:var(--ink-3);cursor:pointer}
+.segs button.on{background:var(--line-soft);color:var(--ink)}
+.rowx{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:6px 12px}
+.say{display:flex;align-items:center;gap:8px;flex:1;min-width:200px;border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:5px 9px;font:500 12.5px var(--mono)}
+.say span{color:var(--ink-3);font-family:var(--sans)}
+
+/* tür */
+.kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:6px;padding:10px 12px 6px}
+.kd{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 8px;align-items:center;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--panel);cursor:pointer;text-align:left}
+.kd svg{grid-row:1/3;color:var(--ink-3);width:20px;height:20px}
+.kd b{font:600 12.5px var(--sans)}.kd small{font:500 11px var(--mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kd .kb{grid-column:1/3;height:3px;border-radius:2px;background:var(--line-soft);overflow:hidden}.kd .kb i{display:block;height:100%;background:var(--ink-3);opacity:.6}
+.kd.on{border-color:var(--focus);box-shadow:inset 0 0 0 1px var(--focus);background:var(--cap)}.kd.on svg{color:var(--key)}.kd.on .kb i{background:var(--focus);opacity:1}
+.kd.no{border-color:var(--not);box-shadow:inset 0 0 0 1px var(--not);background:var(--cap-neg)}.kd.no b{text-decoration:line-through}
+
+/* kapsül galerisi */
+.gal{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:10px}
+.gi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:26px 12px 10px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;min-width:0}
+.gi p{font-size:12.5px;color:var(--ink-2)}.gi p b{color:var(--ink)}
+.anat{display:flex;flex-wrap:wrap;gap:10px 26px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 14px}
+.anat ol{margin:0;padding-left:18px;color:var(--ink-2);font-size:13px;display:flex;flex-direction:column;gap:3px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:650;color:var(--ink-2);font-size:12px}
+td:first-child{font-weight:650;white-space:nowrap}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="folder" viewBox="0 0 16 16"><path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.4 1.6H13c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/></symbol>
+<symbol id="clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.5"/></symbol>
+<symbol id="shapes" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><circle cx="11.5" cy="4.5" r="2.5"/><path d="M4.5 9.3 7 14H2zM9.5 9.5h4v4h-4z"/></symbol>
+<symbol id="ext" viewBox="0 0 16 16"><path d="M4 1.8h5l3 3V13c0 .7-.5 1.2-1.2 1.2H4c-.7 0-1.2-.5-1.2-1.2V3c0-.7.5-1.2 1.2-1.2z"/><path d="M5.5 11.2h.01M8 11.2h.01M10.5 11.2h.01"/></symbol>
+<symbol id="size" viewBox="0 0 16 16"><path d="M2 13.5h12M3.5 13.5v-3M7 13.5V7M10.5 13.5V4M13 13.5V2.5"/></symbol>
+<symbol id="approx" viewBox="0 0 16 16"><path d="M2.5 6.3c1.8-2 3.6-2 5.5 0s3.700 2 5.500 0M2.500 10.800c1.800-2 3.600-2 5.500 0s3.700 2 5.500 0"/></symbol>
+<symbol id="read" viewBox="0 0 16 16"><path d="M4 1.800h5l3 3V13c0 .700-.500 1.200-1.200 1.200H4c-.700 0-1.200-.500-1.200-1.200V3c0-.700.500-1.200 1.200-1.200z"/><path d="M5.300 7h5.400M5.300 9.300h5.400M5.300 11.600h3"/></symbol>
+<symbol id="sys" viewBox="0 0 20 20"><rect x="2.500" y="3.500" width="15" height="10" rx="1.500"/><path d="M7 17h6M10 13.500V17"/></symbol>
+<symbol id="ssd" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M6 13.500h5M14 13.500h.01"/></symbol>
+<symbol id="usb" viewBox="0 0 20 20"><rect x="6" y="7.500" width="8" height="10" rx="1.500"/><path d="M7.500 7.500v-5h5v5M9.300 4.800h.01M10.700 4.800h.01"/></symbol>
+<symbol id="net" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="6" rx="1.500"/><path d="M6 6h.01M10 9v4M3 15.500h14M10 13v2.500"/><circle cx="10" cy="15.500" r="1.300"/></symbol>
+<symbol id="win" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2" stroke-dasharray="2.500 2.500"/></symbol>
+</defs></svg>
+
+<main>
+<header>
+  <h1>Süzgeç panelleri, diskler ve kapsüller</h1>
+  <p class="lead">Ekran görüntüsündeki menüyü ve altındaki panelleri kodda okudum (<code>lens.rs</code>, <code>050-lens.js</code>, <code>qlens.rs</code>). Aşağıdaki her panel gerçek boyutunda ve tıklanabilir. Renkler uygulamanın kendi paleti. Sayılar toplam (7.483.920 kayıt) dışında temsilidir.</p>
+  <ul class="faults">
+    <li>Yedi satır birbirinin aynısı: simge yok, hangisinin neye açıldığı görünmüyor.</li>
+    <li>Açıklamalar soyut ("ne kadar büyük"); o an indekste ne olduğunu söylemiyor.</li>
+    <li>"İçinde" dosya okur ve yavaştır, ama diğerleriyle aynı görünüyor.</li>
+    <li>Hangi disklerde arandığı hiçbir yerde görünmüyor; menüye girmeden öğrenilemiyor.</li>
+    <li>Konum panelinde disk yalnızca bir ad; türü, doluluğu, izlenip izlenmediği yok.</li>
+    <li>Klasördeki <b>+</b> ve <b>!</b> düğmeleri ne yaptığını söylemiyor, seçilenler bir yerde toplanmıyor.</li>
+  </ul>
+</header>
+
+<section id="menu">
+  <div><h2>1 · Süzgeç menüsü</h2><p class="lead">Menü, açacağı kapsülü önceden gösterir ve her satırda indeksin o anki halini söyler.</p></div>
+  <div class="cols">
+    <div class="stage">
+      <div class="qbar focus"><span class="scope" title="Kapsam"><span class="dots"><i class="dot sys"></i><i class="dot fix"></i></span>Her yer</span><span class="w">rapor :</span><i class="caret"></i></div>
+      <div class="pop" id="launch">
+        <div class="pop-h">Süzgeç ekle <span class="sum">"rapor" · 18.420 sonuç</span></div>
+        <div class="grp">Daralt</div>
+        <button class="lrow on" data-go="konum"><span class="ic"><svg class="i"><use href="#folder"/></svg></span><span><span class="nm">Konum</span><span class="ab">hangi diskte, hangi klasörde</span></span><span class="live"><i class="dot sys"></i><i class="dot fix"></i> 2 disk · 6 kök</span><span class="k">:k</span></button>
+        <button class="lrow" data-go="zaman"><span class="ic"><svg class="i"><use href="#clock"/></svg></span><span><span class="nm">Değişme</span><span class="ab">en son ne zaman değişti</span></span><span class="live"><span class="mini"><i style="height:30%"></i><i style="height:45%"></i><i style="height:25%"></i><i style="height:60%"></i><i style="height:40%"></i><i style="height:80%"></i><i style="height:100%"></i></span> bugün 212</span><span class="k">:d</span></button>
+        <button class="lrow" data-go="tur"><span class="ic"><svg class="i"><use href="#shapes"/></svg></span><span><span class="nm">Tür</span><span class="ab">belge, kod, görsel…</span></span><span class="live">belge 9.140 · veri 3.300</span><span class="k">:t</span></button>
+        <button class="lrow" data-go="tur"><span class="ic"><svg class="i"><use href="#ext"/></svg></span><span><span class="nm">Uzantı</span><span class="ab">pdf, rs, docx…</span></span><span class="live">pdf 4.210 · odt 2.980</span><span class="k">:u</span></button>
+        <button class="lrow" data-go="boyut"><span class="ic"><svg class="i"><use href="#size"/></svg></span><span><span class="nm">Boyut</span><span class="ab">ne kadar büyük</span></span><span class="live"><span class="mini"><i style="height:20%"></i><i style="height:70%"></i><i style="height:100%"></i><i style="height:55%"></i><i style="height:22%"></i><i style="height:8%"></i></span> çoğu &lt; 1 MB</span><span class="k">:b</span></button>
+        <div class="grp">Arama biçimi</div>
+        <button class="lrow" data-go="kapsul"><span class="ic"><svg class="i"><use href="#approx"/></svg></span><span><span class="nm">Benzer yazım</span><span class="ab">bir harf farkla da bulur: rapor ≈ rapro</span></span><span class="live">+340 sonuç</span><span class="k">:y</span></button>
+        <button class="lrow read" data-go="kapsul"><span class="ic"><svg class="i"><use href="#read"/></svg></span><span><span class="nm">İçinde</span><span class="ab">adına değil, dosyanın içine bakar</span></span><span class="live" style="color:var(--bad)">7,4 M dosya okunur · önce daralt</span><span class="k">:i</span></button>
+        <div class="pop-f"><span><kbd>↑</kbd><kbd>↓</kbd> gez</span><span><kbd>Enter</kbd> paneli aç</span><span>harf yaz, daralsın</span><span><kbd>Esc</kbd> vazgeç</span></div>
+      </div>
+      <div class="stage-note">Bir satıra tıkla: ilgili panele iner.</div>
+    </div>
+    <div class="why">
+      <h3>Bugünkü hali</h3>
+      <div class="pop old" style="box-shadow:none">
+        <div class="pop-h">Süzgeç ekle</div>
+        <div class="row on"><b>Konum</b><span>bir klasörün altında</span></div>
+        <div class="row"><b>Değişme</b><span>en son ne zaman değişti</span></div>
+        <div class="row"><b>Tür</b><span>belge, kod, görsel…</span></div>
+        <div class="row"><b>İçinde</b><span>dosyaları okur</span></div>
+      </div>
+      <ul>
+        <li><b>Simge kapsülle aynı.</b> Menüde gördüğün simge, sonra kapsülün başlığında durur; kullanıcı ikisini bağlar.</li>
+        <li><b>Sağdaki canlı özet</b> o anki sorguya göre: "rapor" içinde bugün 212 dosya değişmiş. Seçmeden önce işe yarayıp yaramayacağı görünür.</li>
+        <li><b>İki grup.</b> Beşi listeyi daraltır; ikisi aramanın biçimini değiştirir. "İçinde" sarı, çünkü dosya okur ve pahalıdır.</li>
+        <li><b>Tek panel, iki adım.</b> Enter'da panel yerinde değişir, başlığındaki "‹ Süzgeçler" geri getirir. Yeni bir pencere açılmaz, bir şey sıçramaz.</li>
+        <li>Sorguda zaten olan süzgecin satırında "sorguda" etiketi çıkar ve Enter onu düzenler; ikinci bir kapsül açmaz.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="konum">
+  <div><h2>2 · Konum: önce diskler, sonra klasörler</h2><p class="lead">Asıl yenilik burada. Arama evreni tek şeritte görünür; her disk ne olduğunu, ne kadarının indekste olduğunu ve taze olup olmadığını kendisi söyler.</p></div>
+  <div class="cols">
+    <div class="stage">
+      <div class="qbar"><span class="scope" id="scopeChip"></span><span class="w">rapor</span><span class="cap" id="placeCap"></span></div>
+      <div class="pop">
+        <div class="pop-h"><button class="back">‹ Süzgeçler</button><span class="ttl"><svg class="i"><use href="#folder"/></svg>Konum</span><span class="sum" id="placeSum"></span></div>
+        <div class="uni" id="uni"></div>
+        <div class="uni-l"><span>arama evreni: her dilim bir disk, genişliği indeksteki dosya sayısı</span><span id="uniTot"></span></div>
+        <div class="tiles" id="tiles"></div>
+        <div class="crumb" id="crumb"></div>
+        <div id="dirs"></div>
+        <div class="basket" id="basket"></div>
+        <div class="pop-f"><span>diske tıkla: yalnız orada ara</span><span><kbd>Ctrl</kbd>+tık: birden çok</span><span><kbd>→</kbd> klasöre gir</span><span><kbd>Enter</kbd> seç</span><span>"Gözat…" sistem penceresi</span></div>
+      </div>
+      <div class="sim"><button class="btn pri" id="plug">Flash bellek tak</button><button class="btn" id="netoff">Ağ diskinin bağlantısını kes</button><span class="stage-note">Deneme düğmeleri; üründe olmayacak.</span></div>
+    </div>
+    <div class="why">
+      <ul>
+        <li><b>Evren şeridi.</b> "Nerede arıyorum" sorusunun cevabı tek bakışta. Seçilmeyen disk soluklaşır. Aynı şeridin küçüğü sorgu çubuğunun solundaki <b>kapsam çipinde</b> hep durur, menüye girmek gerekmez.</li>
+        <li><b>Linux'a özgü dürüstlük.</b> Disk harfi yok; sistem diskinin yalnız beş kökü indekste. Karo bunu kökleri tek tek yazarak söyler. Windows'ta aynı karo "C:" olur, kök listesi kaybolur.</li>
+        <li><b>Her diskin bir hali var:</b> canlı izleniyor, aralıklı yoklanıyor, taranıyor, indekste değil, bağlı değil. Bunlar bugün serviste zaten var (<code>DiskState</code>, <code>Seen</code>); yalnız Ayarlar'da görünüyor.</li>
+        <li><b>Flash takınca</b> karo "yeni" etiketiyle belirir, çipte yeşil nokta yanar. Soru panelin içinde sorulur: İndekse al, Bu sefer değil, Bu diski hiç sorma.</li>
+        <li><b>Bağlantısı kopan disk kaybolmaz</b>, soluklaşır ve "son görülme" yazar. Kapsülündeki nokta griye döner; kullanıcı sonuçların eski olabileceğini bilir.</li>
+        <li><b>Ekle ve Dışla yazıyla.</b> Seçilenler altta sepette toplanır; sepet kapsülün içindekinin aynısıdır.</li>
+        <li><b>Çubuk, sayıdır.</b> Klasör satırındaki çubuk o klasörde "rapor" kaç kez geçiyor onu gösterir; en çok bulunan en üstte.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="zaman">
+  <div><h2>3 · Değişme</h2><p class="lead">Hazır aralıklar sayılarıyla, altında gerçek dağılım. Sürükleyerek aralık seçilir; ne seçildiği cümleyle yazılır.</p></div>
+  <div class="cols">
+    <div class="stage">
+      <div class="qbar"><span class="w">rapor</span><span class="cap"><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd"><span class="plain" id="timeCap"></span></span></span></div>
+      <div class="pop">
+        <div class="pop-h"><button class="back">‹ Süzgeçler</button><span class="ttl"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="sum" id="timeSum"></span></div>
+        <div class="pre" id="timePre"></div>
+        <div class="rowx"><span class="segs" id="timeScale"><button data-s="gun" class="on">Gün</button><button data-s="hafta">Hafta</button><button data-s="ay">Ay</button><button data-s="yil">Yıl</button></span><span class="segs" id="timeDir"><button class="on">Arasında</button><button>Önce</button><button>Sonra</button></span></div>
+        <div class="hist" id="timeHist"></div>
+        <div class="hl" id="timeLbl"></div>
+        <div class="rowx"><div class="say"><span>ya da yaz:</span>7d · 3w · 2026-11-12..2026-11-25</div></div>
+        <div class="pop-f"><span>sürükle: aralık</span><span><kbd>←</kbd><kbd>→</kbd> ucu oynat</span><span><kbd>Enter</kbd> seç</span></div>
+      </div>
+    </div>
+    <div class="why">
+      <ul>
+        <li><b>Sayılar düğmenin üstünde.</b> "Dün 87" görmek, tıklayıp boş liste bulmaktan iyidir. Sıfır olan aralık soluk çıkar.</li>
+        <li><b>Ölçek değişir:</b> Gün, Hafta, Ay, Yıl. Bugün yalnız beş hazır bant ve yedi çubuk var; "geçen mart" seçilemiyor.</li>
+        <li><b>Önce / Sonra.</b> "2025'ten eski" tek tıkla; dilde <code>dm:&lt;2025-01-01</code> zaten var, panelde karşılığı yok.</li>
+        <li><b>Tarih biçimi kullanıcının yerelinde.</b> Kapsül "12–25 Kas" der, sorgu metni <code>dm:2026-11-12..2026-11-25</code> kalır. Düzenlerken ham hali görünür.</li>
+        <li>"Ya da yaz" satırı serbest yazımı öğretir; panel fareye mecbur etmez.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="tur">
+  <div><h2>4 · Tür ve uzantı tek panelde</h2><p class="lead">Tür seçilince uzantıları altında açılır. İki ayrı menü satırı aynı panele gelir; biri türden, diğeri uzantıdan başlar.</p></div>
+  <div class="cols">
+    <div class="stage">
+      <div class="qbar"><span class="w">rapor</span><span class="cap" id="kindCap"></span></div>
+      <div class="pop">
+        <div class="pop-h"><button class="back">‹ Süzgeçler</button><span class="ttl"><svg class="i"><use href="#shapes"/></svg>Tür</span><span class="sum" id="kindSum"></span></div>
+        <div class="kinds" id="kinds"></div>
+        <div class="grp" id="extTtl">Uzantılar</div>
+        <div class="pre" id="exts" style="padding-top:2px;padding-bottom:10px"></div>
+        <div class="pop-f"><span>tık: ekle / çıkar</span><span><kbd>Alt</kbd>+tık: dışla</span><span>birden çok seçim "veya" demektir</span></div>
+      </div>
+    </div>
+    <div class="why">
+      <ul>
+        <li><b>Karo, liste değil.</b> On üç tür tek bakışta; çubuk o türün sorgudaki payı.</li>
+        <li><b>Türden uzantıya inilir.</b> "Belge" seçince pdf, odt, docx sayılarıyla çıkar; birine basmak <code>ext:pdf</code> kapsülü ekler. Kullanıcı uzantı ezberlemez.</li>
+        <li><b>Dışlama görünür.</b> Alt+tık karoyu kırmızı ve üstü çizili yapar: "derleme çıktısı hariç" en sık istenen şey.</li>
+        <li>Seçimler aynı kapsülde toplanır (aşağıda "iç kapsül").</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="boyut">
+  <div><h2>5 · Boyut</h2><p class="lead">Değişme paneliyle aynı bileşen: hazır aralıklar, dağılım, sürükleme. Bir kez öğrenilir.</p></div>
+  <div class="cols">
+    <div class="stage">
+      <div class="qbar"><span class="w">rapor</span><span class="cap"><span class="hd"><svg class="i"><use href="#size"/></svg>Boyut</span><span class="bd"><span class="plain" id="sizeCap"></span></span></span></div>
+      <div class="pop">
+        <div class="pop-h"><button class="back">‹ Süzgeçler</button><span class="ttl"><svg class="i"><use href="#size"/></svg>Boyut</span><span class="sum" id="sizeSum"></span></div>
+        <div class="pre" id="sizePre"></div>
+        <div class="hist" id="sizeHist"></div>
+        <div class="hl" id="sizeLbl"></div>
+        <div class="pop-f"><span>ölçek logaritmik: her çubuk on kat</span><span>ya da yaz: &gt;500mb · 1gb..4gb · empty:</span></div>
+      </div>
+    </div>
+    <div class="why"><ul>
+      <li><b>Adlar insanca:</b> Boş, Küçük, Orta, Büyük, Dev. Rakam yanında durur.</li>
+      <li><b>"Boş"</b> ayrı bir düğme; sıfır baytlık dosyalar sık aranır ve bugün bantlarda yok.</li>
+      <li>Dağılım, 1 GB üstü kaç dosya olduğunu seçmeden gösterir.</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="kapsul">
+  <div><h2>6 · Kapsüller ve iç kapsüller</h2><p class="lead">Kural değişmiyor: sorgu metni tek gerçek, düğmeler yalnız üstte yüzen hapta, kapsül fareyle genişlemez. Değişen, kapsülün içinin okunması.</p></div>
+  <div class="anat">
+    <span class="cap"><span class="hd"><svg class="i"><use href="#ssd"/></svg>Konum<i class="st"></i></span><span class="bd"><span class="v">Depo</span><span class="sep">›</span><span class="v">PROJELER</span><span class="sep">›</span><span class="v"><b>Scour</b></span></span></span>
+    <ol><li>Başlık: simge, ad, gerekiyorsa durum noktası.</li><li>Gövde: her değer kendi iç kapsülünde.</li><li>Ayraç anlam taşır: <b>›</b> içinde, <b>·</b> veya.</li></ol>
+  </div>
+  <div class="gal">
+    <div class="gi"><span class="cap"><span class="hd"><svg class="i"><use href="#shapes"/></svg>Tür</span><span class="bd"><span class="v">Belge</span><span class="sep">·</span><span class="v">Kod</span><span class="v more">+2</span></span></span><p><b>Çok değer, tek kapsül.</b> Her değer ayrı iç kapsül; birine tıklamak yalnız onu seçer, Sil yalnız onu kaldırır. Sığmayanı "+2" toplar, kapsül uzamaz.</p></div>
+    <div class="gi"><span class="cap"><span class="hd"><svg class="i"><use href="#usb"/></svg>Konum<i class="st poll"></i></span><span class="bd"><span class="v">KINGSTON</span><span class="sep">›</span><span class="v"><b>Fotoğraflar</b></span></span></span><p><b>Disk kapsülde görünür.</b> Simge diskin türü (flash, ağ, dahili), nokta hali: yeşil canlı, sarı yoklanıyor, gri bağlı değil. Kırıntıya tıklamak bir üst klasöre çıkarır.</p></div>
+    <div class="gi"><span class="cap"><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd"><span class="plain">son 7 gün</span></span></span><span class="cap edit"><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd">7d<i class="caret" style="height:16px;margin-left:1px"></i></span></span><p><b>Dururken okunur, düzenlenirken ham.</b> Bugünkü gibi; düzenleme hali beyaz kuyu ve odak halkası.</p></div>
+    <div class="gi"><span class="cap neg"><span class="hd"><svg class="i"><use href="#shapes"/></svg>Tür değil</span><span class="bd"><span class="v">Derleme çıktısı</span></span></span><p><b>Dışlanan.</b> Başlık "değil" der, değer üstü çizili, kapsül kırmızı. Yalnız renge güvenmez.</p></div>
+    <div class="gi"><span class="cap read"><span class="hd"><svg class="i"><use href="#read"/></svg>İçinde</span><span class="bd"><span class="plain">"teslim tarihi"</span><span class="v">Aa</span><span class="v">.*</span></span></span><p><b>İçerik.</b> Sarı, çünkü dosya okur. Kipler (büyük-küçük harf, regex) iç kapsül olarak sonda; tıklanınca açılıp kapanır.</p></div>
+    <div class="gi"><span class="cap idle"><span class="hd"><svg class="i"><use href="#size"/></svg>Boyut</span><span class="bd"><span class="plain">ne kadar?</span></span></span><span class="cap bad"><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd"><span class="plain">geçn hafta</span></span></span><p><b>Boş ve okunamayan.</b> Boş kapsül kesik çizgili ve süzmez. Okunamayan değer dalgalı altı çizili; panel "geçen hafta mı?" diye düzeltme önerir.</p></div>
+    <div class="gi"><span class="cap" style="margin-top:14px"><span class="hover-pill"><span>! dışla</span><span>düzenle</span><span class="x">× kaldır</span><span class="fx">18.420 → 212</span></span><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd"><span class="plain">bugün</span></span></span><p><b>Üstte yüzen hap.</b> Yeri aynı; yeni olan sağdaki etki: bu süzgeç listeyi kaçtan kaça indirdi.</p></div>
+    <div class="gi"><span class="cap"><span class="flag"></span><span class="hd"><svg class="i"><use href="#ext"/></svg>Uzantı</span><span class="bd"><span class="v">xlsx</span></span></span><p><b>Listeyi boşaltan kapsül.</b> Sonuç sıfırsa suçlu kapsülde kırmızı nokta; hap "bu olmasa 312 sonuç" der. Bu sayım bugün boş liste ekranında zaten yapılıyor.</p></div>
+    <div class="gi"><span class="or"><span class="cap"><span class="hd"><svg class="i"><use href="#ext"/></svg>Uzantı</span><span class="bd"><span class="v">pdf</span></span></span><em>veya</em><span class="cap"><span class="hd"><svg class="i"><use href="#clock"/></svg>Değişme</span><span class="bd"><span class="plain">bugün</span></span></span></span><p><b>"|" görünür olur.</b> Dik çizgiyle bağlanan terimler kesik çerçeveyle sarılır, arada "veya" yazar.</p></div>
+  </div>
+</section>
+
+<section id="karar">
+  <div><h2>7 · Senin kararını bekleyenler</h2><p class="lead">Bunlar görünür davranışı ya da sorgu dilini değiştiriyor; kendim seçmedim.</p></div>
+  <div class="tw"><table>
+    <tr><th>Konu</th><th>Önerim</th><th>Neye mal olur</th></tr>
+    <tr><td>Kapsam çipi</td><td>Sorgu çubuğunun solunda hep dursun; tıklayınca Konum paneli açılsın.</td><td>Çubukta yaklaşık 90 px. Üç yüzde de yer açmak gerekir.</td></tr>
+    <tr><td>Birden çok disk</td><td>Panel <code>under:/mnt/depo|under:~/Belgeler</code> yazsın.</td><td>Hiçbir şey: bu yazım bugün çalışıyor, sorgu dili değişmiyor. (Sonradan doğruladım; ilk sürümde dil değişikliği gerekir demiştim.)</td></tr>
+    <tr><td>Bağlı olmayan disk</td><td>Karosu soluk kalsın, kayıtları listede "bağlı değil" işaretiyle görünsün.</td><td>Bugün ne olduğunu doğrulamadım; önce servisin davranışına bakmam gerek.</td></tr>
+    <tr><td>Bağlanmamış bölümler</td><td>Makinedeki "Windows" (300 GB) gibi bağlanmamış bölümler kesik karo olarak görünsün.</td><td>Servis bugün yalnız bağlı olanları görüyor; yeni keşif kodu ister. En kolay ertelenecek madde.</td></tr>
+    <tr><td>Menüde canlı özet</td><td>Menü hemen açılsın, sayılar 150 ms sonra dolsun.</td><td>Menü başına beş ek sayım. İlk sayfayı geciktirmemeli; ölçmeden açmam.</td></tr>
+    <tr><td>Tür ve Uzantı</td><td>Tek panel, iki giriş.</td><td>Menüde satır sayısı aynı kalır; iki ayrı mercek kodu bire iner.</td></tr>
+    <tr><td>İç kapsül</td><td>Çok değerli alanlarda (tür, uzantı, konum) açık; tek değerlide düz yazı.</td><td>Pencerede kapsül çizimi Rust'ta; genişlik ölçümü yeniden yazılır.</td></tr>
+  </table></div>
+</section>
+</main>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const n=x=>x.toLocaleString('tr-TR');
+const ico=(id,c='i')=>`<svg class="${c}"><use href="#${id}"/></svg>`;
+document.addEventListener('click',e=>{const b=e.target.closest('[data-go]');if(b){$$('#launch .lrow').forEach(r=>r.classList.toggle('on',r===b));document.getElementById(b.dataset.go).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});}
+  if(e.target.closest('.back'))$('#menu').scrollIntoView({behavior:'smooth'});});
+
+/* ---- Konum ---- */
+const disks=[
+ {id:'cachy',name:'CACHY',k:'sys',ic:'sys',tr:'Sistem diski · btrfs',mt:'/',size:'652 GB',used:.61,files:5980000,st:'live',roots:['~','/usr','/var','/opt','/etc'],
+  dirs:[['~',9200],['/usr',410],['/var',96],['/opt',31],['/etc',4]]},
+ {id:'depo',name:'Depo',k:'fix',ic:'ssd',tr:'Dahili disk · ntfs',mt:'/mnt/depo',size:'880 GB',used:.74,files:1503920,st:'live',
+  dirs:[['PROJELER',5140],['Arşiv',2260],['Belgeler',1010],['Fotoğraflar',180],['Kurulum',89]]},
+ {id:'nas',name:'ortak',k:'net',ic:'net',tr:'Ağ diski · smb',mt:'//nas.local/ortak',size:'3,6 TB',used:.42,files:0,st:'ask',dirs:[['Muhasebe',640],['Sözleşmeler',212],['Yedek',55]]},
+];
+const ghost={name:'Windows',tr:'Bağlı değil · ntfs',mt:'nvme1n1p4',size:'300 GB'};
+let sel=new Set(),focusD='depo',basket=[];
+const stTxt={live:['','canlı izleniyor'],poll:['poll','60 sn\'de bir yoklanıyor'],walk:['walk','taranıyor'],off:['off','bağlı değil'],ask:['off','indekste değil']};
+const indexed=d=>['live','poll','walk'].includes(d.st)||(d.st==='off'&&d.files>0);
+function drawPlace(){
+  const act=disks.filter(indexed),tot=act.reduce((a,d)=>a+d.files,0);
+  const lit=d=>!sel.size||sel.has(d.id);
+  $('#uni').innerHTML=act.map(d=>`<i data-d="${d.id}" class="${lit(d)?'':'dim'}" style="flex:${Math.max(d.files,tot*.02)} 0 0;background:var(--d-${d.k})" title="${d.name} · ${n(d.files)} dosya"></i>`).join('');
+  $('#uniTot').textContent=n(tot)+' dosya';
+  $('#tiles').innerHTML=disks.map(d=>{
+    const s=stTxt[d.st],ix=indexed(d);
+    return `<div class="tile ${d.k} ${sel.has(d.id)?'sel':(!sel.size&&ix?'all':'')}" data-d="${d.id}" tabindex="0" style="${d.st==='off'?'opacity:.6':''}">
+      ${d.isNew&&d.st==='ask'?'<span class="newb">yeni takıldı</span>':''}
+      <div class="top">${ico(d.ic)}<span class="nm">${d.name}</span>${ix?'<span class="chk">✓</span>':''}</div>
+      <div class="mt">${d.tr} · ${d.mt}</div>
+      ${d.roots?`<div class="roots">${d.roots.map(r=>`<span>${r}</span>`).join('')}</div>`:''}
+      <div class="bar"><i style="width:${d.used*100}%"></i></div>
+      <div class="ln"><span>${d.size}, %${Math.round(d.used*100)} dolu</span><span>${ix?n(d.files)+' dosya':''}</span></div>
+      ${d.st==='ask'?`<div class="acts"><button class="btn pri" data-ix="${d.id}">İndekse al</button><button class="btn" data-no="${d.id}">${d.isNew?'Bu sefer değil':'Sorma'}</button></div>`
+        :`<span class="st ${s[0]}">${d.st==='walk'?'taranıyor · %'+d.pct:d.st==='off'?'bağlı değil · son görülme 14.20':s[1]}${d.roots?' · '+d.roots.length+' kök':''}</span>`}
+    </div>`}).join('')+`<div class="tile ghost"><div class="top">${ico('win')}<span class="nm">${ghost.name}</span></div><div class="mt">${ghost.tr} · ${ghost.mt}</div><div class="ln"><span>${ghost.size}</span></div><span class="st off">bağlanınca sorulur</span></div>`;
+  const f=disks.find(d=>d.id===focusD)||act[0];
+  $('#crumb').innerHTML=`<span class="seg">${ico(f.ic)}</span><b class="seg">${f.name}</b><span>›</span><span class="seg" style="color:var(--ink-3)">klasör seç ya da yaz</span><span class="sw"><span class="on">altındaki her şey</span><span>yalnız içindekiler</span></span>`;
+  const mx=Math.max(...f.dirs.map(x=>x[1]));
+  $('#dirs').innerHTML=indexed(f)?f.dirs.map(([nm,c])=>`<div class="dir"><span class="wb" style="width:${Math.max(4,c/mx*70)}%"></span><span class="dn">${nm}/</span><span class="dc">${n(c)} "rapor"</span><span class="da"><button class="inc" data-add="${f.name} › ${nm}">Ekle</button><button class="exc" data-ex="${f.name} › ${nm}">Dışla</button></span></div>`).join('')
+    :`<div class="grp" style="padding-bottom:10px">Bu disk indekste değil. İndekse alınca klasörleri burada görünür.</div>`;
+  $('#basket').innerHTML=`<span class="lbl">Aranacak yer:</span>`+(basket.length?basket.map((b,i)=>`<span class="chip ${b.no?'no':''}">${b.p}<button data-rm="${i}" aria-label="çıkar">×</button></span>`).join('')
+    :sel.size?[...sel].map(id=>`<span class="chip">${disks.find(d=>d.id===id).name}</span>`).join(''):`<span style="color:var(--ink-2);font-weight:600">her yer</span><span class="lbl">(${act.length} disk)</span>`)+`<button class="btn" style="margin-left:auto">Gözat…</button>`;
+  // kapsül + çip
+  const inc=basket.filter(b=>!b.no),exc=basket.filter(b=>b.no);
+  let body;
+  if(inc.length){const p=inc[0].p.split(' › ');body=p.map((s,i)=>`<span class="v">${i===p.length-1?'<b>'+s+'</b>':s}</span>`).join('<span class="sep">›</span>')+(inc.length>1?`<span class="v more">+${inc.length-1}</span>`:'');}
+  else if(sel.size){const a=[...sel].map(id=>disks.find(d=>d.id===id).name);body=a.slice(0,2).map(s=>`<span class="v">${s}</span>`).join('<span class="sep">·</span>')+(a.length>2?`<span class="v more">+${a.length-2}</span>`:'');}
+  const cap=$('#placeCap');cap.hidden=!body&&!exc.length;
+  const hd=sel.size===1?disks.find(d=>d.id===[...sel][0]):f;
+  cap.innerHTML=`<span class="hd">${ico(inc.length||sel.size?hd.ic:'folder')}Konum<i class="st ${hd.st==='poll'?'poll':hd.st==='off'?'off':''}"></i></span><span class="bd">${body||''}${exc.length?`<span class="v" style="text-decoration:line-through;text-decoration-color:var(--not);color:var(--not)">${exc[0].p.split(' › ').pop()}</span>`:''}</span>`;
+  const shown=sel.size?act.filter(d=>sel.has(d.id)):act;
+  $('#scopeChip').innerHTML=`<span class="dots">${disks.filter(d=>indexed(d)||d.isNew).map(d=>`<i class="dot ${indexed(d)&&lit(d)?d.k:d.isNew&&d.st==='ask'?'usb new':''}"></i>`).join('')}</span>${sel.size?shown.map(d=>d.name).join(' + '):'Her yer'}`;
+  $('#placeSum').textContent=`${shown.length} disk · ${n(shown.reduce((a,d)=>a+d.files,0))} dosya`;
+}
+$('#konum').addEventListener('click',e=>{
+  const t=e.target,q=a=>t.closest(`[${a}]`)?.getAttribute(a);
+  let v;
+  if((v=q('data-ix'))){const d=disks.find(x=>x.id===v);d.st='walk';d.pct=0;d.files=0;const goal=d.k==='usb'?12480:310400;const iv=setInterval(()=>{d.pct+=10;d.files=Math.round(goal*d.pct/100);if(d.pct>=100){clearInterval(iv);d.st=d.k==='net'?'poll':'live';}drawPlace();},260);}
+  else if((v=q('data-no'))){const i=disks.findIndex(x=>x.id===v);if(disks[i].isNew)disks.splice(i,1);else disks[i].tr+=' · sorulmaz';if(focusD===v)focusD='depo';}
+  else if((v=q('data-add'))){basket.push({p:v});}
+  else if((v=q('data-ex'))){basket.push({p:v,no:1});}
+  else if((v=q('data-rm'))){basket.splice(+v,1);}
+  else if((v=q('data-d'))){const d=disks.find(x=>x.id===v);focusD=v;if(indexed(d)){if(!(e.ctrlKey||e.metaKey)&&!sel.has(v))sel.clear();sel.has(v)?sel.delete(v):sel.add(v);basket=[];}}
+  else return;
+  drawPlace();
+});
+$('#plug').onclick=e=>{if(disks.some(d=>d.k==='usb'))return;disks.push({id:'usb',name:'KINGSTON',k:'usb',ic:'usb',tr:'Flash bellek · exfat',mt:'/run/media/hasan/KINGSTON',size:'58 GB',used:.33,files:0,st:'ask',isNew:1,dirs:[['Fotoğraflar',12],['Sunum',7],['Belgeler',3]]});focusD='usb';e.target.disabled=true;drawPlace();};
+$('#netoff').onclick=e=>{const d=disks.find(x=>x.id==='nas');if(d.st==='ask'){d.st='poll';d.files=310400;e.target.textContent='Ağ diskinin bağlantısını kes';}else if(d.st==='off'){d.st='poll';e.target.textContent='Ağ diskinin bağlantısını kes';}else{d.st='off';e.target.textContent='Ağ diskini yeniden bağla';}drawPlace();};
+drawPlace();
+
+/* ---- histogram bileşeni ---- */
+function rnd(seed){let s=seed;return()=>(s=(s*16807)%2147483647)/2147483647}
+function hist(el,data,onSel,a0,b0){let a=a0,b=b0,down=false;
+  const mx=Math.max(...data);el.innerHTML=data.map((v,i)=>`<i data-i="${i}" style="height:${Math.max(4,v/mx*100)}%"></i>`).join('');
+  const paint=()=>{const lo=Math.min(a,b),hi=Math.max(a,b);$$('i',el).forEach((x,i)=>x.classList.toggle('in',i>=lo&&i<=hi));onSel(lo,hi,data.slice(lo,hi+1).reduce((p,c)=>p+c,0));};
+  const at=e=>{const r=el.getBoundingClientRect(),pad=12;return Math.max(0,Math.min(data.length-1,Math.floor((e.clientX-r.left-pad)/(r.width-2*pad)*data.length)));};
+  el.onpointerdown=e=>{down=true;el.setPointerCapture(e.pointerId);a=b=at(e);paint();};
+  el.onpointermove=e=>{if(down){b=at(e);paint();}};el.onpointerup=()=>down=false;
+  paint();return{set(x,y){a=x;b=y;paint();}};
+}
+/* ---- Değişme ---- */
+const scales={gun:{n:30,u:'gün',lab:['27 Eki','10 Kas','bugün'],seed:7,mul:60},hafta:{n:26,u:'hafta',lab:['Haz','Eyl','bu hafta'],seed:11,mul:380},ay:{n:24,u:'ay',lab:['Ara 2024','Ara 2025','Kas 2026'],seed:5,mul:1500},yil:{n:10,u:'yıl',lab:['2017','2021','2026'],seed:3,mul:9000}};
+let tH,tS='gun',tDir='Arasında';
+const tPre=[['Bugün',0,0],['Dün',1,1],['Son 7 gün',0,6],['Son 30 gün',0,29]];
+function drawTime(a=0,b=6){const s=scales[tS],r=rnd(s.seed),d=Array.from({length:s.n},(_,i)=>Math.round((0.15+r())*s.mul*(0.4+i/s.n)));
+  $('#timeLbl').innerHTML=s.lab.map(x=>`<span>${x}</span>`).join('');
+  $('#timePre').innerHTML=tS==='gun'?tPre.map(([l,x,y],i)=>`<button class="pc" data-p="${i}">${l}<small>${n(d.slice(s.n-1-y,s.n-x).reduce((p,c)=>p+c,0))}</small></button>`).join(''):`<span class="stage-note" style="padding:5px 0">Hazır aralıklar gün ölçeğinde; burada sürükleyerek seç.</span>`;
+  tH=hist($('#timeHist'),d,(lo,hi,sum)=>{const fromEnd=s.n-1-hi,toEnd=s.n-1-lo,len=hi-lo+1;
+    let txt=toEnd===0&&fromEnd===0?(tS==='gun'?'bugün':'bu '+s.u):fromEnd===0?`son ${len} ${s.u}`:`${toEnd+1}–${fromEnd+1} ${s.u} önce`;
+    if(tDir==='Önce')txt=`${fromEnd+1} ${s.u}dan eski`.replace('gündan','günden').replace('haftadan','haftadan').replace('aydan','aydan').replace('yıldan','yıldan');
+    if(tDir==='Sonra')txt=`son ${toEnd+1} ${s.u}`;
+    $('#timeCap').textContent=txt;$('#timeSum').textContent=n(sum)+' dosya';
+    $$('#timePre .pc').forEach((p,i)=>{const[,x,y]=tPre[i];p.classList.toggle('on',fromEnd===x&&toEnd===y);});
+  },s.n-1-b,s.n-1-a);}
+$('#timePre').onclick=e=>{const p=e.target.closest('.pc');if(!p)return;const[,x,y]=tPre[+p.dataset.p],N=scales.gun.n;tH.set(N-1-y,N-1-x);};
+$('#timeScale').onclick=e=>{const b=e.target.closest('button');if(!b)return;tS=b.dataset.s;$$('#timeScale button').forEach(x=>x.classList.toggle('on',x===b));drawTime(0,tS==='gun'?6:2);};
+$('#timeDir').onclick=e=>{const b=e.target.closest('button');if(!b)return;tDir=b.textContent;$$('#timeDir button').forEach(x=>x.classList.toggle('on',x===b));tH.set(scales[tS].n-4,scales[tS].n-1);};
+drawTime();
+/* ---- Boyut ---- */
+const sB=[310,1900,5200,6100,3300,1100,380,96,31,3],sL=['0','1 KB','10 KB','100 KB','1 MB','10 MB','100 MB','1 GB','10 GB','+'];
+const sPre=[['Boş','0 bayt',0,0],['Küçük','< 100 KB',1,3],['Orta','100 KB – 10 MB',4,5],['Büyük','10 MB – 1 GB',6,7],['Dev','> 1 GB',8,9]];
+$('#sizeLbl').innerHTML=['0','100 KB','10 MB','10 GB+'].map(x=>`<span>${x}</span>`).join('');
+$('#sizePre').innerHTML=sPre.map(([l,h,x,y],i)=>`<button class="pc" data-p="${i}">${l}<small>${h} · ${n(sB.slice(x,y+1).reduce((p,c)=>p+c,0))}</small></button>`).join('');
+const sH=hist($('#sizeHist'),sB,(lo,hi,sum)=>{const m=sPre.findIndex(p=>p[2]===lo&&p[3]===hi);
+  $('#sizeCap').textContent=m>=0?sPre[m][0].toLowerCase()+' ('+sPre[m][1]+')':hi===9?`${sL[lo]} üstü`:`${sL[lo]} – ${sL[hi+1]}`;$('#sizeSum').textContent=n(sum)+' dosya';
+  $$('#sizePre .pc').forEach((p,i)=>p.classList.toggle('on',i===m));},6,7);
+$('#sizePre').onclick=e=>{const p=e.target.closest('.pc');if(p){const[, ,x,y]=sPre[+p.dataset.p];sH.set(x,y);}};
+/* ---- Tür ---- */
+const kinds=[['Belge','read',9140,['pdf 4.210','odt 2.980','docx 1.320','md 410','txt 220']],['Veri','size',3300,['xlsx 1.900','csv 870','json 530']],['Kod','ext',1210,['rs 480','py 390','js 340']],['Görsel','shapes',980,['png 610','jpg 300','svg 70']],['Klasör','folder',760,[]],['Arşiv','ext',410,['zip 280','rar 90','7z 40']],['Ayar','ext',240,['toml 120','ini 70','conf 50']],['Video','shapes',96,['mp4 80','mkv 16']],['Ses','shapes',41,['mp3 30','ogg 11']],['Çalıştırılabilir','ext',38,['exe 30','sh 8']],['Derleme çıktısı','ext',2140,['o 1.300','rlib 840']],['Diğer','ext',65,[]]];
+const kst={Belge:1};let exOn=new Set();
+function drawKinds(){const mx=Math.max(...kinds.map(k=>k[2]));
+  $('#kinds').innerHTML=kinds.map(([l,ic,c])=>`<button class="kd ${kst[l]===1?'on':kst[l]===2?'no':''}" data-k="${l}">${ico(ic)}<b>${l}</b><small>${n(c)}</small><span class="kb"><i style="width:${c/mx*100}%"></i></span></button>`).join('');
+  const on=kinds.filter(k=>kst[k[0]]===1),no=kinds.filter(k=>kst[k[0]]===2);
+  const ex=on.flatMap(k=>k[3]);
+  $('#extTtl').textContent=on.length?`${on.map(k=>k[0]).join(', ')} içindeki uzantılar`:'Uzantılar: önce bir tür seç ya da yaz';
+  $('#exts').innerHTML=ex.map(x=>{const[e,c]=x.split(' ');return`<button class="pc ${exOn.has(e)?'on':''}" data-e="${e}">${e}<small>${c}</small></button>`}).join('');
+  const v=a=>a.slice(0,2).map(k=>`<span class="v">${k[0]}</span>`).join('<span class="sep">·</span>')+(a.length>2?`<span class="v more">+${a.length-2}</span>`:'');
+  const cap=$('#kindCap');cap.hidden=!on.length&&!no.length;cap.className='cap'+(on.length?'':' neg');
+  cap.innerHTML=`<span class="hd">${ico('shapes')}${on.length?'Tür':'Tür değil'}</span><span class="bd">${v(on.length?on:no)}</span>`+(exOn.size?'':'');
+  $('#kindSum').textContent=on.length?n(on.reduce((a,k)=>a+k[2],0))+' dosya':no.length?'dışlanan: '+n(no.reduce((a,k)=>a+k[2],0)):'hepsi';}
+$('#kinds').onclick=e=>{const b=e.target.closest('.kd');if(!b)return;const k=b.dataset.k;kst[k]=e.altKey?(kst[k]===2?0:2):(kst[k]===1?0:1);drawKinds();};
+$('#exts').onclick=e=>{const b=e.target.closest('.pc');if(!b)return;exOn.has(b.dataset.e)?exOn.delete(b.dataset.e):exOn.add(b.dataset.e);drawKinds();};
+drawKinds();
+</script>
