@@ -47,6 +47,7 @@ mod pixels;
 mod placeact;
 mod placewire;
 mod qbar;
+mod qcaret;
 mod qdress;
 mod qflow;
 mod qgroup;

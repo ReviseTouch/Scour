@@ -26,7 +26,7 @@ pub struct QueryBar {
     pub anchor: usize,
     pub cursor: usize,
     /// The term the pointer was last on: its buttons act on it.
-    hover: Option<lens::Term>,
+    pub(crate) hover: Option<lens::Term>,
     /// Each filter of a query that found nothing: the term, the query
     /// without it, and what that finds once counted.
     rescue: Vec<(String, String, Option<(u64, bool)>)>,
@@ -954,53 +954,6 @@ fn drop_launcher(w: &MainWindow, s: &Rc<RefCell<State>>) {
     }
 }
 
-/// A press on a place capsule: into a folder part it edits that folder; on
-/// a disk, or anywhere else, it only rests there.
-fn press_part(state: &Rc<RefCell<State>>, text: &str) {
-    let mut st = state.borrow_mut();
-    let c = st.qb.cursor.min(text.len());
-    let folder = st
-        .qb
-        .caps
-        .iter()
-        .find(|p| p.start <= c && c <= p.end)
-        .is_some_and(|p| {
-            p.part_at(c)
-                .map(|k| &p.parts[k])
-                .is_some_and(|part| part.shown && part.spot.tile.is_none())
-        });
-    st.qb.lenses.editing = folder;
-}
-
-/// An arrow over a place capsule: one stop a part, as drawn; false when the
-/// key leaves the capsule and moves by a letter.
-fn arrow(w: &MainWindow, s: &Rc<RefCell<State>>, forward: bool) -> bool {
-    let text = w.get_query().to_string();
-    let next = {
-        let st = s.borrow();
-        let c = st.qb.cursor.min(text.len());
-        if st.qb.anchor != c {
-            return false;
-        }
-        st.qb
-            .caps
-            .iter()
-            .find(|p| p.start <= c && c <= p.end)
-            .and_then(|p| p.step(&text, c, forward))
-    };
-    let Some(at) = next else { return false };
-    {
-        let mut st = s.borrow_mut();
-        st.qb.anchor = at;
-        st.qb.cursor = at;
-        st.qb.lenses.editing = false;
-    }
-    w.set_anchor_to(-1);
-    w.set_caret_to(at as i32);
-    w.set_caret_ask(w.get_caret_ask() + 1);
-    true
-}
-
 /// Take a term out, exclude it or take the exclusion off, or read a word a
 /// letter off: what a term's buttons do.
 fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
@@ -1008,21 +961,7 @@ fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
     if t.end > text.len() {
         return;
     }
-    if let Some((query, caret)) = crate::qgroup::whole(&text, t, what) {
-        write(w, state, query, caret);
-        // Kept under the pointer, so a second `!` turns it back.
-        if what == "neg" {
-            let not = !t.not;
-            state.borrow_mut().qb.hover = Some(lens::Term {
-                start: t.start,
-                end: caret,
-                not,
-                field: Some("under"),
-                value: String::new(),
-            });
-            w.set_hov_not(not);
-            w.set_hov_on(true);
-        }
+    if crate::qcaret::group_pill(w, state, &text, t, what) {
         return;
     }
     let raw = &text[t.start..t.end];
@@ -1214,7 +1153,7 @@ pub fn wire(
             if drop_empty(&w, &state, Some(cur)) {
                 return;
             }
-            press_part(&state, &text);
+            crate::qcaret::press_part(&state, &text);
             let t = state.borrow().qb.field.term_at(&text, line, col);
             // A press past the end of the text leaves the term there.
             if t.is_none() && state.borrow().qb.cursor >= text.len() && exit(&w, &state) {
@@ -1312,8 +1251,10 @@ pub fn wire(
     }
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
-        window
-            .on_q_arrow(move |forward| weak.upgrade().is_some_and(|w| arrow(&w, &state, forward)));
+        window.on_q_arrow(move |forward| {
+            weak.upgrade()
+                .is_some_and(|w| crate::qcaret::arrow(&w, &state, forward))
+        });
     }
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
