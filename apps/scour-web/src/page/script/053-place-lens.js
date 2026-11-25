@@ -7,7 +7,7 @@
   let PLACE_DISKS = [], PLACE_SOURCES = [];
   /* The folder the list keeps showing after a click, while the text is what it wrote. */
   let placeView = null;
-  /* Files per disk, counted once per opening of the lens. */
+  /* Files per tile's weighed count query, counted once per opening of the lens. */
   let placeFiles = new Map(), placeAsked = new Set(), placeOpening = 0;
   /* Which row the arrows are on: kept across a click's rewrite, reset by typing. */
   let placeSelKey = "", placeSelAfter = null, placeSelAuto = true, placeDrawnSel = -1;
@@ -37,28 +37,42 @@
     if (disks) PLACE_DISKS = disks;
     if (sources) PLACE_SOURCES = sources;
     drawScopeChip(q.value);
+    // The Location capsule names the disks it holds whole.
+    paint(q.value);
   }
 
   function placeTilesNow() {
     const disks = (LENS && LENS.disks) || PLACE_DISKS;
     const sources = (LENS && LENS.sources) || PLACE_SOURCES;
-    return diskTiles(disks.map(diskIn), sources, (id) => placeFiles.get(id));
+    const tiles = diskTiles(disks.map(diskIn), sources, () => null);
+    for (const tl of tiles) if (tl.count !== null) tl.files = placeFiles.get(placeWeighed(tl)) ?? null;
+    return tiles;
   }
 
-  /* Each tile: held whole by the query, or some folder of it is. */
+  /* What a tile is counted as: its roots, weighed by the query less its
+     places — never by a query that would read files. */
+  function placeWeighed(tl) {
+    const rest = withoutPlaces(q.value);
+    return rest && !READS.test(rest) ? tl.count + " " + rest : tl.count;
+  }
+
+  /* Each tile: held whole by the query, and whether the query searches on it. */
   function placeMarks(tiles, scope) {
-    const ins = ((LENS && LENS.disks) || PLACE_DISKS).map(diskIn);
-    return tiles.map((tl) => ({
-      sel: tl.count !== null && tl.roots.every((r) => scopeHolds(scope, r)),
-      some: scope.within.some((h) => diskOf(h.path, ins) === tl.id),
-    }));
+    return tiles.map((tl) => {
+      const sel = tileHeld(tl, scope), lit = tileLit(tl, scope);
+      return { sel, lit, some: !sel && lit && scope.within.length > 0 };
+    });
   }
 
   /* The folder the list shows, and what is typed after it to narrow it. */
-  function placeAt(t) {
+  function placeViewAt(t) {
     if (placeView && placeView.text === q.value) return [placeView.dir, ""];
-    const [base, part] = placeParts(t.value);
-    return [base ? fullForm(base) : (HOME || "/"), part];
+    return placeAt(t.value, HOME);
+  }
+
+  /* The lens's term as the place model reads it. */
+  function placeLensTerm() {
+    return placeTerms(q.value).find((x) => x.start === LENS.a) || null;
   }
 
   /* A folder's own folders: weighed by `usage`, and the light ones `tree` adds. */
@@ -84,7 +98,7 @@
   function lensPlaceItems() {
     const t = LENS.term;
     const fld = t.field || "under";
-    const [active, part] = placeAt(t);
+    const [active, part] = placeViewAt(t);
     LENS.placeDir = active;
     LENS.title = T("Where it searches");
     LENS.foot = T("→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term.");
@@ -111,27 +125,19 @@
     return out;
   }
 
-  /* The query without its places, what the folder list is weighed by: a
-     click that adds, excludes or picks a disk does not reorder the list. */
-  function placeRest(text) {
-    const drop = placeTerms(text).filter((t) => t.field === "under" || t.field === "parent");
-    let out = text;
-    for (const t of drop.reverse()) out = placeRemove(out, t)[0];
-    return out.replace(/\s+/g, " ").trim();
-  }
-
   /* Each disk's files, asked once the panel is drawn and both answers are in. */
   function placeCount() {
     if (!LENS || LENS.kind !== "place" || !LENS.disks || !LENS.sources) return;
     const mine = placeOpening;
     for (const tl of placeTilesNow()) {
-      const key = tl.id + "\n" + tl.count;
-      if (tl.count === null || placeAsked.has(key)) continue;
+      if (tl.count === null) continue;
+      const key = placeWeighed(tl);
+      if (placeAsked.has(key)) continue;
       placeAsked.add(key);
-      SERVICE.get("count", { q: tl.count, cap: COUNT_ALL })
+      SERVICE.get("count", { q: key, cap: COUNT_ALL })
         .then((r) => {
           if (mine !== placeOpening) return;
-          placeFiles.set(tl.id, r.total);
+          placeFiles.set(key, r.total);
           if (LENS && LENS.kind === "place") lensDraw();
         })
         .catch(() => {});
@@ -140,34 +146,14 @@
 
   /* Write what a click made, and keep the lens on the place group's first
      term, so the panel does not move under the pointer. */
-  function placeWrite(text, caret, viewDir, sel) {
-    const [out, at] = placeAnchor(text, caret, LENS.term);
+  function placeWrite(text, viewDir, sel) {
+    const [out, at] = placeAnchor(text, HOME, LENS.a);
     placeSelAfter = sel ?? LENS.sel;
     q.value = out;
     q.setSelectionRange(at, at);
     placeView = viewDir ? { dir: viewDir, text: out } : null;
     render();
     lensSync(true);
-  }
-
-  /* Where the caret goes: the end of the group's first term; an empty
-     `under:` where the group was when none is left; the lens's own term
-     when it was not of the group. */
-  function placeAnchor(text, caret, old) {
-    if (isPlace(old)) {
-      const run = placeRuns(text).find((r) => r.some(isPlace));
-      if (run) return [text, run.find(isPlace).end];
-      const at = Math.min(old.a, text.length);
-      const lead = at > 0 && !/\s/.test(text[at - 1]) ? " " : "";
-      const tail = at < text.length && !/\s/.test(text[at]) ? " " : "";
-      return [text.slice(0, at) + lead + "under:" + tail + text.slice(at), at + lead.length + 6];
-    }
-    let best = null;
-    for (const x of placeTerms(text)) {
-      if (text.slice(x.start, x.end) !== old.raw) continue;
-      if (!best || Math.abs(x.start - old.a) < Math.abs(best.start - old.a)) best = x;
-    }
-    return [text, best ? best.end : caret];
   }
 
   /* A tile clicked: this disk alone, or (Ctrl) this one too. Enter closes. */
@@ -187,37 +173,25 @@
     // A disk chosen shows its own folders: its root, or home on a disk that holds it.
     const held = tl.roots.every((r) => scopeHolds(placeScope(text, HOME), r));
     const home = tl.whole ? tl.root : tl.roots.includes(HOME) ? HOME : tl.roots[0];
-    placeWrite(text, caret, held && home ? home : LENS.placeDir, i);
+    placeWrite(text, held && home ? home : LENS.placeDir, i);
+  }
+
+  /* "Add": into the group, never out of it; the lens's term gives way while typed. */
+  function placePressAdd(path) {
+    const typed = placeView && placeView.text === q.value ? null : placeLensTerm();
+    placeWrite(placeAdd(q.value, HOME, path, typed)[0], LENS.placeDir);
   }
 
   /* "Exclude": its own `!under:` term at the end, or taken away again. */
-  function placeExclude(path) {
-    const v = q.value;
-    const have = placeScope(v, HOME).outside.find((h) => h.path === untrailed(path));
-    if (have) {
-      const [text, caret] = placeRemove(v, have.term);
-      placeWrite(text, caret, LENS.placeDir);
-      return;
-    }
-    const text = v + (!v || /\s$/.test(v) ? "" : " ") + "!under:" + quotedPath(homeForm(untrailed(path)));
-    placeWrite(text, text.length, LENS.placeDir);
+  function placePressExclude(path) {
+    placeWrite(placeExclude(q.value, HOME, path)[0], LENS.placeDir);
   }
 
-  /* An entry of "Searching in:" taken away: a tile, a folder or an exclusion. */
-  function placeDrop(what) {
-    const [kind, n] = [what[0], +what.slice(2)];
-    const v = q.value;
-    const scope = placeScope(v, HOME);
-    let out = null;
-    if (kind === "t") {
-      const tl = placeTilesNow()[n];
-      if (tl) out = tileToggle(v, HOME, tl.roots, Pick.Also);
-    } else if (kind === "w" && scope.within[n]) {
-      out = placeToggle(v, HOME, scope.within[n].path, Pick.Also);
-    } else if (kind === "o" && scope.outside[n]) {
-      out = placeRemove(v, scope.outside[n].term);
-    }
-    if (out) placeWrite(out[0], out[1], LENS.placeDir);
+  /* An entry of "Searching in:" taken away: the n-th of `spots`. */
+  function placeDrop(n) {
+    const spot = spots(q.value, HOME, placeTilesNow())[n];
+    if (!spot) return;
+    placeWrite(spotRemove(spot, q.value, HOME)[0], LENS.placeDir);
   }
 
   function placeAnswer(id, what) {
@@ -236,11 +210,9 @@
     const hit = (attr) => e.target.closest("[" + attr + "]");
     let el;
     if ((el = hit("data-tdo"))) placeAnswer(el.dataset.tid, el.dataset.tdo);
-    else if ((el = hit("data-prm"))) placeDrop(el.dataset.prm);
-    else if ((el = hit("data-padd"))) {
-      const [text, caret] = placeToggle(q.value, HOME, el.dataset.padd, Pick.Also);
-      placeWrite(text, caret, LENS.placeDir);
-    } else if ((el = hit("data-pexcl"))) placeExclude(el.dataset.pexcl);
+    else if ((el = hit("data-prm"))) placeDrop(+el.dataset.prm);
+    else if ((el = hit("data-padd"))) placePressAdd(el.dataset.padd);
+    else if ((el = hit("data-pexcl"))) placePressExclude(el.dataset.pexcl);
     else if ((el = hit("data-tile"))) placeTile(+el.dataset.tile, e.ctrlKey || e.metaKey ? Pick.Also : Pick.Only, false);
     else return false;
     return true;

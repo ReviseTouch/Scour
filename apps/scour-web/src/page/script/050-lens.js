@@ -72,7 +72,7 @@
     return [...t.value].length >= 2 ? "word" : null;
   }
 
-  const quoteIf = (v) => (/\s/.test(v) ? '"' + v + '"' : v);
+  const quoteIf = (v) => (/[\s|]/.test(v) ? '"' + v + '"' : v);
   const neg = (t) => (t.not ? "!" : "");
   /* A path as a person writes it: under the home folder, with `~`. */
   const homeForm = (p) => (HOME && (p === HOME || p.startsWith(HOME + "/")) ? "~" + p.slice(HOME.length) : p);
@@ -229,9 +229,9 @@
       return;
     }
     if (LENS.kind === "place") {
-      const [activeBase] = placeAt(t);
+      const [activeBase] = placeViewAt(t);
       LENS.placeDir = activeBase;
-      const scoped = READS.test(rest) ? "" : placeRest(q.value);
+      const scoped = READS.test(rest) ? "" : withoutPlaces(q.value);
       LENS.disks = lensSeen.get("volumes") || null;
       LENS.sources = lensSeen.get("sources") || null;
       LENS.usage = lensSeen.get("usage " + activeBase + " " + scoped) || null;
@@ -480,7 +480,20 @@
     return false;
   }
 
+  /* A part of a Location capsule taken out by Backspace or Delete. */
+  function placeKeyed(back) {
+    const done = placeCapKey(back);
+    if (!done) return false;
+    q.value = done[0];
+    q.setSelectionRange(done[1], done[1]);
+    lastQueryCaret = done[1];
+    lensClose();
+    render();
+    return true;
+  }
+
   function frameBackspace() {
+    if (placeKeyed(true)) return true;
     const c = q.selectionStart, v = q.value;
     for (const [ta, tb] of terms(v)) {
       const head = capHeadOf(v, ta, tb);
@@ -527,6 +540,7 @@
   }
 
   function frameDelete() {
+    if (placeKeyed(false)) return true;
     const c = q.selectionStart, v = q.value;
     for (const [ta, tb] of terms(v)) {
       const head = capHeadOf(v, ta, tb);

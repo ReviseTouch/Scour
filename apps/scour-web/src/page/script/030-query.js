@@ -58,9 +58,8 @@
       pieces.forEach((piece, pIdx) => {
         if (pIdx > 0) out.push(["space", ";"]);
         if (!piece) return;
-        const quoted = piece.startsWith('"');
-        piece.split("|").forEach((alt, j) => {
-          if (j > 0) out.push([quoted ? "phrase" : "or", "|"]);
+        splitBars(piece).forEach((alt, j) => {
+          if (j > 0) out.push(["or", "|"]);
           alternative(out, alt);
         });
       });
@@ -68,6 +67,18 @@
       list = openList(tail);
       expectValue = !!list && tail.endsWith(";");
     });
+    return out;
+  }
+
+  /* Cut at each `|` outside quotes: `under:"/srv/a|b"` is one term. */
+  function splitBars(s) {
+    const out = [];
+    let at = 0, quoted = false;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '"') quoted = !quoted;
+      else if (s[i] === "|" && !quoted) { out.push(s.slice(at, i)); at = i + 1; }
+    }
+    out.push(s.slice(at));
     return out;
   }
 
@@ -144,7 +155,10 @@
 
   /* Where a term is drawn: the coloured layer holds one element per term, so
      its boxes are the browser's own, across a wrapped line as well. */
-  function termEl(a) { return shadow.querySelector('.term[data-a="' + a + '"]'); }
+  function termEl(a) {
+    return shadow.querySelector('.term[data-a="' + a + '"]') ||
+      [...shadow.querySelectorAll(".term.place")].find((el) => +el.dataset.a < a && a < +el.dataset.b) || null;
+  }
 
   function termAt(clientX, clientY) {
     for (const el of shadow.querySelectorAll(".term")) {
@@ -177,9 +191,6 @@
 
   function drawActs(term) {
     hoverTerm = term;
-    /* The capsule under the pointer opens room at its right end for the
-       buttons, so they stand over nothing and a value can still be pressed:
-       marked first, measured after. */
     markHover();
     const hovEl = term && termEl(term[0]);
     const rects = term ? [...(hovEl?.getClientRects() || [])] : [];
@@ -266,6 +277,8 @@
       const body = term.replace(/^!/, "");
       return editTerm(hoverTerm, neg + (/^fuzzy:/i.test(body) ? body.slice(6) : "fuzzy:" + body));
     }
+    // A Location capsule is excluded whole, each member on its own.
+    if (termEl(a)?.classList.contains("place")) return editTerm(hoverTerm, placeNegated(q.value, a, end));
     // Negation toggles rather than accumulating: `!!a` means nothing.
     editTerm(hoverTerm, term.startsWith("!") ? term.slice(1) : "!" + term);
   });
@@ -478,7 +491,9 @@
     let rest = v.slice(b);
     const head = v.slice(0, a);
     if ((!head || head.endsWith(" ")) && rest.startsWith(" ")) rest = rest.slice(1);
-    const next = head + rest;
+    // A member of a `|` run goes with one `|`, so no bar is left behind.
+    const member = placeTerms(v).find((x) => x.start === a);
+    const next = member && placeRunOf(v, member).length > 1 ? placeRemove(v, member)[0] : head + rest;
     const caret = cur > b ? cur - (v.length - next.length) : Math.min(cur, a);
     lensClose();
     q.value = next;
@@ -563,6 +578,8 @@
      the character there, or right of the one before. A capsule's hidden
      letters have no width, so there it is the capsule's own boxes. */
   function caretBox(off) {
+    const placed = placeCaret(off);
+    if (placed) return placed;
     for (const s of SEGS) {
       if (off >= s.start && off < s.end) {
         const r = charRects(s, off - s.start, off - s.start + 1)[0];
@@ -627,6 +644,12 @@
           }
         }
       }
+      if (!whole.length) {
+        for (const r of placeSelRects(lo, hi)) {
+          html += '<div class="qsel" style="left:' + (r.left - box.left) + "px;top:" + (r.top - box.top) +
+            "px;width:" + r.width + "px;height:" + r.height + 'px"></div>';
+        }
+      }
       for (const s of SEGS) {
         const from = Math.max(lo, s.start), to = Math.min(hi, s.end);
         if (from >= to || whole.some(([wa, wb]) => s.start >= wa && s.end <= wb)) continue;
@@ -658,6 +681,7 @@
     q.style.pointerEvents = was;
     shadow.style.pointerEvents = "";
     const art = el && el.closest && el.closest(".art");
+    if (art && art.dataset.at !== undefined) return +art.dataset.at;
     if (art) {
       const term = art.closest(".term");
       if (term) {
@@ -670,22 +694,26 @@
     }
     if (!pos) return q.value.length;
     let seg = SEGS.find((s) => s.node === pos.node);
-    if (seg) return seg.start + Math.min(pos.off, seg.end - seg.start);
+    if (seg) return placeSnap(seg.start + Math.min(pos.off, seg.end - seg.start));
     /* An element: the point is between its children. */
     const kid = pos.node.childNodes && pos.node.childNodes[pos.off];
     if (kid) {
       seg = SEGS.find((s) => kid === s.node || (kid.contains && kid.contains(s.node)));
-      if (seg) return seg.start;
+      if (seg) return placeSnap(seg.start);
     }
     const last = [...SEGS].reverse().find((s) => pos.node.contains && pos.node.contains(s.node));
-    return last ? last.end : q.value.length;
+    return last ? placeSnap(last.end) : q.value.length;
   }
 
   function paint(text) {
     // A caret sits between characters, so both neighbours are candidates:
     // backspace takes the one behind, Delete the one ahead.
     const caret = document.activeElement === q ? (q.selectionStart ?? -1) : -1;
-    const ts = terms(text);
+    const caps = placeCapsDrawn(text, caret >= 0 && q.selectionEnd === caret ? caret : null);
+    // A place run is one entry: drawn whole by `placeCapHtml`.
+    const ts = terms(text).filter(([a, b]) => !caps.some((c) => a >= c.start && b <= c.end));
+    for (const c of caps) ts.push([c.start, c.end, c]);
+    ts.sort((x, y) => x[0] - y[0]);
     const locked = new Set();
     for (const [a, b] of ts) {
       const h = capHeadOf(text, a, b);
@@ -718,7 +746,7 @@
        run that crosses a term's edge is drawn in two. A capsule is a header,
        and the value it holds; the header's letters and a value said in words
        sit in the text at no width, so every offset of the query is somewhere. */
-    let k = 0, open = false, headOpen = false, valOpen = false, headAt = -1, at = 0, html = "", tm = null;
+    let k = 0, open = false, headOpen = false, valOpen = false, headAt = -1, at = 0, html = "", tm = null, skip = -1;
     const closeHead = () => {
       html += "</span>";
       headOpen = false;
@@ -744,6 +772,12 @@
         if (headOpen && pos >= headAt) closeHead();
         if (open && pos >= ts[k][1]) closeTerm();
         while (!open && k < ts.length && ts[k][1] <= pos) k++;
+        if (!open && k < ts.length && pos >= ts[k][0] && ts[k][2]) {
+          html += placeCapHtml(text, ts[k][2], caret);
+          skip = ts[k][1];
+          k++;
+        }
+        if (pos < skip) { i = Math.min(t.length, skip - at); continue; }
         if (!open && k < ts.length && pos >= ts[k][0]) {
           const [a, b] = ts[k];
           let cls = termClass(text.slice(a, b));
@@ -782,6 +816,7 @@
     }
     if (open) closeTerm();
     shadow.innerHTML = html;
+    if (caps.length) placeFit(text, caret);
     fitQuery();
     markHover();
   }

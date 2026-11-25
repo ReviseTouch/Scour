@@ -697,6 +697,15 @@
     if (e.inputType !== "insertText" || !e.data || /\s$/.test(e.data)) return;
     if (q.selectionStart !== q.selectionEnd) return;
     const c = q.selectionStart ?? 0, v = q.value;
+    const after = placeCapType(e.data);
+    if (after) {
+      e.preventDefault();
+      q.value = after[0];
+      q.setSelectionRange(after[1], after[1]);
+      lastQueryCaret = after[1];
+      render();
+      return;
+    }
     for (const [ta, tb] of terms(v)) {
       if (c === ta && capHeadOf(v, ta, tb) > ta) {
         e.preventDefault();

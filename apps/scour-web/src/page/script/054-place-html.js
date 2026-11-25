@@ -8,10 +8,10 @@
     const scope = placeScope(q.value, HOME);
     const marks = placeMarks(tiles, scope);
     const on = LENS.items[LENS.sel] || {};
-    const active = LENS.placeDir || placeAt(t)[0];
+    const active = LENS.placeDir || placeViewAt(t)[0];
     return placeTopHtml(tiles, marks, on) +
       '<div class="lp-grid">' + placeLeftHtml(active) + placeRightHtml(active, scope, on) + "</div>" +
-      placeBasketHtml(tiles, marks, scope) +
+      placeBasketHtml(tiles, scope) +
       '<div class="lfoot lp-keys">' +
       (tiles.some((tl) => tl.count !== null)
         ? "<span>" + escape_(T("click a disk: search only there")) + "</span><span>" + escape_(T("Ctrl+click: several")) + "</span>" : "") +
@@ -21,10 +21,9 @@
   function placeTopHtml(tiles, marks, on) {
     if (!tiles.length) return "";
     const strip = diskStrip(tiles);
-    const any = marks.some((m) => m.sel || m.some);
     const segs = strip.map(({ at, share }) => {
       const tl = tiles[at];
-      const lit = !any || marks[at].sel || marks[at].some;
+      const lit = marks[at].lit;
       const said = tl.name + (tl.files !== null ? " · " + T("{n} files", { n: fmt(tl.files) }) : "");
       return '<i class="seg' + (lit ? "" : " dim") + '" data-tile="' + at + '" style="flex-grow:' + share.toFixed(5) +
         ";background:var(--disk-" + tl.kind + ')" title="' + escape_(said) + '"></i>';
@@ -129,28 +128,16 @@
       '<div class="lp-sec">' + escape_(T("Subfolders")) + "</div>" + list + "</div>";
   }
 
-  /* "Searching in:": the disks the query holds whole, the other folders it
-     holds, and what it leaves out — each with its ×; or everywhere. */
-  function placeBasketHtml(tiles, marks, scope) {
-    const chip = (label, title, drop, no, kind) =>
-      '<span class="lp-chip' + (no ? " no" : "") + '" title="' + escape_(title) + '">' +
-      (kind ? '<i class="dot" style="background:var(--disk-' + kind + ')"></i>' : "") +
-      '<span class="t">' + escape_(label) + '</span><button type="button" data-prm="' + drop +
-      '" aria-label="' + escape_(T("Remove")) + '">×</button></span>';
-    const covered = new Set();
-    const out = [];
-    tiles.forEach((tl, i) => {
-      if (!marks[i].sel) return;
-      tl.roots.forEach((r) => covered.add(untrailed(r)));
-      out.push(chip(tl.name, tl.roots.map(homeForm).join("  "), "t:" + i, false, tl.kind));
-    });
-    scope.within.forEach((h, k) => {
-      if (!covered.has(h.path)) out.push(chip(homeForm(h.path), h.path, "w:" + k, false, ""));
-    });
+  /* "Searching in:": `spots` in their order, each with its ×; or everywhere. */
+  function placeBasketHtml(tiles, scope) {
+    const out = spots(q.value, HOME, tiles).map((sp, n) =>
+      '<span class="lp-chip' + (sp.not ? " no" : "") + '" title="' + escape_(sp.paths.map(homeForm).join("  ")) + '">' +
+      (sp.kind ? '<i class="dot" style="background:var(--disk-' + sp.kind + ')"></i>' : "") +
+      '<span class="t">' + escape_(sp.name) + '</span><button type="button" data-prm="' + n +
+      '" aria-label="' + escape_(T("Remove")) + '">×</button></span>');
     const disks = tiles.filter((tl) => tl.count !== null).length;
     const every = scope.within.length ? "" : '<span class="every">' + escape_(T("everywhere")) + "</span>" +
       (disks ? '<span class="lbl">' + escape_(T("{n} disks", { n: fmt(disks) })) + "</span>" : "");
-    scope.outside.forEach((h, k) => out.push(chip(homeForm(h.path), h.path, "o:" + k, true, "")));
     return '<div class="lp-basket"><span class="lbl">' + escape_(T("Searching in:")) + "</span>" + every + out.join("") + "</div>";
   }
 

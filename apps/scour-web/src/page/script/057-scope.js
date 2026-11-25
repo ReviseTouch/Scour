@@ -6,34 +6,36 @@
   const scopeChip = document.getElementById("qscope");
   let scopeDrawn = "";
 
-  /* The dots and the names the chip says, for `text`. No names: everywhere. */
+  /* The chip's dots and every name it could say, for `text`. */
   function scopeSays(text, home, disks, sources) {
-    const ins = disks.map(diskIn);
-    const tiles = diskTiles(ins, sources, () => null);
-    const scope = placeScope(text, home);
-    const whole = tiles.map((tl) => tl.count !== null && tl.roots.every((r) => scopeHolds(scope, r)));
-    const on = tiles.map((tl) => scope.within.some((h) => diskOf(h.path, ins) === tl.id));
-    const dots = tiles
-      .map((tl, i) => ({ kind: tl.kind, asking: tl.shown === "asking", lit: tl.count !== null && (!scope.within.length || on[i]), on: tl.count !== null }))
-      .filter((d) => d.on || d.asking)
-      .map(({ kind, asking, lit }) => ({ kind, asking, lit }));
-    const covered = new Set(tiles.flatMap((tl, i) => (whole[i] ? tl.roots.map(untrailed) : [])));
-    const leaf = (p) => (homeIn(home, p) === "~" ? "~" : p === "/" ? "/" : p.slice(p.lastIndexOf("/") + 1));
-    const names = [
-      ...tiles.filter((_, i) => whole[i]).map((tl) => tl.name),
-      ...scope.within.filter((h) => !covered.has(h.path)).map((h) => leaf(h.path)),
-    ];
-    return { dots, names: [...new Set(names)] };
+    const tiles = diskTiles(disks.map(diskIn), sources, () => null);
+    return { dots: chipDots(tiles, placeScope(text, home)), spots: spots(text, home, tiles) };
+  }
+
+  /* As many names as the chip's width holds, the rest as "+k". */
+  function scopeLabel(list) {
+    const nm = scopeChip.querySelector(".nm");
+    const room = nm ? nm.clientWidth : 0;
+    const n = list.filter((s) => !s.not).length;
+    if (!room || n <= 1) return chipLabel(list, n, T("Everywhere"));
+    const ctx = (scopeLabel.ctx ||= document.createElement("canvas").getContext("2d"));
+    ctx.font = getComputedStyle(nm).font;
+    for (let max = n; max > 1; max--) {
+      if (ctx.measureText(chipLabel(list, max, "")).width <= room) return chipLabel(list, max, "");
+    }
+    return chipLabel(list, 1, "");
   }
 
   function drawScopeChip(text) {
     if (!scopeChip) return;
-    const { dots, names } = scopeSays(text, HOME, PLACE_DISKS, PLACE_SOURCES);
-    const html = '<span class="dots">' + dots.map((d) =>
-      '<i class="dot' + (d.asking ? " ask" : d.lit ? "" : " dim") + '" style="--c:var(--disk-' + d.kind + ')"></i>').join("") +
-      '</span><span class="nm">' + escape_(names.length ? names.join(" + ") : T("Everywhere")) + "</span>";
+    const { dots, spots: list } = scopeSays(text, HOME, PLACE_DISKS, PLACE_SOURCES);
+    const dotsHtml = '<span class="dots">' + dots.map((d) =>
+      '<i class="dot' + (d.asking ? " ask" : d.lit ? "" : " dim") + '" style="--c:var(--disk-' + d.kind + ')"></i>').join("") + "</span>";
+    if (!scopeChip.querySelector(".nm")) scopeChip.innerHTML = dotsHtml + '<span class="nm"></span>';
+    const label = scopeLabel(list);
     // A fixed width, so the field does not move as the names change: all of them here.
-    const title = T("Where it searches") + ": " + (names.length ? names.join(" + ") : T("Everywhere"));
+    const title = T("Where it searches") + ": " + chipLabel(list, list.length, T("Everywhere"));
+    const html = dotsHtml + '<span class="nm">' + escape_(label) + "</span>";
     if (html + title === scopeDrawn) return;
     scopeDrawn = html + title;
     scopeChip.innerHTML = html;
