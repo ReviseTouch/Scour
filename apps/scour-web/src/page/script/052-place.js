@@ -220,7 +220,9 @@
       id: d.id, name: d.label || d.roots[0] || "",
       kind: DISK_KINDS.includes(d.kind) ? d.kind : "fixed",
       fs: d.fs, root: d.roots.length ? untrailed(d.roots[0]) : "", size: d.size,
-      roots, whole, shown, files: count === null ? null : files ?? null, count,
+      // Never empty for an indexed disk: a click must have a term to write.
+      roots: counted, whole: whole || (indexed && !roots.length),
+      shown, files: count === null ? null : files ?? null, count,
       index_it: shown === "asking" || shown === "off",
     };
   }

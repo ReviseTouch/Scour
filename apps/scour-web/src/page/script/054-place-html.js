@@ -141,8 +141,8 @@
     const out = [];
     tiles.forEach((tl, i) => {
       if (!marks[i].sel) return;
-      tileRoots(tl).forEach((r) => covered.add(untrailed(r)));
-      out.push(chip(tl.name, tileRoots(tl).map(homeForm).join("  "), "t:" + i, false, tl.kind));
+      tl.roots.forEach((r) => covered.add(untrailed(r)));
+      out.push(chip(tl.name, tl.roots.map(homeForm).join("  "), "t:" + i, false, tl.kind));
     });
     scope.within.forEach((h, k) => {
       if (!covered.has(h.path)) out.push(chip(homeForm(h.path), h.path, "w:" + k, false, ""));

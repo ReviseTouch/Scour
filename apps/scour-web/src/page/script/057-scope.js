@@ -11,13 +11,13 @@
     const ins = disks.map(diskIn);
     const tiles = diskTiles(ins, sources, () => null);
     const scope = placeScope(text, home);
-    const whole = tiles.map((tl) => tl.count !== null && tileRoots(tl).every((r) => scopeHolds(scope, r)));
+    const whole = tiles.map((tl) => tl.count !== null && tl.roots.every((r) => scopeHolds(scope, r)));
     const on = tiles.map((tl) => scope.within.some((h) => diskOf(h.path, ins) === tl.id));
     const dots = tiles
       .map((tl, i) => ({ kind: tl.kind, asking: tl.shown === "asking", lit: tl.count !== null && (!scope.within.length || on[i]), on: tl.count !== null }))
       .filter((d) => d.on || d.asking)
       .map(({ kind, asking, lit }) => ({ kind, asking, lit }));
-    const covered = new Set(tiles.flatMap((tl, i) => (whole[i] ? tileRoots(tl).map(untrailed) : [])));
+    const covered = new Set(tiles.flatMap((tl, i) => (whole[i] ? tl.roots.map(untrailed) : [])));
     const leaf = (p) => (homeIn(home, p) === "~" ? "~" : p === "/" ? "/" : p.slice(p.lastIndexOf("/") + 1));
     const names = [
       ...tiles.filter((_, i) => whole[i]).map((tl) => tl.name),

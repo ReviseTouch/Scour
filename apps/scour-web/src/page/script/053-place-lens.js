@@ -44,14 +44,12 @@
     const sources = (LENS && LENS.sources) || PLACE_SOURCES;
     return diskTiles(disks.map(diskIn), sources, (id) => placeFiles.get(id));
   }
-  /* What a click on a tile writes: its source roots, or its own root before `sources` came. */
-  const tileRoots = (tl) => (tl.roots.length ? tl.roots : tl.root ? [tl.root] : []);
 
   /* Each tile: held whole by the query, or some folder of it is. */
   function placeMarks(tiles, scope) {
     const ins = ((LENS && LENS.disks) || PLACE_DISKS).map(diskIn);
     return tiles.map((tl) => ({
-      sel: tl.count !== null && tileRoots(tl).every((r) => scopeHolds(scope, r)),
+      sel: tl.count !== null && tl.roots.every((r) => scopeHolds(scope, r)),
       some: scope.within.some((h) => diskOf(h.path, ins) === tl.id),
     }));
   }
@@ -176,7 +174,7 @@
   function placeTile(i, pick, close) {
     const tl = placeTilesNow()[i];
     if (!tl || tl.count === null) return;
-    const [text, caret] = tileToggle(q.value, HOME, tileRoots(tl), pick);
+    const [text, caret] = tileToggle(q.value, HOME, tl.roots, pick);
     if (close) {
       // Enter: written, and the caret stands outside the term.
       const gap = /\s/.test(text[caret] || "") ? "" : " ";
@@ -187,7 +185,7 @@
       return;
     }
     // A disk chosen shows its own folders: its root, or home on a disk that holds it.
-    const held = tileRoots(tl).every((r) => scopeHolds(placeScope(text, HOME), r));
+    const held = tl.roots.every((r) => scopeHolds(placeScope(text, HOME), r));
     const home = tl.whole ? tl.root : tl.roots.includes(HOME) ? HOME : tl.roots[0];
     placeWrite(text, caret, held && home ? home : LENS.placeDir, i);
   }
@@ -213,7 +211,7 @@
     let out = null;
     if (kind === "t") {
       const tl = placeTilesNow()[n];
-      if (tl) out = tileToggle(v, HOME, tileRoots(tl), Pick.Also);
+      if (tl) out = tileToggle(v, HOME, tl.roots, Pick.Also);
     } else if (kind === "w" && scope.within[n]) {
       out = placeToggle(v, HOME, scope.within[n].path, Pick.Also);
     } else if (kind === "o" && scope.outside[n]) {

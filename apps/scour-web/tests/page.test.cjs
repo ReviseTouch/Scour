@@ -878,7 +878,6 @@ function placeModel() {
   vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
   vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
-  vm.runInContext(section('  const tileRoots = ', '\n  /* Each tile: held'), c);
   vm.runInContext(section('  function placeAnchor(', '\n  /* A tile clicked'), c);
   vm.runInContext(section('  function placeRest(', '\n  /* Each disk'), c);
   vm.runInContext(section('  function scopeSays(', '\n  function drawScopeChip('), c);
@@ -1060,6 +1059,7 @@ test('a tile is counted over its own roots, less the disks inside them (disks/ti
   const x = J(M.diskTiles([fixDisk('uuid:x', '/mnt/x', 'fixed', 'chosen')], [], () => null))[0];
   assert.equal(x.count, 'file: under:/mnt/x');
   assert.equal(x.shown, 'polled');
+  assert.deepEqual([x.roots, x.whole], [['/mnt/x'], true], 'a click has its root to write');
   const y = J(M.diskTiles([fixDisk('uuid:y', '/run/media/u/MY STICK', 'removable', 'chosen')], [], () => null))[0];
   assert.equal(y.count, 'file: under:"/run/media/u/MY STICK"');
   // every_kind_is_known_and_a_strange_one_is_fixed
