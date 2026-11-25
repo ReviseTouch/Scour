@@ -200,15 +200,20 @@ export component Tool inherits Rectangle {
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <bool> on;
+    /// A frame even while off: a button that has to be seen to be found.
+    in property <bool> framed: false;
+    in property <length> glyph-size: 14px;
     callback clicked();
 
-    // A header bar's button: no frame until it is on, a wash under the hand.
+    // A header bar's button: on, it wears the accent — tint, ring and
+    // picture — so which one is chosen is seen at a glance; off, no frame
+    // unless `framed`, a wash under the hand.
     width: 28px;
     height: 28px;
     border-radius: 7px;
-    border-width: root.on ? Theme.hair : 0px;
-    border-color: Theme.line;
-    background: root.on ? Theme.panel-2 : touch.has-hover ? Theme.hover : transparent;
+    border-width: root.on || root.framed ? 1px : 0px;
+    border-color: root.on ? Theme.cap-ring : touch.has-hover ? Theme.ink-3 : Theme.line;
+    background: root.on ? Theme.cap : touch.has-hover ? Theme.hover : root.framed ? Theme.panel : transparent;
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -216,8 +221,8 @@ export component Tool inherits Rectangle {
 
     if !root.has-icon: Text {
         text: root.glyph;
-        color: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
-        font-size: 14px;
+        color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: root.glyph-size;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -226,7 +231,7 @@ export component Tool inherits Rectangle {
     }
     if root.has-icon: Image {
         source: root.icon;
-        colorize: root.on || touch.has-hover ? Theme.ink : Theme.ink-2;
+        colorize: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-2;
         width: 16px;
         height: 16px;
         x: (parent.width - self.width) / 2;
@@ -276,10 +281,21 @@ export component SearchTabChip inherits Rectangle {
     min-width: 96px;
     max-width: 220px;
     preferred-width: name.preferred-width + 48px;
+    // Every tab framed, so the strip reads as tabs; the one in front lit:
+    // the panel's white, the accent's ring, and a bar under it.
     border-radius: 7px;
-    border-width: root.on ? Theme.hair : 0px;
-    border-color: Theme.line;
+    border-width: 1px;
+    border-color: root.on ? Theme.cap-ring : touch.has-hover ? Theme.ink-3 : Theme.line;
     background: root.on ? Theme.panel : touch.has-hover ? Theme.hover : transparent;
+
+    if root.on: Rectangle {
+        x: 8px;
+        y: parent.height - 3px;
+        width: parent.width - 16px;
+        height: 2px;
+        border-radius: 1px;
+        background: Theme.q-key;
+    }
 
     touch := TouchArea {
         pointer-event(e) => {
@@ -298,6 +314,7 @@ export component SearchTabChip inherits Rectangle {
         name := Text {
             text: root.label;
             color: root.on ? Theme.ink : Theme.ink-2;
+            font-weight: root.on ? 600 : 400;
             font-size: 12.5px;
             vertical-alignment: center;
             overflow: elide;

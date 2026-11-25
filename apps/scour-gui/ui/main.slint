@@ -1095,9 +1095,11 @@ export component MainWindow inherits Window {
                     alignment: center;
                     padding-left: 4px;
                     Tool {
-                        width: 26px;
-                        height: 26px;
+                        width: 28px;
+                        height: 28px;
                         glyph: "+";
+                        glyph-size: 18px;
+                        framed: true;
                         clicked => { root.tab-new(); }
                     }
                 }
@@ -1198,10 +1200,11 @@ export component MainWindow inherits Window {
                     if root.tab != "report": VerticalLayout {
                         alignment: center;
                         Tool {
-                            width: 26px;
-                            height: 24px;
+                            width: 32px;
+                            height: 28px;
                             icon: @image-url("icons/tools/peek.svg");
                             has-icon: true;
+                            framed: true;
                             on: root.peeking;
                             clicked => { root.peek-toggled(); }
                         }
