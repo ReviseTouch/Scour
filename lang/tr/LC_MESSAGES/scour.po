@@ -3121,6 +3121,3 @@ msgstr "tık: ekle ya da çıkar · Alt+tık: dışla"
 
 msgid "Extensions in {kinds}"
 msgstr "{kinds} içindeki uzantılar"
-
-msgid "or"
-msgstr "veya"
