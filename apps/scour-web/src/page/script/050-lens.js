@@ -104,7 +104,9 @@
     const keep = LENS && t && LENS.a === t.a;
     if (!kind || !(asked || keep || (kind !== "word" && caret === t.b))) { lensClose(); return; }
     const sel = keep && LENS.kind === kind ? LENS.sel : 0;
+    const opening = kind === "place" && LENS?.kind !== "place";
     LENS = { kind, a: t.a, b: t.b, term: t, sel, items: LENS?.items || [], title: "", foot: "" };
+    if (opening) placeOpen();
     hideHints();
     lensFill();
   }
@@ -200,58 +202,6 @@
       });
   }
 
-  /* Folders: the disks and the usual places at the top, then a folder's own
-     folders, heaviest in what this query finds first. */
-  function lensPlaceItems() {
-    const t = LENS.term;
-    const field = t.field || "under";
-    const [base, part] = placeParts(t.value);
-    const want = fold(part);
-    LENS.foot = T("→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term.");
-    if (!base) {
-      LENS.title = T("Where");
-      const out = [];
-      for (const d of LENS.disks || []) {
-        const root = d.volume.roots[0] || "";
-        const name = d.volume.label || root;
-        if (want && !fold(name).startsWith(want) && !fold(root).includes(want)) continue;
-        const on = ["auto", "chosen", "configured"].includes(d.state);
-        out.push(on
-          ? { label: name, hint: homeForm(root), term: neg(t) + field + ":" + quoteIf(homeForm(root)), dir: root, stays: true, group: out.length ? "" : T("Disks") }
-          : { label: name, hint: T("not indexed — choose to index it"), disk: d.volume.id, group: out.length ? "" : T("Disks") });
-      }
-      let first = true;
-      for (const [label, path] of SCOPES) {
-        if (want && !fold(label).startsWith(want) && !fold(homeForm(path)).includes(want)) continue;
-        out.push({ label, hint: homeForm(path), term: neg(t) + field + ":" + quoteIf(homeForm(path)), dir: path, stays: true, group: first ? T("Places") : "" });
-        first = false;
-      }
-      return out;
-    }
-    const out = [];
-    const u = LENS.usage;
-    LENS.title = homeForm(fullForm(base)) + (u && u.child_count > u.children.length
-      ? " · " + T("the {n} heaviest of {all}", { n: fmt(u.children.length), all: fmt(u.child_count) }) : "");
-    if (!part) {
-      out.push({ label: T("this folder"), hint: u && u.root.bytes ? bytes(u.root.bytes) : "", term: neg(t) + field + ":" + quoteIf(base), n: u ? u.root.files : null });
-    }
-    /* Where this query finds the most first; then the heaviest; then by name. */
-    const kids = (u ? u.children.slice() : []).sort((x, y) =>
-      (y.files - x.files) || (y.bytes - x.bytes) || x.path.localeCompare(y.path));
-    for (const c of kids) {
-      const name = c.path.slice(c.path.lastIndexOf("/") + 1);
-      if (want && !fold(name).includes(want)) continue;
-      out.push({ label: name + "/", hint: c.bytes ? bytes(c.bytes) : "", term: neg(t) + field + ":" + quoteIf(homeForm(c.path)), dir: c.path, n: c.files, stays: true });
-    }
-    if (u && !part) {
-      const other = field === "under" ? "parent" : "under";
-      out.push({ label: T(field === "under" ? "only what is directly inside" : "everything below"), hint: other + ":", term: neg(t) + other + ":" + quoteIf(base), group: " " });
-    }
-    if (!u) out.push({ label: T("reading the folder…"), hint: "", wait: true });
-    else if (!out.length) out.push({ label: T("no folder here by that name"), hint: "", wait: true });
-    return out;
-  }
-
   /* Fill the list now, then ask the service for what it lacks: the counts,
      the folder's own folders, the disks. One answer at a time per lens. */
   function lensFill() {
@@ -279,18 +229,24 @@
       return;
     }
     if (LENS.kind === "place") {
-      const [base] = placeParts(t.value);
-      const activeBase = base ? fullForm(base) : (HOME || "/");
+      const [activeBase] = placeAt(t);
       LENS.placeDir = activeBase;
-      const scoped = READS.test(rest) ? "" : rest;
+      const scoped = READS.test(rest) ? "" : placeRest(q.value);
       LENS.disks = lensSeen.get("volumes") || null;
+      LENS.sources = lensSeen.get("sources") || null;
       LENS.usage = lensSeen.get("usage " + activeBase + " " + scoped) || null;
       LENS.tree = lensSeen.get("tree " + activeBase) || null;
       again();
+      placeCount();
       if (!LENS.disks) {
         cache("volumes", () => SERVICE.volumes().then((r) => r.disks || []))
-          .then((d) => { if (live()) { LENS.disks = d; again(); } })
+          .then((d) => { placeHeard(d, null); if (live()) { LENS.disks = d; again(); placeCount(); } })
           .catch(() => {});
+      }
+      if (!LENS.sources) {
+        cache("sources", () => SERVICE.sources().then((r) => r.sources || []))
+          .then((s) => { placeHeard(null, s); if (live()) { LENS.sources = s; again(); placeCount(); } })
+          .catch(() => { if (live()) { LENS.sources = []; again(); } });
       }
       if (!LENS.usage) {
         cache("usage " + activeBase + " " + scoped, () => SERVICE.get("usage", { path: activeBase, top: 60, q: scoped }, signal))
@@ -338,105 +294,6 @@
     if (keepOpen) lensSync(true); else lensClose();
   }
 
-  function lensPlaceHtml() {
-    const t = LENS.term;
-    const fld = t.field || "under";
-    const [base, part] = placeParts(t.value);
-    const active = LENS.placeDir || (base ? fullForm(base) : (HOME || "/"));
-    const want = fold(part);
-    const disks = LENS.disks || [];
-    const diskHtml = disks.map((d) => {
-      const root = d.volume.roots[0] || "";
-      const name = d.volume.label || root || d.volume.id;
-      const on = ["auto", "chosen", "configured"].includes(d.state);
-      const act = on && (active === root || active.startsWith(root === "/" ? "/" : root + "/"));
-      return on
-        ? '<button type="button" class="lp-item' + (act ? " active" : "") + '" data-pdir="' + escape_(root) + '">' +
-          '<span class="nm">⛁ ' + escape_(name) + '</span><span class="sub">' + escape_(homeForm(root)) + "</span></button>"
-        : '<button type="button" class="lp-item" data-pdisk="' + escape_(d.volume.id) + '">' +
-          '<span class="nm">⛁ ' + escape_(name) + '</span><span class="ask-tag">' + escape_(T("Index it")) + "</span></button>";
-    }).join("");
-    const placeRows = (HOME ? [["~", HOME], ...SCOPES] : SCOPES).map(([label, path]) => {
-      const act = active === path;
-      return '<button type="button" class="lp-item' + (act ? " active" : "") + '" data-pdir="' + escape_(path) + '">' +
-        '<span class="nm">' + escape_(label) + '</span><span class="sub">' + escape_(homeForm(path)) + "</span></button>";
-    }).join("");
-
-    // Breadcrumb segments for the right column
-    const shown = homeForm(active);
-    const segs = [];
-    if (shown.startsWith("~")) {
-      segs.push(["~", HOME]);
-      let cur = HOME;
-      for (const p of shown.slice(1).split("/").filter(Boolean)) { cur += "/" + p; segs.push([p, cur]); }
-    } else {
-      segs.push(["/", "/"]);
-      let cur = "";
-      for (const p of active.split("/").filter(Boolean)) { cur += "/" + p; segs.push([p, cur]); }
-    }
-    const parentPath = active === "/" ? null : (active.lastIndexOf("/") <= 0 ? "/" : active.slice(0, active.lastIndexOf("/")));
-    const crumbHtml =
-      (parentPath ? '<button type="button" data-pdir="' + escape_(parentPath) + '" title="' + escape_(T("Climb up")) + '">‹</button>' : "") +
-      segs.map(([lbl, p], idx) =>
-        (idx ? '<span class="s">/</span>' : "") +
-        '<button type="button" class="' + (idx + 1 === segs.length ? "cur" : "") + '" data-pdir="' + escape_(p) + '">' + escape_(lbl) + "</button>"
-      ).join("") +
-      '<button type="button" class="direct' + (fld === "parent" ? " on" : "") + '" data-pflip="1">' +
-      escape_(T("only what is directly inside")) + "</button>";
-
-    // Merge Usage weights + Tree subdirectories so empty/unweighed folders still appear
-    const byPath = new Map();
-    const u = LENS.usage;
-    for (const c of (u && u.children) || []) {
-      byPath.set(c.path, { path: c.path, name: c.path.slice(c.path.lastIndexOf("/") + 1), bytes: c.bytes || 0, files: c.files || 0 });
-    }
-    for (const d of LENS.tree || []) {
-      if (!byPath.has(d.path)) byPath.set(d.path, { path: d.path, name: d.name, bytes: 0, files: d.children || 0 });
-    }
-    const dirs = [...byPath.values()]
-      .filter((d) => !want || fold(d.name).includes(want))
-      .sort((x, y) => (y.bytes - x.bytes) || (y.files - x.files) || x.name.localeCompare(y.name))
-      .slice(0, 60);
-    const maxBytes = Math.max(1, ...dirs.map((d) => d.bytes || 0));
-    const applyHere = '<div class="lp-dir" data-pchoose="' + escape_(active) + '">' +
-      '<span class="dn">✓ ' + escape_(T("this folder")) + " (" + escape_(shown) + ')</span>' +
-      '<span class="dm">' + (u && u.root && u.root.bytes ? escape_(bytes(u.root.bytes)) : "") + "</span>" +
-      '<span class="da">' +
-      '<button type="button" class="inc" data-pinc="' + escape_(active) + '" title="' + escape_(T("Include folder")) + '">+</button>' +
-      '<button type="button" class="exc" data-pexc="' + escape_(active) + '" title="' + escape_(T("Exclude folder")) + '">!</button>' +
-      "</span></div>";
-    const listHtml = !u && !LENS.tree
-      ? '<div class="lgroup">' + escape_(T("reading the folder…")) + "</div>"
-      : !dirs.length
-      ? '<div class="lgroup">' + escape_(T("no folder here by that name")) + "</div>"
-      : dirs.map((d) => {
-          const pct = d.bytes ? Math.max(3, Math.round(92 * d.bytes / maxBytes)) : 0;
-          const meta = d.bytes ? bytes(d.bytes) : (d.files ? fmt(d.files) : "");
-          return '<div class="lp-dir" data-pdrill="' + escape_(d.path) + '">' +
-            (pct ? '<span class="wbar" style="width:' + pct + '%"></span>' : "") +
-            '<span class="dn">' + escape_(d.name) + '/</span>' +
-            '<span class="dm">' + escape_(meta) + '</span>' +
-            '<span class="da">' +
-            '<button type="button" class="inc" data-pinc="' + escape_(d.path) + '" title="' + escape_(T("Include folder")) + '">+</button>' +
-            '<button type="button" class="exc" data-pexc="' + escape_(d.path) + '" title="' + escape_(T("Exclude folder")) + '">!</button>' +
-            "</span></div>";
-        }).join("");
-
-    return '<div class="lp-grid">' +
-      '<div class="lp-left">' +
-      (diskHtml ? '<div class="lp-sec">' + escape_(T("Disks")) + "</div>" + diskHtml : "") +
-      '<div class="lp-sec">' + escape_(T("Places")) + "</div>" + placeRows +
-      '<button type="button" class="lp-pick" data-ppick="' + escape_(active) + '">📁 ' + escape_(T("Choose folder…")) + "</button>" +
-      "</div>" +
-      '<div class="lp-right">' +
-      '<div class="lp-crumb">' + crumbHtml + "</div>" +
-      applyHere +
-      '<div class="lp-sec">' + escape_(T("Subfolders")) + "</div>" +
-      listHtml +
-      "</div></div>" +
-      '<div class="lfoot">' + escape_(T("→ goes into a folder, Backspace climbs back out; Enter chooses it; Tab leaves the term.")) + "</div>";
-  }
-
   function lensSparkHtml(its, peak) {
     if (LENS.kind !== "time" && LENS.kind !== "size") return "";
     const lo = LENS.dragA !== undefined ? Math.min(LENS.dragA, LENS.dragB) : LENS.sel;
@@ -474,7 +331,7 @@
     lensBox.classList.toggle("lens-place", LENS.kind === "place");
     lensBox.classList.toggle("lens-band", LENS.kind === "time" || LENS.kind === "size");
     if (LENS.kind === "place") {
-      lensBox.innerHTML = lensPlaceHtml();
+      placeDraw();
     } else if (LENS.kind === "launch") {
       LENS.sel = Math.max(0, Math.min(LENS.sel, LENS.items.length - 1));
       lensBox.innerHTML = '<div class="lhead"><b>' + escape_(LENS.title) + "</b></div>" +
@@ -520,12 +377,7 @@
     if (!LENS) return;
     const it = LENS.items[i];
     if (!it || it.wait) return;
-    if (it.disk) {
-      SERVICE.answerDisk(it.disk, "index")
-        .then(() => { lensSeen.delete("volumes"); flash(T("The disk is being indexed.")); lensFill(); })
-        .catch((e) => flash(String(e.message || e)));
-      return;
-    }
+    if (it.tile !== undefined) { placeTile(it.tile, Pick.Only, !stay); return; }
     const { a, b } = LENS;
     const v = q.value;
     // A filter the query already holds is gone into, not written twice.
@@ -787,13 +639,7 @@
       setTimeout(render, 120);
       return;
     }
-    const pdisk = e.target.closest("[data-pdisk]");
-    if (pdisk) {
-      SERVICE.answerDisk(pdisk.dataset.pdisk, "index")
-        .then(() => { lensSeen.delete("volumes"); flash(T("The disk is being indexed.")); lensFill(); })
-        .catch((err) => flash(String(err.message || err)));
-      return;
-    }
+    if (LENS.kind === "place" && placeMouse(e)) return;
     const ppick = e.target.closest("[data-ppick]");
     if (ppick) {
       const savedA = LENS.a, savedB = LENS.b, savedFld = LENS.term.field || "under", savedNeg = neg(LENS.term);
@@ -809,18 +655,6 @@
           lensClose();
         })
         .catch((err) => flash(String(err.message || err)));
-      return;
-    }
-    const pinc = e.target.closest("[data-pinc]");
-    if (pinc) {
-      const fld = LENS.term.field || "under";
-      lensWriteRaw(fld + ":" + quoteIf(homeForm(pinc.dataset.pinc)), false);
-      return;
-    }
-    const pexc = e.target.closest("[data-pexc]");
-    if (pexc) {
-      const fld = LENS.term.field || "under";
-      lensWriteRaw("!" + fld + ":" + quoteIf(homeForm(pexc.dataset.pexc)), false);
       return;
     }
     const pchoose = e.target.closest("[data-pchoose]");
@@ -887,6 +721,7 @@
     if (!LENS || lensBox.hidden) return;
     const n = LENS.items.length;
     const step = (d) => {
+      placeSelAuto = false;
       let s = LENS.sel;
       for (let k = 0; k < n; k++) { s = (s + d + n) % n; if (!LENS.items[s].wait) break; }
       LENS.sel = s;

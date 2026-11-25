@@ -430,6 +430,7 @@
       .then((r) => {
         DISK_LIST = r.disks || [];
         FOLDER_LIST = r.folders || null;
+        placeHeard(DISK_LIST, null);
         if (!settingsBox.hidden) drawFolders();
         drawAsk();
         if (!disksPanel.hidden) drawDisks();

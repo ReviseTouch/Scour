@@ -878,8 +878,11 @@ function placeModel() {
   vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
   vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
+  vm.runInContext(section('  const tileRoots = ', '\n  /* Each tile: held'), c);
+  vm.runInContext(section('  function placeAnchor(', '\n  /* A tile clicked'), c);
+  vm.runInContext(section('  function placeRest(', '\n  /* Each disk'), c);
   return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeRuns, placeRunOf,
-    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, STRIP_FLOOR, DISK_KINDS })`, c);
+    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, placeAnchor, placeRest, STRIP_FLOOR, DISK_KINDS })`, c);
 }
 
 test('the place group: a disk in, a second beside it, one out, none left (lens/group_tests.rs)', () => {
@@ -1093,3 +1096,24 @@ test('the strip shares by files with a floor, and evenly before a count (disks/t
   assert.ok(Math.abs(many[0].share - (1 - 9 * M.STRIP_FLOOR)) < 1e-9);
 });
 
+// Page only: where the lens stays after a click, and what the scope chip says.
+test('after a click the lens stays on the first term of the place group', () => {
+  const M = placeModel();
+  const lensOn = (text, a) => ({ ...M.placeTerms(text).find((t) => t.start === a), a, raw: text.slice(a, M.placeTerms(text).find((t) => t.start === a).end) });
+  const old = lensOn('rapor under:', 6);
+  assert.deepEqual(J(M.placeAnchor('rapor under:/mnt/depo|under:/', 29, old)), ['rapor under:/mnt/depo|under:/', 21]);
+  // None left: an empty `under:` where the group was, so the panel stays open.
+  assert.deepEqual(J(M.placeAnchor('rapor ext:pdf', 6, lensOn('rapor under:/a ext:pdf', 6))), ['rapor under: ext:pdf', 12]);
+  assert.deepEqual(J(M.placeAnchor('rapor', 5, lensOn('rapor under:/a', 6))), ['rapor under:', 12]);
+  // Open on an exclusion: it stays there, wherever the group went.
+  const ex = lensOn('!under:/x rapor', 0);
+  assert.deepEqual(J(M.placeAnchor('!under:/x rapor under:/a', 24, ex)), ['!under:/x rapor under:/a', 9]);
+});
+
+test('the folder list is weighed by the query less its places, and no stray bar', () => {
+  const M = placeModel();
+  assert.equal(M.placeRest('rapor under:~/Projeler|under:~/Belgeler ext:pdf'), 'rapor ext:pdf');
+  assert.equal(M.placeRest('rapor|fatura under:'), 'rapor|fatura');
+  assert.equal(M.placeRest('rapor !under:/x under:/a|under:/b'), 'rapor');
+  assert.equal(M.placeRest('under:/a|parent:/b rapor|fatura dm:7d'), 'rapor|fatura dm:7d');
+});

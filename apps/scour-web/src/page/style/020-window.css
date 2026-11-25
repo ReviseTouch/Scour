@@ -478,7 +478,6 @@
   .lp-item:hover, .lp-item.active { background: var(--line-soft); color: var(--ink); }
   .lp-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lp-item .sub { font: 500 10.5px var(--mono); color: var(--ink-3); flex: none; }
-  .lp-item .ask-tag { font: 600 10.5px var(--sans); color: var(--q-key); border: 1px solid var(--cap-ring); border-radius: 4px; padding: 1px 5px; }
   .lp-pick {
     margin: auto 10px 4px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 6px;
     background: var(--panel); color: var(--ink-2); font: 500 12px/1.2 var(--sans); cursor: pointer; text-align: center;

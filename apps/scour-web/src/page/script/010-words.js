@@ -219,6 +219,8 @@
     },
     status: () => SERVICE.get("status", {}),
     volumes: () => SERVICE.get("volumes", {}),
+    /* What is indexed, by root: which folders of a disk are sources. */
+    sources: () => SERVICE.get("sources", {}),
     /* Walk a disk's or a folder's root again, now. */
     rescan: async (path) => {
       const r = await fetch(`/api/rescan?${new URLSearchParams({ path, t: TOKEN })}`, {
