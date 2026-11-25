@@ -157,8 +157,9 @@ fn tile(d: &DiskIn, all: &[DiskIn], sources: &[SourceIn], files: Option<u64>) ->
         fs: d.fs.to_string(),
         root: d.roots.first().map_or("", |r| trim(r)).to_string(),
         size: d.size,
-        roots,
-        whole,
+        // Never empty for an indexed disk: a click must have a term to write.
+        whole: whole || (indexed && roots.is_empty()),
+        roots: counted,
         shown,
         files: count.as_ref().and(files),
         count,
