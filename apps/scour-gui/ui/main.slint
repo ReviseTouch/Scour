@@ -4720,16 +4720,44 @@ export component MainWindow inherits Window {
                             padding-left: 8px;
                             VerticalLayout {
                                 alignment: center;
-                                TextTool {
-                                    height: 20px;
-                                    label: root.word-calendar;
-                                    on: root.cal-open;
-                                    clicked => {
-                                        root.cal-open = !root.cal-open;
-                                        root.cal-from = -1;
-                                        root.cal-to = -1;
-                                        if (root.cal-open) {
-                                            root.cal-opened();
+                                // Said plainly: a picture and the accent, so a
+                                // calendar is seen to be there.
+                                cal-button := Rectangle {
+                                    height: 26px;
+                                    width: cal-row.preferred-width + 20px;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: Theme.cap-ring;
+                                    background: root.cal-open ? Theme.cap-ring : cal-touch.has-hover ? Theme.hover : Theme.cap;
+                                    cal-row := HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 6px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Image {
+                                                width: 14px;
+                                                height: 14px;
+                                                source: @image-url("icons/tools/lens-time.svg");
+                                                colorize: Theme.q-key;
+                                            }
+                                        }
+                                        Text {
+                                            text: root.word-calendar;
+                                            color: Theme.q-key;
+                                            font-size: 12.5px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    cal-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.cal-open = !root.cal-open;
+                                            root.cal-from = -1;
+                                            root.cal-to = -1;
+                                            if (root.cal-open) {
+                                                root.cal-opened();
+                                            }
                                         }
                                     }
                                 }
