@@ -141,10 +141,7 @@ impl Lenses {
             self.close();
             return Vec::new();
         };
-        // `empty:` names no field the model knows; it is the size panel's.
-        let Some(kind) =
-            lens::lens_of(q, &t).or_else(|| lens::is_empty_term(q, &t).then_some(Lens::Size))
-        else {
+        let Some(kind) = lens::lens_of(q, &t) else {
             self.close();
             return Vec::new();
         };

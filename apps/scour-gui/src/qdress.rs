@@ -49,11 +49,10 @@ fn head_hint(cat: &Catalogue, field: &str) -> String {
 fn friendly(cat: &Catalogue, field: &str, raw: &str) -> Option<String> {
     match field {
         "dm" => crate::qtime::words(raw, cat),
-        "size" => {
-            let text = format!("size:{raw}");
+        "size" | "empty" => {
+            let text = format!("{field}:{raw}");
             let t = lens::terms(&text).into_iter().next()?;
-            let i = lens::size_preset_of(&text, &t)?;
-            Some(cat.get(lens::SIZE_PRESETS[i].label).into_owned())
+            Some(cat.get(lens::size_said(&text, &t)?).into_owned())
         }
         "kind" if lens::KINDS.contains(&raw) => scour_core::Kind::from_name(raw)
             .and_then(|k| k.first())

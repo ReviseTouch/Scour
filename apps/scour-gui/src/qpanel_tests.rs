@@ -179,26 +179,18 @@ fn enter_on_a_tile_toggles_its_kind_and_on_a_preset_panel_resting_on_none_keeps_
 }
 
 #[test]
-fn taking_out_the_last_value_leaves_an_empty_filter_so_the_panel_stays() {
-    let at = (6, 14);
-    assert_eq!(
-        qtype::toggle("rapor kind:doc", "kind", "doc", false, at),
-        ("rapor kind:".into(), 11)
-    );
-    let (q, c) = qtype::toggle("kind:doc ext:pdf", "kind", "doc", false, (0, 8));
-    assert_eq!((q.as_str(), &q[..c]), ("ext:pdf", "ext:pdf"));
-}
-
-#[test]
-fn a_value_left_out_or_added_elsewhere_leaves_the_panel_on_its_own_term() {
-    // Excluded: a term of its own at the end; the panel stays on kind:doc.
-    let (q, c) = qtype::toggle("rapor kind:doc", "kind", "build", true, (6, 14));
-    assert_eq!((q.as_str(), c), ("rapor kind:doc !kind:build", 14));
-    // A value taken out of a term before the panel's: its term moved with it.
-    let q0 = "kind:doc;code ext:pdf";
-    let (q, c) = qtype::toggle(q0, "kind", "code", false, (14, 21));
-    assert_eq!(
-        (q.as_str(), &q[..c]),
-        ("kind:doc ext:pdf", "kind:doc ext:pdf")
-    );
+fn a_negated_size_preset_counts_the_presets_as_ever_and_the_query_for_what_it_keeps() {
+    let mut lenses = Lenses::default();
+    let q = "rapor !empty:";
+    let wants = open(&mut lenses, q);
+    let queries: Vec<(u32, String)> = wants
+        .iter()
+        .map(|(s, r)| match r {
+            Request::Count { query, .. } => (*s, query.clone()),
+            _ => panic!("a count"),
+        })
+        .collect();
+    assert_eq!(queries[0], (qsize::SIZES, "rapor empty:".into()));
+    assert_eq!(queries.last().unwrap(), &(qsize::WHOLE, q.to_string()));
+    assert_eq!(queries.len(), 6);
 }

@@ -10,8 +10,9 @@ use scour_ui::lens::{self, SIZE_PRESETS};
 use crate::qlens::{Env, Item, Open};
 use crate::qpanel::{self, Want};
 
-/// The first preset's slot; the others follow it.
+/// The first preset's slot; the others follow it. The whole query's count.
 pub const SIZES: u32 = 100;
+pub const WHOLE: u32 = 1;
 
 pub fn fill(o: &mut Open, seen: &HashMap<String, Response>, q: &str) -> Vec<Want> {
     let mut out = Vec::new();
@@ -24,6 +25,12 @@ pub fn fill(o: &mut Open, seen: &HashMap<String, Response>, q: &str) -> Vec<Want
         .enumerate()
         .map(|(i, query)| qpanel::count(seen, SIZES + i as u32, query, &mut out))
         .collect();
+    // A negated preset or a term of no preset: what the whole query keeps.
+    let chosen = chosen(o, q);
+    let other = chosen.is_none() && !o.term.value.trim().is_empty();
+    if other || (chosen.is_some() && o.term.not) {
+        o.got.whole = qpanel::count(seen, WHOLE, q, &mut out);
+    }
     out
 }
 

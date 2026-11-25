@@ -1748,6 +1748,12 @@ export component MainWindow inherits Window {
                             if (e.text == Key.UpArrow && !e.modifiers.alt) { root.lens-step(-1); return accept; }
                             // → goes into a folder, or adds one more value to a list.
                             if (e.text == Key.RightArrow && root.lens-right()) { return accept; }
+                            // Alt+Enter leaves the focused tile or preset out, as Alt+click does.
+                            if (e.text == Key.Return && e.modifiers.alt
+                                    && (root.lens-kind == "type" || root.lens-kind == "size" || root.lens-kind == "time")) {
+                                root.lens-press(root.lens-sel, true);
+                                return accept;
+                            }
                             if (e.text == Key.Return) { root.lens-pick(root.lens-sel, false); return accept; }
                             if (e.text == Key.Escape) { root.lens-escape(); return accept; }
                         }

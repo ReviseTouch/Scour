@@ -3,7 +3,7 @@
 
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
-use scour_ui::lens::{self, Lens, MODES, SCALES, SIZE_PRESETS};
+use scour_ui::lens::{self, Lens, MODES, SCALES};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::qlens::Open;
@@ -133,7 +133,7 @@ fn calendar(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     w.set_cal_from(a as i32);
     w.set_cal_to(b as i32);
     if fresh && !w.get_cal_open() {
-        let (today, _, _) = scour_ui::calendar::today(qtime::now());
+        let today = qtime::now().div_euclid(86_400);
         let months = |d: i64| {
             let (y, m, _) = lens::Date {
                 day: d,
@@ -156,20 +156,25 @@ fn show_size(w: &MainWindow, o: &Open, cat: &Catalogue, text: &str) {
         .enumerate()
         .map(|(i, it)| chip(it.label.clone(), it.n, chosen == Some(i), o.term.not))
         .collect();
+    // A preset counts itself; what any other term keeps is the query's count.
+    let words = match lens::size_said(text, &o.term) {
+        Some(m) => cat.get(m).into_owned(),
+        None => text[o.a..o.b.min(text.len())]
+            .trim_start_matches('!')
+            .to_string(),
+    };
+    let kept = match chosen {
+        Some(i) if !o.term.not => o.got.sizes.get(i).copied().flatten(),
+        _ => o.got.whole,
+    };
+    let not = if o.term.not { "!" } else { "" };
     let said = match chosen {
-        Some(i) => {
-            let words = cat.get(SIZE_PRESETS[i].label).into_owned();
-            let n = o.got.sizes.get(i).copied().flatten();
-            let n = n.filter(|_| !o.term.not).map(|c| items(cat, Some(c)));
-            let not = if o.term.not { "!" } else { "" };
-            [format!("{not}{words}"), n.unwrap_or_default()]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ")
-        }
         None if o.term.value.trim().is_empty() => String::new(),
-        None => text[o.a..o.b.min(text.len())].to_string(),
+        _ => [format!("{not}{words}"), items(cat, kept)]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · "),
     };
     w.set_lens_size(SizeLook {
         presets: model(presets),
@@ -181,6 +186,20 @@ fn show_size(w: &MainWindow, o: &Open, cat: &Catalogue, text: &str) {
 /// How wide a chip is drawn, near enough to share two lines between them.
 fn chip_w(c: &CountChip) -> f32 {
     c.label.chars().count() as f32 * 7.0 + c.n.chars().count() as f32 * 6.3 + 22.0
+}
+
+/// "Extension", or the extensions in the kinds chosen, named.
+fn ext_title(cat: &Catalogue, text: &str) -> String {
+    let on = lens::picked(text, "kind").on;
+    if on.is_empty() {
+        return cat.get("Extension").into_owned();
+    }
+    let names: Vec<String> = on
+        .iter()
+        .map(|k| lens::kind_label(k).map_or_else(|| k.clone(), |m| cat.get(m).into_owned()))
+        .collect();
+    cat.get("Extensions in {kinds}")
+        .replace("{kinds}", &names.join(", "))
 }
 
 fn show_type(w: &MainWindow, o: &Open, cat: &Catalogue, text: &str) {
@@ -222,7 +241,7 @@ fn show_type(w: &MainWindow, o: &Open, cat: &Catalogue, text: &str) {
         tiles: model(tiles),
         exts: model(one),
         exts_2: model(two),
-        ext_title: cat.get("Extension").as_ref().into(),
+        ext_title: ext_title(cat, text).into(),
         total: items(cat, o.got.kinds.as_ref().map(|f| f.total).and_then(exact)).into(),
     });
 }

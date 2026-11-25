@@ -8,17 +8,23 @@ use std::rc::Rc;
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_ui::calendar;
-use scour_ui::lens::{self, Lens, MODES, SCALES, Selected};
+use scour_ui::lens::{self, Lens, MODES, SCALES};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::link::Link;
 use crate::qwire::{self, Lensing, write};
-use crate::{MainWindow, State, qtime, qtype};
+use crate::{MainWindow, State, qtime};
 
 /// The calendar's two months: the one `back` months before today's, and the
-/// one before that, in the language of the window.
+/// one before that, in the language of the window. Its days are UTC days,
+/// as the query reads a date: today is today in UTC.
 pub fn show_calendar(w: &MainWindow, back: i64, cat: &Catalogue) {
-    let (today, y, m) = calendar::today(qtime::now());
+    let today = qtime::now().div_euclid(86_400);
+    let (y, m, _) = lens::Date {
+        day: today,
+        form: lens::DateForm::Day,
+    }
+    .ymd();
     let months: Vec<crate::CalMonth> = [-1 - back, -back]
         .into_iter()
         .map(|delta| {
@@ -42,17 +48,17 @@ pub fn show_calendar(w: &MainWindow, back: i64, cat: &Catalogue) {
     w.set_cal_months(ModelRc::new(VecModel::from(months)));
 }
 
-/// Write `term` in place of the lens's own and keep the panel open on it.
+/// Write `term` in place of the lens's own and keep the panel open on it:
+/// nothing written leaves an empty filter of the panel's field.
 fn put(w: &MainWindow, state: &Rc<RefCell<State>>, term: &str, redraw: &impl Fn(Lensing)) {
     let text = w.get_query().to_string();
-    let at = state.borrow().qb.lenses.open.as_ref().map(|o| (o.a, o.b));
-    let Some((a, b)) = at.filter(|&(_, b)| b <= text.len()) else {
-        return;
-    };
-    let q = format!("{}{term}{}", &text[..a], &text[b..]);
-    state.borrow_mut().qb.lenses.hold = true;
-    write(w, state, q, a + term.len());
-    redraw(Lensing::Asked);
+    let settled = state.borrow().qb.lenses.open.as_ref().and_then(|o| {
+        let field = if o.kind == Lens::Time { "dm" } else { "size" };
+        (o.b <= text.len()).then(|| lens::choice_settle(&text, &o.term, term, field))
+    });
+    if let Some(next) = settled {
+        rewrite(w, state, next, redraw);
+    }
 }
 
 /// Write a whole new query, the caret on the panel's term, the panel open.
@@ -77,14 +83,7 @@ pub fn value(
     redraw: &impl Fn(Lensing),
 ) {
     let text = w.get_query().to_string();
-    let at = state
-        .borrow()
-        .qb
-        .lenses
-        .open
-        .as_ref()
-        .map_or((0, 0), |o| (o.a, o.b));
-    let (q, caret) = qtype::toggle(&text, field, v, false, at);
+    let (q, caret) = lens::value_settle(&text, field, v, false);
     if keep {
         rewrite(w, state, (q, caret), redraw);
     } else {
@@ -109,14 +108,14 @@ fn press(
             return;
         };
         let Some(it) = o.items.get(i) else { return };
-        (o.kind, it.term.clone(), it.value.clone(), (o.a, o.b))
+        (o.kind, it.term.clone(), it.value.clone())
     };
     match it {
-        (Lens::Kind | Lens::Ext, _, Some((field, value)), at) => {
+        (Lens::Kind | Lens::Ext, _, Some((field, value))) => {
             rewrite(
                 w,
                 state,
-                qtype::toggle(&text, field, &value, alt, at),
+                lens::value_settle(&text, field, &value, alt),
                 redraw,
             );
         }
@@ -176,14 +175,7 @@ fn mode(w: &MainWindow, state: &Rc<RefCell<State>>, i: usize, redraw: &impl Fn(L
         let look = lenses.look;
         lenses.open.as_ref().and_then(|o| {
             let s = qtime::shown(&o.term.value, &look)?;
-            let t = lens::time_term(
-                &o.term,
-                Selected {
-                    mode: look.mode,
-                    ..s
-                },
-            );
-            Some(if t.is_empty() { "dm:".to_string() } else { t })
+            lens::time_remode(&o.term, s, look.mode).map(|(_, t)| t)
         })
     };
     match term {

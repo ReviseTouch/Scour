@@ -13,7 +13,7 @@ fn a_term_opens_the_panel_on_its_own_scale_and_mode() {
 }
 
 #[test]
-fn a_run_of_bars_writes_relative_and_a_before_reaching_now_leaves_the_filter_empty() {
+fn a_run_of_bars_writes_relative_and_a_before_reaching_now_writes_nothing() {
     let day = Look::default();
     assert_eq!(bars_term(&t("dm:"), &day, 29, 23), "dm:7d");
     assert_eq!(bars_term(&t("!dm:7d"), &day, 0, 22), "!dm:30d..7d");
@@ -21,7 +21,7 @@ fn a_run_of_bars_writes_relative_and_a_before_reaching_now_leaves_the_filter_emp
         mode: Mode::Before,
         ..day
     };
-    assert_eq!(bars_term(&t("dm:7d"), &before, 3, 29), "dm:");
+    assert_eq!(bars_term(&t("dm:7d"), &before, 3, 29), "");
     let month = Look {
         scale: Scale::Month,
         ..day
@@ -48,12 +48,14 @@ fn the_arrows_move_the_end_on_their_side_and_shift_the_other() {
     );
     // Before has one end, the newer.
     assert_eq!(step("<7d", &day, -1, false), Some((0, 21)));
-    // A term not on the scale shown moves nothing.
+    // A term not lined up with the scale shown moves nothing.
     let week = Look {
         scale: Scale::Week,
         ..day
     };
-    assert_eq!(step("7d", &week, -1, false), None);
+    // dm:7d is one bar of the week scale; dm:3d lines up with none.
+    assert_eq!(step("7d", &week, -1, false), Some((24, 25)));
+    assert_eq!(step("3d", &week, -1, false), None);
     assert_eq!(step("2026-11-03", &day, -1, false), None);
 }
 

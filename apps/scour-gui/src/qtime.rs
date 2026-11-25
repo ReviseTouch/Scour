@@ -89,11 +89,9 @@ pub fn bars(o: &Open, look: &Look) -> Option<Histogram> {
     Some(lens::histogram(look.scale, qpanel::nth(f, 1), now()))
 }
 
-/// The run of bars the term is on the scale shown, if it is one.
+/// The run of bars the term is on the scale shown, where it lines up.
 pub fn shown(value: &str, look: &Look) -> Option<Selected> {
-    lens::time_pick(value)?
-        .selected
-        .filter(|s| s.scale == look.scale)
+    lens::time_bars_on(value, look.scale)
 }
 
 /// What the term keeps, when the presets or the bars say it.
@@ -144,8 +142,8 @@ pub fn items(o: &mut Open, env: &Env) -> Vec<Item> {
         .collect()
 }
 
-/// What bars `a..=b` write in place of `t`. A Before reaching now holds
-/// everything: the filter is left empty, still open.
+/// What bars `a..=b` write in place of `t`; nothing for a Before reaching
+/// now, which holds everything.
 pub fn bars_term(t: &Term, look: &Look, a: usize, b: usize) -> String {
     let s = Selected {
         scale: look.scale,
@@ -153,10 +151,7 @@ pub fn bars_term(t: &Term, look: &Look, a: usize, b: usize) -> String {
         first: a.min(b),
         last: a.max(b),
     };
-    match lens::time_term(t, s) {
-        e if e.is_empty() => "dm:".into(),
-        e => e,
-    }
+    lens::time_term(t, s)
 }
 
 /// An arrow on the bars: ← and → move the end on their side outward,
@@ -236,7 +231,8 @@ pub fn days(value: &str) -> Option<(i64, i64)> {
             _ => d.day,
         }
     };
-    match lens::time_said(value, now, local_offset(now))? {
+    // Days as the query reads dates: UTC days.
+    match lens::time_said(value, now, 0)? {
         TimeSaid::Date(d) => Some((d.day, end(d))),
         TimeSaid::Range(a, b) => Some((a.day, b.day)),
         _ => None,
