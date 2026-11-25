@@ -449,7 +449,18 @@ impl<'a> DirTable<'a> {
     /// and `/` is 0x2F. The descendants are contiguous as
     /// `[prefix + "/", prefix + "0")`; the directory's own row sits earlier.
     pub fn subtree(&self, prefix: &str) -> DirScope {
-        let prefix = prefix.trim_end_matches('/');
+        let trimmed = prefix.trim_end_matches('/');
+        if trimmed.is_empty() && !prefix.is_empty() {
+            // `/` sorts first of every `/…` path, so its descendants follow it.
+            let own = self.exact("/");
+            let from = self.lower_bound("/") + u32::from(own.is_some());
+            let to = self.lower_bound("0");
+            return DirScope {
+                own,
+                below: from..to.max(from),
+            };
+        }
+        let prefix = trimmed;
         let own = self.exact(prefix);
         let below = {
             let from = self.lower_bound(&format!("{prefix}/"));
@@ -459,9 +470,14 @@ impl<'a> DirTable<'a> {
         DirScope { own, below }
     }
 
-    /// The number of exactly this path, if the table holds it.
+    /// The number of exactly this path, if the table holds it. `/` stays `/`.
     pub fn exact(&self, path: &str) -> Option<u32> {
-        let path = path.trim_end_matches('/');
+        let trimmed = path.trim_end_matches('/');
+        let path = if trimmed.is_empty() && !path.is_empty() {
+            "/"
+        } else {
+            trimmed
+        };
         let at = self.lower_bound(path);
         (self.get(at).as_deref() == Some(path)).then_some(at)
     }

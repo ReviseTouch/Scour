@@ -170,7 +170,7 @@ fn a_report_kept_per_child_is_the_report_rolled_up() {
                 (root.bytes, root.disk, root.files, root.age),
                 "{at}"
             );
-            if scope.is_empty() {
+            if path.is_empty() {
                 // Everything lies under `/`, the one top this index has.
                 assert_eq!(got.children.len(), 1, "{at}");
                 assert_eq!(got.children[0].path, "/", "{at}");
@@ -201,4 +201,173 @@ fn the_bands_are_the_six_they_claim_to_be() {
     assert_eq!(band(400 * DAY), 5);
     // A file with a timestamp in the future is not older than everything.
     assert_eq!(band(-1), 0);
+}
+
+/// An index of these rows, each a file unless its path has no dot, in two
+/// segments so a directory is numbered twice.
+fn index_of(
+    paths: &[&str],
+) -> (
+    tempfile::TempDir,
+    crate::NativeIndex,
+    Vec<scour_core::Entry>,
+) {
+    use scour_core::{Change, Entry, EntryId, Index, Meta, SourceId};
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = crate::NativeIndex::open_or_create(tmp.path()).expect("create");
+    let entries: Vec<Entry> = paths
+        .iter()
+        .map(|p| Entry {
+            id: EntryId::path_hash(SourceId(0), p),
+            path: (*p).to_owned(),
+            is_dir: !p.contains('.'),
+            meta: Meta {
+                size: 100,
+                disk: 4_096,
+                ..Meta::UNKNOWN
+            },
+        })
+        .collect();
+    let (a, b) = entries.split_at(entries.len() / 2);
+    for half in [a, b] {
+        index
+            .apply(&mut half.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    (tmp, index, entries)
+}
+
+fn usage_of(index: &crate::NativeIndex, path: &str) -> UsageResponse {
+    use scour_core::Index;
+    index
+        .usage(&UsageRequest {
+            path: path.to_owned(),
+            top: 50,
+            query: scour_query::parse(""),
+        })
+        .expect("usage")
+}
+
+fn children_of(r: &UsageResponse) -> Vec<(String, u64)> {
+    let mut kids: Vec<(String, u64)> = r
+        .children
+        .iter()
+        .map(|c| (c.path.clone(), c.files))
+        .collect();
+    kids.sort();
+    kids
+}
+
+/// `parent:` as the index answers it and as a brute-force reading does.
+fn parent_both_ways(
+    index: &crate::NativeIndex,
+    entries: &[scour_core::Entry],
+    dir: &str,
+) -> Vec<String> {
+    use scour_core::{Index, SortKey};
+    let ast = scour_query::parse(&format!("parent:{dir}"));
+    let mut got: Vec<String> = index
+        .search(&scour_core::SearchRequest {
+            query: ast.clone(),
+            sort: SortKey::Path,
+            page: scour_core::Page::new(0, 1_000),
+            ..Default::default()
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    got.sort();
+    let mut want: Vec<String> = scour_mock::brute_force(entries, &ast, SortKey::Path, false, 1_000)
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    want.sort();
+    assert_eq!(got, want, "parent:{dir}");
+    got
+}
+
+#[test]
+fn the_root_weighs_its_folders_and_is_never_its_own_child() {
+    let (_tmp, index, entries) = index_of(&[
+        "/home/u",
+        "/home/u/a.txt",
+        "/home/u/d",
+        "/home/u/d/b.txt",
+        "/usr",
+        "/usr/bin",
+        "/usr/bin/ls.bin",
+        "/mnt/data",
+        "/mnt/data/x.iso",
+    ]);
+    for path in ["/", "//"] {
+        let r = usage_of(&index, path);
+        assert_eq!(r.root.path, "/", "{path}");
+        assert_eq!(r.root.files, 4, "{path}");
+        assert_eq!(
+            children_of(&r),
+            vec![("/home".into(), 2), ("/mnt".into(), 1), ("/usr".into(), 1)],
+            "{path}"
+        );
+        assert_eq!(r.child_count, 3, "{path}");
+    }
+    // Every source at once is still its own question.
+    let all = usage_of(&index, "");
+    assert_eq!(all.root.path, "");
+    assert_eq!(all.root.files, 4);
+    assert_eq!(parent_both_ways(&index, &entries, "/"), vec!["/usr"]);
+}
+
+#[test]
+fn a_source_at_the_root_answers_for_the_root() {
+    let (_tmp, index, entries) = index_of(&["/", "/etc", "/etc/f.conf", "/g.txt", "/etc/x/y.txt"]);
+    let r = usage_of(&index, "/");
+    assert_eq!(r.root.path, "/");
+    assert_eq!(r.root.files, 3);
+    assert_eq!(children_of(&r), vec![("/etc".into(), 2)]);
+    assert_eq!(
+        parent_both_ways(&index, &entries, "/"),
+        vec!["/", "/etc", "/g.txt"]
+    );
+}
+
+#[test]
+fn a_folder_below_the_root_answers_as_it_did() {
+    let (_tmp, index, entries) = index_of(&[
+        "/home/u",
+        "/home/u/a.txt",
+        "/home/u/d",
+        "/home/u/d/b.txt",
+        "/home/u/d-1",
+        "/home/u/d-1/c.txt",
+        "C:/a.txt",
+        "C:/b",
+        "C:/b/c.txt",
+    ]);
+    for path in ["/home/u", "/home/u/"] {
+        let r = usage_of(&index, path);
+        assert_eq!(r.root.path, "/home/u", "{path}");
+        assert_eq!(r.root.files, 3, "{path}");
+        assert_eq!(
+            children_of(&r),
+            vec![("/home/u/d".into(), 1), ("/home/u/d-1".into(), 1)],
+            "{path}"
+        );
+    }
+    let home = usage_of(&index, "/home");
+    assert_eq!(children_of(&home), vec![("/home/u".into(), 3)]);
+    let c = usage_of(&index, "C:/");
+    assert_eq!(c.root.path, "C:");
+    assert_eq!(c.root.files, 2);
+    assert_eq!(children_of(&c), vec![("C:/b".into(), 1)]);
+    assert_eq!(
+        parent_both_ways(&index, &entries, "/home/u"),
+        vec!["/home/u/a.txt", "/home/u/d", "/home/u/d-1"]
+    );
+    assert_eq!(
+        parent_both_ways(&index, &entries, "C:/"),
+        vec!["C:/a.txt", "C:/b"]
+    );
 }

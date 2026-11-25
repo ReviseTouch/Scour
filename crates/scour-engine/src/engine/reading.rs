@@ -83,7 +83,7 @@ impl Engine {
         }
     }
 
-    fn roots(&self) -> Vec<String> {
+    pub(super) fn roots(&self) -> Vec<String> {
         self.shared
             .sources
             .iter()

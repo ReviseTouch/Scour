@@ -2493,3 +2493,138 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
     let (n, csv) = export("content:iğne content:gamma");
     assert_eq!((n, csv.lines().count()), (0, 1), "{csv}");
 }
+
+/// A walked engine over one source with these roots and rows.
+fn rooted(roots: &[&str], paths: &[&str]) -> Fixture {
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let entries: Vec<Entry> = paths.iter().map(|p| row(p)).collect();
+    let n = entries.len() as u64;
+    let source = MemSource::many_roots(entries, roots.iter().map(|s| (*s).to_owned()).collect());
+    let f = Fixture {
+        engine: Engine::new(
+            vec![source.clone()],
+            index,
+            EngineOptions {
+                commit_interval: Duration::from_millis(50),
+                ..Default::default()
+            },
+        ),
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("walk");
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries == n
+    });
+    assert_eq!(f.engine.status().entries, n);
+    f
+}
+
+fn names(node: &scour_core::TreeNode) -> Vec<(&str, u64)> {
+    node.nodes
+        .iter()
+        .map(|n| (n.name.as_str(), n.children))
+        .collect()
+}
+
+/// `/` holds no row when no source is rooted there; it lists the folders that
+/// lead down to the roots that hold rows, each counted like any other folder.
+#[test]
+fn the_root_lists_the_folders_above_every_source() {
+    let f = rooted(
+        &["/home/u", "/usr", "/mnt/data", "/opt/empty/x"],
+        &[
+            "/home/u",
+            "/home/u/a.txt",
+            "/home/u/d",
+            "/home/u/d/b.txt",
+            "/usr",
+            "/usr/bin",
+            "/usr/lib",
+            "/usr/bin/ls.bin",
+            "/mnt/data",
+            "/mnt/data/x.iso",
+        ],
+    );
+    for path in ["/", "//"] {
+        let root = f.engine.tree(path, 1, 50).expect("tree");
+        assert_eq!(root.path, "/");
+        assert_eq!(root.name, "/");
+        // `/opt` leads to a root with nothing in it, so it is not there.
+        assert_eq!(
+            names(&root),
+            vec![("home", 1), ("mnt", 1), ("usr", 2)],
+            "{path}"
+        );
+        assert_eq!(root.children, 3);
+        assert!(!root.truncated);
+    }
+    let deep = f.engine.tree("/", 2, 50).expect("tree");
+    assert_eq!(names(&deep.nodes[0]), vec![("u", 2)]);
+    assert_eq!(names(&deep.nodes[1]), vec![("data", 1)]);
+    assert_eq!(deep.nodes[1].nodes[0].path, "/mnt/data");
+
+    let bounded = f.engine.tree("/", 1, 2).expect("tree");
+    assert_eq!(names(&bounded), vec![("home", 1), ("mnt", 1)]);
+    assert_eq!(bounded.children, 3);
+    assert!(bounded.truncated);
+
+    let counted = f.engine.tree("/", 0, 50).expect("tree");
+    assert_eq!(counted.children, 3);
+    assert!(counted.nodes.is_empty());
+
+    let usage = f.engine.usage("/", 50, "").expect("usage");
+    let mut kids: Vec<(&str, u64)> = usage
+        .children
+        .iter()
+        .map(|c| (c.path.as_str(), c.files))
+        .collect();
+    kids.sort();
+    assert_eq!(kids, vec![("/home", 2), ("/mnt", 1), ("/usr", 1)]);
+    assert_eq!(usage.root.path, "/");
+}
+
+/// A source rooted at `/` holds a row `/` whose parent is itself; it is the
+/// listing, not one of its children.
+#[test]
+fn a_source_at_the_root_is_not_its_own_child() {
+    let f = rooted(&["/"], &["/", "/etc", "/etc/f.conf", "/g.txt"]);
+    let root = f.engine.tree("/", 1, 50).expect("tree");
+    assert_eq!(root.path, "/");
+    assert_eq!(root.name, "/");
+    assert_eq!(names(&root), vec![("etc", 1), ("g.txt", 0)]);
+    assert_eq!(root.children, 2);
+    assert!(!root.truncated);
+    assert_eq!(f.engine.tree("/", 0, 50).expect("tree").children, 2);
+    let usage = f.engine.usage("/", 50, "").expect("usage");
+    assert_eq!(usage.children.len(), 1);
+    assert_eq!(usage.children[0].path, "/etc");
+}
+
+/// Below the sources' tops a listing is the rows whose parent it is, as ever.
+#[test]
+fn a_folder_inside_a_source_lists_as_it_did() {
+    let f = rooted(
+        &["/home/u", "/mnt/data"],
+        &[
+            "/home/u",
+            "/home/u/a.txt",
+            "/home/u/d",
+            "/home/u/d/b.txt",
+            "/home/u/d-1",
+            "/mnt/data",
+            "/mnt/data/x.iso",
+        ],
+    );
+    for path in ["/home/u", "/home/u/"] {
+        let node = f.engine.tree(path, 1, 50).expect("tree");
+        assert_eq!(node.path, "/home/u");
+        assert_eq!(names(&node), vec![("d", 1), ("d-1", 0), ("a.txt", 0)]);
+        assert_eq!(node.children, 3);
+    }
+    let home = f.engine.tree("/home", 1, 50).expect("tree");
+    assert_eq!(names(&home), vec![("u", 3)]);
+    let mnt = f.engine.tree("/mnt", 1, 50).expect("tree");
+    assert_eq!(names(&mnt), vec![("data", 1)]);
+}

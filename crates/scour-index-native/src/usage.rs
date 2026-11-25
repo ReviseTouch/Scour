@@ -239,7 +239,7 @@ impl<'a> Children<'a> {
     /// `None` for a request this cannot answer: one without a scope, whose
     /// root is every source's and whose children are the maximal directories.
     pub fn new(req: &'a UsageRequest, now: i64) -> Option<Children<'a>> {
-        let scope = req.path.trim_end_matches('/').to_owned();
+        let scope = scope_of(&req.path);
         (!scope.is_empty()).then(|| Children {
             req,
             now,
@@ -266,7 +266,7 @@ impl<'a> Children<'a> {
         // so the last child is compared before the map is asked.
         let mut names: Vec<Box<[u8]>> = Vec::new();
         let mut number: HashMap<Box<[u8]>, u32> = HashMap::new();
-        let head = self.scope.len() + 1;
+        let head = self.scope.trim_end_matches('/').len() + 1;
         let below = within.below.start as usize..within.below.end as usize;
         seg.dirs.each_bytes_in(below, |id, path| {
             let Some(rest) = path.get(head..) else {
@@ -348,7 +348,10 @@ impl<'a> Children<'a> {
         let mut children: Vec<DirUsage> = self
             .kids
             .iter()
-            .map(|(name, own)| usage(format!("{}/{name}", self.scope), own))
+            .map(|(name, own)| {
+                let base = self.scope.trim_end_matches('/');
+                usage(format!("{base}/{name}"), own)
+            })
             .collect();
         let child_count = children.len() as u32;
         children.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
@@ -377,14 +380,11 @@ pub struct Everything<'a> {
 
 impl<'a> Everything<'a> {
     pub fn new(req: &'a UsageRequest, now: i64) -> Option<Everything<'a>> {
-        req.path
-            .trim_end_matches('/')
-            .is_empty()
-            .then(|| Everything {
-                req,
-                now,
-                tops: HashMap::new(),
-            })
+        scope_of(&req.path).is_empty().then(|| Everything {
+            req,
+            now,
+            tops: HashMap::new(),
+        })
     }
 
     /// `false` for a segment the table cannot be read through, which the caller
@@ -506,6 +506,15 @@ fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], n
     }
     if let Some(own) = cost(seg, row, now) {
         per_dir[d].add(&own);
+    }
+}
+
+/// The directory a request names, without a trailing slash; `/` stays `/`, the
+/// filesystem's root, and only the empty path means every source at once.
+fn scope_of(path: &str) -> String {
+    match path.trim_end_matches('/') {
+        "" if !path.is_empty() => "/".to_owned(),
+        trimmed => trimmed.to_owned(),
     }
 }
 

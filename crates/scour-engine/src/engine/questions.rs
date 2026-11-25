@@ -149,6 +149,7 @@ impl Engine {
         self.shared.reading();
         crate::tree::build(
             self.shared.index.as_ref(),
+            &self.roots(),
             path,
             depth,
             limit.min(self.shared.opts.result_limit),
