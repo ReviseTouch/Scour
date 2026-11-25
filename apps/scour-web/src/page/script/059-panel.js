@@ -103,10 +103,6 @@
     return '<div class="pp-say">' + escape_(said).replace(span, (not ? "<s>" : "") + escape_(words) + (not ? "</s>" : "")) + "</div>";
   }
 
-  /* The keys, as the foot says them: what each does is the panel's own. */
-  const panelKeysHtml = (keys) => '<div class="lfoot pp-keys">' +
-    keys.map(([k, what]) => "<span><kbd>" + escape_(k) + "</kbd> " + escape_(what) + "</span>").join("") + "</div>";
-
   /* The keys while a panel is open; true when one was the panel's. Up and
      down go into it and between its rows, left and right along a row once
      in, Space and Enter press, Alt+Enter leaves out. */

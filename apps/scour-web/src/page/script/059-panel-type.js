@@ -66,7 +66,8 @@
       '<div class="kinds" data-zone="kinds">' + tiles + "</div>" +
       '<div class="lgroup">' + escape_(T("Extension") + (within ? " · " + within : "")) + "</div>" +
       (heard.exts || exts.length ? panelChipsHtml(chips, "exts", ekb, "exts") : '<div class="pp-chips exts" data-zone="exts"><span class="pc wait">…</span></div>') +
-      panelKeysHtml([["Space", T("Add")], ["Alt+Enter", T("Exclude")]]) + "</div>";
+      '<div class="lfoot pp-keys"><span>' + escape_(T("Space or Enter adds or takes one away; Alt+Enter leaves it out")) +
+      "</span><span>" + escape_(T("Alt+click: leave it out")) + "</span></div></div>";
   }
 
   /* A tile or a chip pressed: its value toggled, and the lens kept on a term

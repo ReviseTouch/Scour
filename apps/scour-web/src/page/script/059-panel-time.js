@@ -76,7 +76,8 @@
       escape_(reads ? T("reads files") : T("results it would leave")) + "</span></div>" +
       panelChipsHtml(chips, "presets", pkb) + switches + timeHistHtml(data, run, hkb(0)) +
       timeSayHtml(t, data, run, d) +
-      '<div class="lfoot">' + escape_(T("Or type one: 24h, 2w, 2026-03-01, >2026-06-01")) + "</div></div>";
+      '<div class="lfoot pp-keys"><span>' + escape_(T("← → move the newer end, Shift the older")) + "</span><span>" +
+      escape_(T("Or type one: 24h, 2w, 2026-03-01, >2026-06-01")) + "</span></div></div>";
   }
 
   /* The bars, oldest first, and the dates their ends fall on. */
