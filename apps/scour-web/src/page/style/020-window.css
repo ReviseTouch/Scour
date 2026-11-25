@@ -223,7 +223,7 @@
   .qshadow .r-glob  { color: var(--q-glob); }
   .qshadow .r-not   { color: var(--q-not); font-weight: 700; }
   /* `|` is structure, not exclusion: it says how terms combine. */
-  .qshadow .r-or    { color: var(--q-key); font-weight: 700; }
+  .qshadow .r-or    { color: var(--cap-ring); font-weight: 700; }
 
   /* The whole excluded term (`Span::not`): after the roles, before the warnings. */
   .qshadow .excluded { color: var(--q-not); }
@@ -244,6 +244,8 @@
     color: var(--panel);
     box-shadow: 0 0 0 1px var(--q-not);
   }
+  /* Except a `|`: it joins two terms, a separator in the capsules' ink, never an error. */
+  .qshadow .r-or.caret-touch { background: none; box-shadow: none; color: var(--cap-ring); }
 
   .qfield textarea::placeholder { color: var(--ink-3); font-weight: 500; }
 
@@ -416,7 +418,7 @@
     position: absolute;
     width: 430px;
     max-width: min(720px, calc(100vw - 28px));
-    max-height: min(440px, calc(100vh - 130px));
+    max-height: min(440px, var(--lens-room, calc(100vh - 130px)));
     overflow-y: auto;
     background: var(--panel-2);
     border: 1px solid var(--line);
