@@ -93,12 +93,19 @@ fn expand(token: &str) -> Vec<String> {
     if token.starts_with('"') {
         return vec![token.to_owned()];
     }
-    let (neg, body) = match token.strip_prefix('!') {
-        Some(rest) => ("!", rest),
-        None => ("", token),
+    let (negated, body) = match token.strip_prefix('!') {
+        Some(rest) => (true, rest),
+        None => (false, token),
     };
-    let with =
-        |parts: &[&str]| -> Vec<String> { parts.iter().map(|p| format!("{neg}{p}")).collect() };
+    // Negated as a whole: not (a and b) is `!a|!b`, one group.
+    let with = |parts: &[&str]| -> Vec<String> {
+        if negated {
+            let alts: Vec<String> = parts.iter().map(|p| format!("!{p}")).collect();
+            vec![alts.join("|")]
+        } else {
+            parts.iter().map(|p| (*p).to_owned()).collect()
+        }
+    };
     let Some((field, value)) = split_field(body) else {
         return vec![token.to_owned()];
     };

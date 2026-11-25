@@ -133,6 +133,9 @@ reads the expansion back — nothing happens that cannot be seen.
 its child count is not stored at all, so a folder rule would match every
 folder. Saying less is better than that.
 
+`!` before a shorthand negates the whole of it: `!size:1mb..2mb` is everything
+outside that range, and `!empty:` every folder and every file with something in it.
+
 Absent rather than approximated: `dupe:` and `child:` ask for a grouping this
 index does not do, and the Windows `attrib:` letters name something a
 filesystem here does not have.

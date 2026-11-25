@@ -317,7 +317,8 @@ this section and §3–§6 disagree, this section wins.
 - The page's kind/ext counts are a 200,000-row sample; add an age group to
   the call, as the window does, to make them exact. The bridge hard-codes
   `ext top:24` and one `edges` list per call; widen it for D1/D2.
-- `!empty:` finds nothing; "not empty" is `size:>0`.
+- `!empty:` and `!a..b` negate the whole shorthand: folders and non-empty
+  files, everything outside the range.
 - Excluding one value needs its own term (`kind:doc !kind:build`); negation
   covers a whole term. `lens::list` drops values it was not handed — keep
   unknown ones.

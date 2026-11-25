@@ -347,6 +347,88 @@ fn a_calendar_date_as_a_bound_holds_the_whole_day() {
     );
 }
 
+/// A shorthand of several parts is negated as a whole: one group, each part
+/// negated, so it holds exactly where the shorthand does not.
+#[test]
+fn a_negated_shorthand_is_negated_as_a_whole() {
+    let groups = |q: &str| -> Vec<Vec<(bool, Match)>> {
+        parse_at(q, NOW)
+            .groups
+            .into_iter()
+            .map(|g| g.alts)
+            .collect()
+    };
+    let nov1 = 1_793_491_200;
+    let nov24 = 1_795_478_400;
+    let m = TimeField::Modified;
+    assert_eq!(
+        groups("!dm:2026-11-01..2026-11-24"),
+        vec![vec![
+            (true, Match::Time(m, Cmp::Ge, nov1)),
+            (true, Match::Time(m, Cmp::Le, nov24 + 86_399)),
+        ]]
+    );
+    // A bare day is one term already: equality is the whole day.
+    assert_eq!(
+        groups("!dm:2026-11-24"),
+        vec![vec![(true, Match::Time(m, Cmp::Eq, nov24))]]
+    );
+    assert_eq!(
+        groups("!size:1mb..2mb"),
+        vec![vec![
+            (true, Match::Size(Cmp::Ge, 1_048_576)),
+            (true, Match::Size(Cmp::Le, 2_097_152)),
+        ]]
+    );
+    assert_eq!(
+        groups("!empty:"),
+        vec![vec![
+            (true, Match::IsDir(false)),
+            (true, Match::Size(Cmp::Eq, 0)),
+        ]]
+    );
+    // Un-negated, each part is its own term, as before.
+    assert_eq!(groups("empty:").len(), 2);
+    assert_eq!(groups("size:1mb..2mb").len(), 2);
+    // Open at one end there is one part.
+    assert_eq!(
+        groups("!size:1mb.."),
+        vec![vec![(true, Match::Size(Cmp::Ge, 1_048_576))]]
+    );
+
+    // At every probe, the negation holds exactly where the range does not.
+    let probes = [nov1 - 1, nov1, nov24, nov24 + 86_399, nov24 + 86_400];
+    for q in ["dm:2026-11-01..2026-11-24", "dm:2026-11-24", "dm:30d..7d"] {
+        for t in probes {
+            assert_ne!(holds_at(q, t), holds_at(&format!("!{q}"), t), "{q} at {t}");
+        }
+    }
+
+    // What `explain` reads back, and that the reading parses to the same tree.
+    assert_eq!(
+        describe(&parse_at("!dm:2026-11-01..2026-11-24", NOW)),
+        "(not modified >= 2026-11-01 or not modified <= 2026-11-24)"
+    );
+    assert_eq!(
+        describe(&parse_at("!empty:", NOW)),
+        "(not is a file or not size = 0 B)"
+    );
+    for (short, long) in [
+        (
+            "!dm:2026-11-01..2026-11-24",
+            "!dm:>=2026-11-01|!dm:<=2026-11-24",
+        ),
+        ("!size:1mb..2mb", "!size:>=1mb|!size:<=2mb"),
+        ("!empty:", "!file:|!size:=0"),
+    ] {
+        assert_eq!(parse_at(short, NOW), parse_at(long, NOW), "{short}");
+    }
+    assert_eq!(
+        scour_query::forgiving("rapport !size:1mb..2mb").as_deref(),
+        Some("fuzzy:rapport !size:>=1mb|!size:<=2mb")
+    );
+}
+
 #[test]
 fn a_relative_bound_keeps_its_exact_instant() {
     let week = 7 * 86_400;

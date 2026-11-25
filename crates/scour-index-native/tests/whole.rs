@@ -133,6 +133,12 @@ fn many_segments_answer_exactly_what_one_would() {
         "dm:<=2026-07-20",
         "dm:>2026-07-20",
         "dm:30d..7d",
+        "!dm:2026-07-20",
+        "!dm:2026-07-18..2026-07-20",
+        "!dm:30d..7d",
+        "!size:1kb..1mb",
+        "!empty:",
+        "ext:rs !size:1kb..1mb",
         "İSTANBUL",
         "zzzznothing",
     ] {
@@ -168,6 +174,40 @@ fn a_one_day_range_finds_that_day() {
         all("dm:2026-07-20..2026-07-20"),
         f.expected("dm:2026-07-20", SortKey::Modified, true, 100_000)
     );
+}
+
+/// A range and its negation split the rows between them: none in both, none in
+/// neither. Every row here has a size and a modification time.
+#[test]
+fn a_range_and_its_negation_cover_every_row() {
+    let f = Fixture::new(16_000, 2_000);
+    let all = |q: &str| -> std::collections::BTreeSet<String> {
+        f.search(q, SortKey::Modified, true, 100_000)
+            .into_iter()
+            .collect()
+    };
+    let every = all("");
+    assert_eq!(every.len(), f.entries.len());
+    for q in [
+        "dm:2026-07-20",
+        "dm:2026-07-18..2026-07-20",
+        "dm:30d..7d",
+        "size:1kb..1mb",
+        "empty:",
+    ] {
+        let inside = all(q);
+        let outside = all(&format!("!{q}"));
+        assert!(
+            inside.is_disjoint(&outside),
+            "{q:?} and its negation overlap"
+        );
+        assert_eq!(
+            inside.len() + outside.len(),
+            every.len(),
+            "{q:?} and its negation leave rows out"
+        );
+    }
+    assert!(!all("size:1kb..1mb").is_empty() && !all("!size:1kb..1mb").is_empty());
 }
 
 /// Ordering by path is a stored order, and it has to be the same order.
