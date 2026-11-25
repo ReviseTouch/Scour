@@ -466,6 +466,9 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
             wait: i.wait,
             reads: i.reads,
             stays: i.stays || i.dir.is_some(),
+            icon: i.icon.into(),
+            key: i.key.as_str().into(),
+            held: i.held,
         })
         .collect();
     let counted = o.items.iter().any(|i| i.count || i.n.is_some());
@@ -480,6 +483,7 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
         slint::SharedString::new()
     });
     w.set_lens_reads(cat.get("reads files").as_ref().into());
+    w.set_lens_held(cat.get("in the query").as_ref().into());
     let end_line = qb.field.start_of(&text, o.b.max(1) - 1).0;
     w.set_lens_line(end_line.max(line));
     w.set_lens_col(col);

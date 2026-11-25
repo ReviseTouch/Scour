@@ -30,6 +30,12 @@ pub struct Item {
     pub launch: bool,
     /// A disk not indexed: choosing it asks to index it.
     pub disk: Option<String>,
+    /// A launcher line: its field, its capsule's picture, the letters that
+    /// pick it, and whether the query already holds one.
+    pub field: &'static str,
+    pub icon: &'static str,
+    pub key: String,
+    pub held: bool,
 }
 
 pub struct Open {
@@ -349,6 +355,18 @@ impl Lenses {
         if let Some(id) = it.disk {
             return Some(Chosen::Disk(id));
         }
+        // A filter the query already holds is gone into, not written twice.
+        if it.launch
+            && it.held
+            && let Some((query, caret)) = lens::into_held(q, &o.term, it.field)
+        {
+            self.close();
+            return Some(Chosen::Edit {
+                query,
+                caret,
+                keep: true,
+            });
+        }
         let mut text = it.term.clone();
         if it.launch && text == "content:" {
             // The `:` alone goes; the space before it stays, so the caret is
@@ -459,11 +477,25 @@ fn items(o: &mut Open, q: &str, env: &Env) -> Vec<Item> {
         Lens::Launch => {
             o.title = tr("Add a filter");
             o.foot = tr("Type a few letters to narrow it. Enter starts the filter.");
+            let mut group = None;
             lens::launch(q, &o.raw, |m| tr(m))
                 .into_iter()
-                .map(|s| Item {
-                    launch: true,
-                    ..it(tr(&s.choice.label), &tr(&s.choice.hint), s.choice.term)
+                .map(|s| {
+                    let heading = if group == Some(s.group) {
+                        String::new()
+                    } else {
+                        tr(s.group.heading())
+                    };
+                    group = Some(s.group);
+                    Item {
+                        launch: true,
+                        group: heading,
+                        field: s.field,
+                        icon: s.icon,
+                        key: s.key,
+                        held: s.held,
+                        ..it(tr(&s.choice.label), &tr(&s.choice.hint), s.choice.term)
+                    }
                 })
                 .collect()
         }

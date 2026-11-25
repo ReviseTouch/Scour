@@ -105,6 +105,8 @@ pub fn filter_of(field: &str) -> Option<&'static Filter> {
 pub struct Start {
     /// The label and about as msgids, and the term it starts (`under:`).
     pub choice: Choice,
+    /// The field's canonical name, as [`into_held`] takes it.
+    pub field: &'static str,
     pub group: Group,
     pub icon: &'static str,
     /// The fewest letters after `:` that leave this line alone, `:` included;
@@ -177,6 +179,7 @@ pub fn launch(query: &str, typed: &str, name: impl Fn(&str) -> String) -> Vec<St
         .filter(|(i, f)| keeps(f, &names[*i], &want))
         .map(|(i, f)| Start {
             choice: Choice::new(f.label, f.about, format!("{}:", f.field)),
+            field: f.field,
             group: f.group,
             icon: f.icon,
             key: key_of(i, &names),

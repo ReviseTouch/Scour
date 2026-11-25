@@ -398,6 +398,12 @@ export struct LensRow {
     reads: bool,
     // Tab writes it and keeps the lens open.
     stays: bool,
+    // A launcher line: its capsule's picture (`folder`, `clock`, `shapes`,
+    // `ext`, `size`, `approx`, `read`), the letters that pick it, and whether
+    // the query already holds one.
+    icon: string,
+    key: string,
+    held: bool,
 }
 
 export struct FolderRow {
