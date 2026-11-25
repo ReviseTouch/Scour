@@ -22,5 +22,6 @@ pub mod preview;
 pub mod frame;
 pub mod lens;
 pub mod menu;
+pub mod pattern;
 pub mod query;
 pub mod wrap;

@@ -97,6 +97,35 @@ pub(super) fn api_search(stream: &mut TcpStream, client: &Pool, req: &http::Req,
     }
 }
 
+/// A line out of a file as the page marks it: its parts in order, each with
+/// whether it is a find — every find the service marked, or `at` alone from
+/// an older one. A find not on characters leaves the line whole.
+pub(super) fn segs(text: &str, at: (u32, u32), marks: &[(u32, u32)]) -> serde_json::Value {
+    let one = [at];
+    let marks = if marks.is_empty() { &one[..] } else { marks };
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut pos = 0usize;
+    for &(a, l) in marks {
+        let (a, b) = (a as usize, (a + l) as usize);
+        let (Some(plain), Some(found)) = (text.get(pos..a), text.get(a..b)) else {
+            return serde_json::json!([[text, false]]);
+        };
+        if !plain.is_empty() {
+            out.push(serde_json::json!([plain, false]));
+        }
+        if !found.is_empty() {
+            out.push(serde_json::json!([found, true]));
+        }
+        pos = b;
+    }
+    if let Some(rest) = text.get(pos..)
+        && !rest.is_empty()
+    {
+        out.push(serde_json::json!([rest, false]));
+    }
+    serde_json::Value::Array(out)
+}
+
 /// One place a `content:` query found its text, as the page draws it: the
 /// line's number and the line in three pieces, the find in the middle. A find
 /// that does not fall on characters is shown as the line alone.
@@ -110,7 +139,10 @@ fn found_json(f: &scour_core::FoundLine) -> serde_json::Value {
         (Some(pre), Some(hit), Some(post)) => (pre, hit, post),
         _ => (f.text.as_str(), "", ""),
     };
-    serde_json::json!({ "line": f.line, "pre": pre, "hit": hit, "post": post })
+    serde_json::json!({
+        "line": f.line, "pre": pre, "hit": hit, "post": post,
+        "segs": segs(&f.text, f.at, &f.marks),
+    })
 }
 
 /// The whole result set, as a spreadsheet: one walk in the service under one

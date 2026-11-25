@@ -88,6 +88,66 @@ impl Expr {
         files: &[File],
         budget: &Budget,
     ) -> Vec<Outcome> {
+        let mut outcomes = self.outcomes(options, ground, enter, texts, files, budget);
+        self.mark_every(&mut outcomes);
+        outcomes
+    }
+
+    /// Every word the file must hold, marked everywhere in each line shown:
+    /// each word was looked for by a pass of its own, and a line holding two
+    /// of them showed only the one its pass found.
+    fn mark_every(&self, outcomes: &mut [Outcome]) {
+        for outcome in outcomes {
+            let Outcome::Found { hits, .. } = outcome else {
+                continue;
+            };
+            for hit in hits.iter_mut() {
+                if hit.text.is_empty() {
+                    continue;
+                }
+                let mut marks: Vec<(usize, usize)> = self
+                    .must
+                    .iter()
+                    .flat_map(|p| {
+                        p.reading(crate::excerpt::Kind::Text)
+                            .find_iter(hit.text.as_bytes())
+                    })
+                    .filter(|m| !m.is_empty())
+                    .map(|m| (m.start(), m.end()))
+                    .collect();
+                marks.push((hit.at.0 as usize, (hit.at.0 + hit.at.1) as usize));
+                marks.sort_unstable();
+                let mut joined: Vec<(u32, u32)> = Vec::with_capacity(marks.len());
+                let mut last: Option<(usize, usize)> = None;
+                for (a, b) in marks {
+                    match &mut last {
+                        Some(l) if a <= l.1 => l.1 = l.1.max(b),
+                        _ => {
+                            if let Some((x, y)) = last {
+                                joined.push((x as u32, (y - x) as u32));
+                            }
+                            last = Some((a, b));
+                        }
+                    }
+                }
+                if let Some((x, y)) = last {
+                    joined.push((x as u32, (y - x) as u32));
+                }
+                hit.marks = joined;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn outcomes(
+        &self,
+        options: &Options,
+        ground: &Ground,
+        enter: Option<Enter>,
+        texts: Option<Arc<dyn Texts>>,
+        files: &[File],
+        budget: &Budget,
+    ) -> Vec<Outcome> {
         if self.must.len() == 1 && self.forbid.is_none() {
             return Scanner::new(self.must[0].clone(), options.clone(), ground.clone())
                 .entering(enter)

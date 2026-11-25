@@ -1,6 +1,96 @@
   /* ---------------- On-demand Grep capsule & micro-triggers ---------------- */
   const grepBar = document.getElementById("grep-bar");
   const grepInput = document.getElementById("grep-q");
+  const grepShadow = document.getElementById("grep-shadow");
+
+  /* The pattern's pieces as `scour_ui::pattern::pieces` takes them apart —
+     the search's own reading — each with its columns and its operators. */
+  function patternPieces(input) {
+    const chars = Array.from(input);
+    const tokens = [];
+    let start = null, quoted = false, depth = 0;
+    chars.forEach((c, i) => {
+      if (c === '"') { quoted = !quoted; if (start === null) start = i; }
+      else if (c === "(" && !quoted && start === null) { depth++; start = i; }
+      else if (c === ")" && !quoted && depth > 0) depth--;
+      else if (/\s/.test(c) && !quoted && depth === 0) { if (start !== null) { tokens.push([start, i]); start = null; } }
+      else if (start === null) start = i;
+    });
+    if (start !== null) tokens.push([start, chars.length]);
+    const groups = [];
+    let glue = false, bang = null;
+    for (const [a, b] of tokens) {
+      const t = chars.slice(a, b).join("");
+      const q = t.startsWith('"');
+      if (!q && (t === "|" || t === ";")) { glue = true; if (groups.length) groups[groups.length - 1][1] = b; continue; }
+      if (!q && t === "!") { bang = a; continue; }
+      const lead = !q && (t.startsWith("|") || t.startsWith(";"));
+      const trail = !q && t.length > 1 && (t.endsWith("|") || t.endsWith(";"));
+      const from = bang !== null ? bang : a;
+      bang = null;
+      if (groups.length && (glue || lead)) groups[groups.length - 1][1] = b;
+      else groups.push([from, b]);
+      glue = trail;
+    }
+    return groups.map(([a, b]) => {
+      const ops = [];
+      let q = false, or = false, not = false, phrase = false;
+      for (let i = a; i < b; i++) {
+        const c = chars[i];
+        if (c === '"') { q = !q; phrase = true; ops.push(i); }
+        else if ((c === ";" || c === "|") && !q) { or = true; ops.push(i); }
+        else if ((c === "(" || c === ")") && !q) ops.push(i);
+        else if (c === "!" && !q && (i === a || /\s/.test(chars[i - 1]))) { not = true; ops.push(i); }
+      }
+      return { start: a, end: b, kind: not ? "not" : or ? "or" : phrase ? "phrase" : "word", ops };
+    });
+  }
+
+  /* The letters behind the field: a text pattern's pieces in their capsules
+     and its operators in colour; any other mode's, plain. */
+  function drawGrepShadow() {
+    const text = grepInput.value;
+    const chars = Array.from(text);
+    if (GREP.mode !== "text" || !text) { grepShadow.textContent = text; return; }
+    const pieces = patternPieces(text);
+    const ops = new Map();
+    for (const p of pieces) for (const i of p.ops) {
+      const c = chars[i];
+      ops.set(i, c === "!" ? "not" : c === '"' ? "quote" : "or");
+    }
+    const nodes = [];
+    let pos = 0;
+    const run = (a, b, into) => {
+      for (let i = a; i < b; ) {
+        if (ops.has(i)) {
+          const s = document.createElement("span");
+          s.className = "gop " + ops.get(i);
+          s.textContent = chars[i];
+          into.push(s);
+          i++;
+        } else {
+          let j = i;
+          while (j < b && !ops.has(j)) j++;
+          into.push(chars.slice(i, j).join(""));
+          i = j;
+        }
+      }
+    };
+    for (const p of pieces) {
+      if (p.kind === "word") continue;
+      run(pos, p.start, nodes);
+      const cap = document.createElement("span");
+      cap.className = "gcap " + p.kind;
+      const inner = [];
+      run(p.start, p.end, inner);
+      cap.append(...inner);
+      nodes.push(cap);
+      pos = p.end;
+    }
+    run(pos, chars.length, nodes);
+    grepShadow.replaceChildren(...nodes);
+    grepShadow.scrollLeft = grepInput.scrollLeft;
+  }
   const grepView = document.getElementById("grep-view");
   const grepCaseBtn = document.getElementById("grep-case");
   const grepBinBtn = document.getElementById("grep-bin");
@@ -144,7 +234,7 @@
           const lines = (gf.hits || []).map((h) =>
             '<div class="grep-line" data-gfi="' + fi + '">' +
             '<span class="gl-no">' + (h.line != null ? h.line : "@" + h.offset) + "</span>" +
-            '<span class="gl-txt">' + escape_((h.pre || "").slice(-48)) + "<mark>" + escape_(h.hit || "") + "</mark>" + escape_(h.post || "") + "</span></div>"
+            '<span class="gl-txt">' + segsHtml(h) + "</span></div>"
           ).join("");
           return '<div class="grep-card" data-gfi="' + fi + '">' +
             '<div class="grep-cols gc-head" data-gfi="' + fi + '" data-open="1">' +
@@ -160,6 +250,23 @@
             "</div>";
         }).join("");
     grepView.innerHTML = head + cards;
+  }
+
+  /* A found line's parts, each with whether it is a find: the service's
+     `segs`, or the three pieces an older one sends. */
+  function lineSegs(found) {
+    if (found.segs && found.segs.length) return found.segs;
+    return [[found.pre || "", false], [found.hit || "", true], [found.post || "", false]]
+      .filter(([t]) => t !== "");
+  }
+
+  /* The same, as HTML for the grep panel's cards: escaped, every find in a
+     `<mark>`, the part before the first find cut to its last 48. */
+  function segsHtml(h) {
+    return lineSegs(h).map(([text, isFind], k) => {
+      const t = k === 0 && !isFind ? text.slice(-48) : text;
+      return isFind ? "<mark>" + escape_(t) + "</mark>" : escape_(t);
+    }).join("");
   }
 
   function applySortChoice(nextKey) {
@@ -209,7 +316,8 @@
     const gf = row && GREP.files[+row.dataset.gfi];
     if (gf) launch(gf.path, "file");
   });
-  grepInput.addEventListener("input", () => grepSoon(false));
+  grepInput.addEventListener("input", () => { drawGrepShadow(); grepSoon(false); });
+  grepInput.addEventListener("scroll", () => { grepShadow.scrollLeft = grepInput.scrollLeft; });
   grepInput.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); setGrepOpen(false); }
     else if (e.key === "Enter") { e.preventDefault(); runGrep(false); }
@@ -219,6 +327,7 @@
     if (!b) return;
     GREP.mode = b.dataset.gmode;
     for (const x of document.querySelectorAll("[data-gmode]")) x.setAttribute("aria-pressed", String(x === b));
+    drawGrepShadow();
     grepSoon(false);
   });
   grepCaseBtn.addEventListener("click", () => {

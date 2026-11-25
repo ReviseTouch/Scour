@@ -301,12 +301,23 @@
     const n = document.createElement("span");
     n.className = "n";
     n.textContent = found.line != null ? String(found.line) : "";
-    let pre = (found.pre || "").replace(/[\t\r\n]/g, " ").trimStart();
-    if (pre.length > 40) pre = "…" + pre.slice(-40).trimStart();
-    const mark = document.createElement("mark");
-    mark.textContent = (found.hit || "").replace(/[\t\r\n]/g, " ");
-    return [n, pre, mark, (found.post || "").replace(/[\t\r\n]/g, " ")];
+    const out = [n];
+    // Every find marked; what is ahead of the first cut to its last forty.
+    lineSegs(found).forEach(([text, isFind], k) => {
+      let t = text.replace(/[\t\r\n]/g, " ");
+      if (k === 0 && !isFind) {
+        t = t.trimStart();
+        if (t.length > 40) t = "…" + t.slice(-40).trimStart();
+      }
+      if (isFind) {
+        const mark = document.createElement("mark");
+        mark.textContent = t;
+        out.push(mark);
+      } else out.push(t);
+    });
+    return out;
   }
+
 
   /* Ask at once and abandon what the screen has left behind: a page is a slice
    * of the kept ordering, 5.5 ms at row nineteen thousand and flat at every

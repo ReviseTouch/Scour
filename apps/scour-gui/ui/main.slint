@@ -9,9 +9,9 @@ export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { GrepCap, GrepOp, Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { GrepCap, GrepOp, Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
@@ -203,6 +203,9 @@ export component MainWindow inherits Window {
     in property <bool> grep-case;
     in property <bool> grep-binary;
     in property <bool> grep-markup;
+    // The content pattern's pieces and operators, as Rust reads them.
+    in property <[GrepCap]> grep-caps;
+    in property <[GrepOp]> grep-ops;
     in property <int> grep-focus-ask;
     in property <string> grep-summary;
     in property <string> grep-empty;
@@ -2263,6 +2266,30 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
+                            // Behind the letters, each piece's capsule; over
+                            // them, each operator in its colour. The letters
+                            // stay where the field puts them: the caret and the
+                            // selection are the field's own. Only while the
+                            // pattern fits, since the field scrolls past that.
+                            property <length> gadv: gruler.preferred-width / 40;
+                            property <bool> fits: root.grep-pattern.character-count * self.gadv < self.width - 8px;
+                            gruler := Text {
+                                visible: false;
+                                text: "0000000000000000000000000000000000000000";
+                                font-family: Fonts.mono;
+                                font-size: 14px;
+                            }
+                            for c in root.grep-caps: Rectangle {
+                                visible: parent.fits;
+                                x: c.col * parent.gadv - 4px;
+                                width: c.len * parent.gadv + 8px;
+                                height: 24px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                background: c.kind == "not" ? Theme.cap-neg : c.kind == "phrase" ? Theme.cap : Theme.panel;
+                                border-color: c.kind == "not" ? Theme.cap-neg-ring : Theme.cap-ring;
+                            }
                             grep-input := TextInput {
                                 width: parent.width;
                                 height: parent.height;
@@ -2286,6 +2313,17 @@ export component MainWindow inherits Window {
                                     }
                                     return reject;
                                 }
+                            }
+                            for o in root.grep-ops: Text {
+                                visible: parent.fits;
+                                x: o.col * parent.gadv;
+                                width: parent.gadv;
+                                height: parent.height;
+                                text: o.ch;
+                                font-family: Fonts.mono;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                                color: o.kind == "not" ? Theme.q-not : o.kind == "quote" ? Theme.q-glob : Theme.q-key;
                             }
                         }
                         // The ways of reading, as one group, centred in the
@@ -3167,6 +3205,10 @@ export component MainWindow inherits Window {
                                     height: parent.height;
                                     pre: here.found.length > 0 ? here.found[0].pre : "";
                                     hit: here.found.length > 0 ? here.found[0].hit : "";
+                                    mid: here.found.length > 0 ? here.found[0].mid : "";
+                                    hit2: here.found.length > 0 ? here.found[0].hit2 : "";
+                                    mid2: here.found.length > 0 ? here.found[0].mid2 : "";
+                                    hit3: here.found.length > 0 ? here.found[0].hit3 : "";
                                     post: here.found.length > 0 ? here.found[0].post : "";
                                     colour: Theme.ink-2;
                                 }
@@ -3562,6 +3604,10 @@ export component MainWindow inherits Window {
                                     height: parent.height;
                                     pre: gitem.pre;
                                     hit: gitem.hit;
+                                    mid: gitem.mid;
+                                    hit2: gitem.hit2;
+                                    mid2: gitem.mid2;
+                                    hit3: gitem.hit3;
                                     post: gitem.post;
                                     colour: Theme.ink-2;
                                 }
@@ -3931,6 +3977,10 @@ export component MainWindow inherits Window {
                                     height: parent.height;
                                     pre: f.pre;
                                     hit: f.hit;
+                                    mid: f.mid;
+                                    hit2: f.hit2;
+                                    mid2: f.mid2;
+                                    hit3: f.hit3;
                                     post: f.post;
                                     colour: Theme.ink-2;
                                 }

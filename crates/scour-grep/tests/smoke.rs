@@ -374,3 +374,34 @@ fn large_zip_skips_heavy_media_and_reads_only_document_xml() {
     };
     assert_eq!(hits[0].text, "Büyük belgede gizli cümle");
 }
+
+#[test]
+fn a_line_holding_two_of_the_words_marks_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [put(
+        dir.path(),
+        "a.txt",
+        "başlık\nicra dairesine ve icra müdürüne\n".as_bytes(),
+    )];
+    let ground = Ground::of([(dir.path().to_path_buf(), Some("disk".into()), Medium::Solid)]);
+    let expr = scour_grep::Expr::new(&text("icra daire"), false).unwrap();
+    let got = expr.scan(
+        &Options::default(),
+        &ground,
+        None,
+        None,
+        &files,
+        &Budget::unlimited(),
+    );
+    let Outcome::Found { hits, .. } = &got[0] else {
+        panic!("{:?}", got[0])
+    };
+    assert_eq!(hits.len(), 1);
+    let h = &hits[0];
+    let marked: Vec<&str> = h
+        .marks
+        .iter()
+        .map(|&(a, l)| &h.text[a as usize..(a + l) as usize])
+        .collect();
+    assert_eq!(marked, ["icra", "daire", "icra"]);
+}

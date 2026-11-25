@@ -66,10 +66,24 @@
   .grep-bar .gmeter { flex: none; color: var(--q-bad); font: 400 12px/1 var(--sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
   @media (max-width: 760px) { .grep-bar .gmeter { display: none; } }
   .grep-bar .gp { flex: none; font: 700 13px/1 var(--mono); color: var(--q-bad); user-select: none; }
+  .grep-bar .gfield { flex: 1; min-width: 80px; align-self: stretch; position: relative; display: flex; align-items: center; }
   .grep-bar input {
-    flex: 1; min-width: 80px; border: 0; outline: 0; background: none;
-    color: var(--ink); font: 500 14px/1 var(--mono); padding: 0;
+    flex: 1; min-width: 80px; border: 0; outline: 0; background: none; position: relative;
+    color: transparent; caret-color: var(--ink); font: 500 14px/1 var(--mono); padding: 0 0 0 6px;
   }
+  /* The same letters, behind: capsules drawn by shadows, so not one letter
+     moves from where the field has it. */
+  .grep-bar .gshadow {
+    position: absolute; inset: 0 0 0 6px; display: flex; align-items: center;
+    white-space: pre; overflow: hidden; pointer-events: none;
+    color: var(--ink); font: 500 14px/1 var(--mono);
+  }
+  .gshadow .gcap { border-radius: 3px; background: var(--cap); box-shadow: 0 0 0 4px var(--cap), 0 0 0 5px var(--cap-ring); }
+  .gshadow .gcap.or { background: var(--panel); box-shadow: 0 0 0 4px var(--panel), 0 0 0 5px var(--cap-ring); }
+  .gshadow .gcap.not { background: var(--cap-neg); box-shadow: 0 0 0 4px var(--cap-neg), 0 0 0 5px var(--cap-neg-ring); }
+  .gshadow .gop { color: var(--q-key); }
+  .gshadow .gop.not { color: var(--q-not); }
+  .gshadow .gop.quote { color: var(--q-glob); }
   .grep-bar input::placeholder { color: var(--ink-3); }
   .grep-seg { display: inline-flex; border: 1px solid var(--cap-read-ring); border-radius: 6px; overflow: hidden; flex: none; }
   .grep-seg button, .grep-flag {

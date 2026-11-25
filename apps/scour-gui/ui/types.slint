@@ -43,8 +43,13 @@ export struct HeadInfo {
 /// and the line cut in three at the find. See `scour_core::FoundLine`.
 export struct Found {
     line: string,
+    // A line out of a file in seven parts: up to three finds marked.
     pre: string,
     hit: string,
+    mid: string,
+    hit2: string,
+    mid2: string,
+    hit3: string,
     post: string,
 }
 
@@ -147,6 +152,10 @@ export struct GrepItem {
     line: string,
     pre: string,
     hit: string,
+    mid: string,
+    hit2: string,
+    mid2: string,
+    hit3: string,
     post: string,
 }
 
@@ -528,4 +537,19 @@ export struct Spliced {
     ok: bool,
     text: string,
     caret: int,
+}
+
+/// A piece of the content pattern drawn as a capsule behind its letters:
+/// where it stands, in characters, and what it is (`phrase`, `or`, `not`).
+export struct GrepCap {
+    col: int,
+    len: int,
+    kind: string,
+}
+
+/// An operator of the content pattern drawn in its own colour over itself.
+export struct GrepOp {
+    col: int,
+    ch: string,
+    kind: string,
 }

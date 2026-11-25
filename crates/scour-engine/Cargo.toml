@@ -38,5 +38,7 @@ parking_lot       = { workspace = true }
 
 [dev-dependencies]
 scour-index-native = { workspace = true }
+# Only to hold the faces' drawing of a content pattern to the search's reading.
+scour-ui            = { workspace = true }
 scour-mock          = { workspace = true }
 tempfile            = "3"

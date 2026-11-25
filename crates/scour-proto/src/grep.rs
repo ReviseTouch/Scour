@@ -99,4 +99,8 @@ pub struct GrepHit {
     pub text: String,
     /// Where in `text` the find is: byte offset, then length.
     pub at: (u32, u32),
+    /// Every find in `text` of every word asked for, in order, `at` among
+    /// them. Absent from an older service: `at` alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<(u32, u32)>,
 }

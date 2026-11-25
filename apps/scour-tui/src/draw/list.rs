@@ -416,22 +416,35 @@ pub(super) fn found_line(
     wide: usize,
     theme: &Theme,
 ) -> Line<'static> {
-    let (at, len) = (found.at.0 as usize, found.at.1 as usize);
     let tidy = |s: &str| s.replace(['\t', '\r', '\n'], " ");
-    let (pre, hit, post) = match (
-        found.text.get(..at),
-        found.text.get(at..at + len),
-        found.text.get(at + len..),
-    ) {
-        (Some(pre), Some(hit), Some(post)) => (tidy(pre.trim_start()), tidy(hit), tidy(post)),
-        _ => (tidy(&found.text), String::new(), String::new()),
-    };
+    // Every find the service marked, or `at` alone from an older one.
+    let one = [found.at];
+    let marks: Vec<(usize, usize)> = (if found.marks.is_empty() {
+        &one[..]
+    } else {
+        &found.marks[..]
+    })
+    .iter()
+    .map(|&(a, l)| (a as usize, (a + l) as usize))
+    .filter(|&(a, b)| a < b && found.text.get(a..b).is_some())
+    .collect();
     let number = found
         .line
         .map(|n| format!("{n:>5}  "))
         .unwrap_or_else(|| "       ".into());
     let room = wide.saturating_sub(number.chars().count());
-    // The part before the find gives way first, from its front.
+    let Some(&(first_a, first_b)) = marks.first() else {
+        return Line::from(vec![
+            Span::styled(number, Style::new().fg(theme.ink_3())),
+            Span::styled(
+                cut(&tidy(&found.text), room),
+                Style::new().fg(theme.ink_2()),
+            ),
+        ]);
+    };
+    let pre = tidy(found.text[..first_a].trim_start());
+    let hit = tidy(&found.text[first_a..first_b]);
+    // The part before the first find gives way first, from its front.
     let before = pre.chars().count();
     let keep = room.saturating_sub(hit.chars().count()).min(before).min(30);
     let pre: String = if before > keep {
@@ -440,13 +453,37 @@ pub(super) fn found_line(
     } else {
         pre
     };
-    let left = room.saturating_sub(pre.chars().count() + hit.chars().count());
-    Line::from(vec![
+    let plain = Style::new().fg(theme.ink_2());
+    let marked = Style::new().bg(theme.key()).fg(theme.back());
+    let mut left = room.saturating_sub(pre.chars().count() + hit.chars().count());
+    let mut spans = vec![
         Span::styled(number, Style::new().fg(theme.ink_3())),
-        Span::styled(pre, Style::new().fg(theme.ink_2())),
-        Span::styled(hit, Style::new().bg(theme.key()).fg(theme.back())),
-        Span::styled(cut(&post, left), Style::new().fg(theme.ink_2())),
-    ])
+        Span::styled(pre, plain),
+        Span::styled(hit, marked),
+    ];
+    // After it, the rest of the line with every later find marked, cut where
+    // the room ends.
+    let mut pos = first_b;
+    let mut rest: Vec<(String, bool)> = Vec::new();
+    for &(a, b) in &marks[1..] {
+        if a < pos {
+            continue;
+        }
+        rest.push((tidy(&found.text[pos..a]), false));
+        rest.push((tidy(&found.text[a..b]), true));
+        pos = b;
+    }
+    rest.push((tidy(&found.text[pos..]), false));
+    for (text, is_find) in rest {
+        if left == 0 {
+            break;
+        }
+        let n = text.chars().count();
+        let shown = if n > left { cut(&text, left) } else { text };
+        left = left.saturating_sub(n);
+        spans.push(Span::styled(shown, if is_find { marked } else { plain }));
+    }
+    Line::from(spans)
 }
 
 /// What sits in the rail's first column: a dot for the filter in force, an
