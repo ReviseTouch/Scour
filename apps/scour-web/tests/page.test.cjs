@@ -2182,3 +2182,50 @@ test('a value shows on every scale it lines up with, and a mode turns about the 
   assert.equal(run(`timeTerm(placeTermAt("!dm:", 4), ${JSON.stringify(all)})`), '', 'a Before covering every bar is no filter');
   assert.equal(remode('!dm:', all, 'after'), null, 'nothing newer than now');
 });
+
+// What a capsule does to the list: which query its effect is counted
+// without, which capsules an empty list's rescue answer marks, and which
+// `|` runs are framed.
+function marksModel() {
+  const M = lensModel();
+  vm.runInContext(section('  /* ---------------- what a capsule does to the list', '\n  /* ---- drawn ---- */'), M);
+  return M;
+}
+
+test('a capsule\'s effect is counted without it, a group without its whole run', () => {
+  const M = marksModel();
+  const w = (q, a, b) => M.effectWithout(q, a, b);
+  assert.equal(w('rapor ext:pdf dm:7d', 6, 13), 'rapor dm:7d');
+  assert.equal(w('rapor under:/a|under:/b ext:pdf', 6, 23), 'rapor ext:pdf');
+  assert.equal(w('ext:pdf|dm:today rapor', 0, 7), 'dm:today rapor', 'its | goes with it');
+  assert.equal(w('rapor !kind:build', 6, 17), 'rapor');
+  assert.equal(w('kind:doc;code', 0, 13), '');
+  assert.equal(w('rapor !under:/a !under:/b x', 6, 25), 'rapor x', 'a red block of exclusions, whole');
+});
+
+test('every capsule whose removal rescues an empty list is marked, none other', () => {
+  const M = marksModel();
+  const text = 'rapor ext:xlsx dm:today size:>1gb kind:doc';
+  const rescue = (pairs) => ({ text, by: new Map(pairs.map(([t, n]) => [t, { term: t, n, capped: false }])) });
+  const marked = (r, caps) => caps.filter(([a, b]) => M.rescueOf(text, a, b, r)).map(([a]) => a);
+  const caps = [[6, 14], [15, 23], [24, 33], [34, 42]];
+  assert.deepEqual(marked(rescue([['ext:xlsx', 312]]), caps), [6]);
+  assert.deepEqual(marked(rescue([['ext:xlsx', 312], ['size:>1gb', 4]]), caps), [6, 24], 'two rescuers, both');
+  assert.equal(M.rescueOf(text, 6, 14, rescue([['ext:xlsx', 312]])).n, 312);
+  assert.deepEqual(marked(rescue([]), caps), [], 'a filter that was not asked about gets no mark');
+  assert.equal(M.rescueOf(text + ' x', 6, 14, rescue([['ext:xlsx', 312]])), null, 'an answer for another text marks nothing');
+  // A group capsule is marked when a member of it rescues.
+  const g = 'a under:/x|under:/y';
+  const r = { text: g, by: new Map([['under:/y', { n: 3 }]]) };
+  assert.equal(M.rescueOf(g, 2, 19, r).n, 3);
+});
+
+test('terms joined by | are framed, unless one capsule draws them already', () => {
+  const M = marksModel();
+  const text = 'ext:pdf|dm:today rapor|fatura under:/a|under:/b x';
+  const runs = (caps) => J(M.orRuns(text, caps)).map((r) => text.slice(r.start, r.end));
+  assert.deepEqual(runs([]), ['ext:pdf|dm:today', 'rapor|fatura', 'under:/a|under:/b']);
+  assert.deepEqual(runs([{ start: 30, end: 47 }]), ['ext:pdf|dm:today', 'rapor|fatura'], 'a Location capsule is its own frame');
+  assert.deepEqual(J(M.orRuns('a | b', [])), [{ start: 0, end: 5, members: [0, 4] }]);
+  assert.deepEqual(J(M.orRuns('ext:pdf ; odt', [])), [], 'a list is one term');
+});

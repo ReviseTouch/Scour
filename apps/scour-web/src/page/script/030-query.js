@@ -195,6 +195,7 @@
   }
 
   function drawActs(term) {
+    clearTimeout(effectTimer);
     hoverTerm = term;
     markHover();
     const hovEl = term && termEl(term[0]);
@@ -212,7 +213,7 @@
       '<div class="pair">' +
       (fz ? '<button type="button" class="fz" aria-pressed="' + (fz === "off") + '">≈</button>' : "") +
       '<button type="button" class="neg">' + (negated ? "+" : "!") + "</button>" +
-      '<button type="button" class="drop">✕</button></div>';
+      '<button type="button" class="drop">✕</button><span class="fx"></span></div>';
     const pair = acts.firstElementChild;
     const [neg, drop] = pair.querySelectorAll(".neg, .drop");
     neg.title = negated ? T("Stop excluding this") : T("Exclude this term");
@@ -225,10 +226,13 @@
     const w = pair.offsetWidth;
     const mid = last.top + last.height / 2 - box.top;
     /* Above the term, a capsule's as a word's: nothing is laid over what it
-       holds, and nothing in the line moves. */
-    pair.style.left = Math.max(0, Math.min(last.right - box.left - w + 4, box.width - w)) + "px";
+       holds, and nothing in the line moves. Placed by its buttons alone, with
+       room kept on the right for the effect, which then grows into it. */
+    const room = hovEl.classList.contains("cap") ? 120 : 0;
+    pair.style.left = Math.max(0, Math.min(last.right - box.left - w + 4, box.width - w - room)) + "px";
     pair.style.top = (mid - 18 - 24) + "px";
     markHover();
+    pillEffect(term[0], term[1], pair.querySelector(".fx"));
   }
 
   function editTerm(term, replacement) {
@@ -852,7 +856,9 @@
   /* The query is laid out by the browser, one to three lines of it, and the
      caret and selection are drawn over what it made. */
   function fitQuery() {
+    markRescues();
     indexSegments();
+    drawFrames(q.value);
     drawDecor();
   }
 

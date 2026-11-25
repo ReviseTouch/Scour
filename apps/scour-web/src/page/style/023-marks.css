@@ -1,0 +1,20 @@
+  /* The pill's effect: what leaving the filter out would find, against what
+     it finds now. Empty, it takes no room; it grows to the right of the buttons. */
+  .qacts .pair .fx {
+    align-self: center; padding: 0 5px 0 4px; white-space: nowrap;
+    font: 600 10.5px/16px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums;
+  }
+  .qacts .pair .fx:empty { display: none; }
+  /* The capsule whose removal would bring an empty list back: a dot on its
+     corner, drawn outside the flow. */
+  .qshadow .term.cap { position: relative; }
+  .qshadow .term.cap.rescues::after {
+    content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--q-not); box-shadow: 0 0 0 2px var(--panel); pointer-events: none;
+  }
+  /* Terms joined by `|`: a dashed frame a line, over the layer, taking no room. */
+  .qframes { position: absolute; inset: 0; pointer-events: none; }
+  .qframes .qor {
+    position: absolute; box-sizing: border-box; border: 1.5px dashed color-mix(in srgb, var(--ink-3) 70%, transparent);
+    border-radius: 10px;
+  }

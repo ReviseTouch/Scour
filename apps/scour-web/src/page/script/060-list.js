@@ -347,6 +347,8 @@
     const mine = ++rescueGen;
     rescueBox.hidden = true;
     rescueBox.innerHTML = "";
+    RESCUE = null;
+    markRescues();
     if (found || !text.trim() || READS.test(text)) return;
     // A field still being typed (`dm:`) is not a filter yet.
     const filters = terms(text).filter(([a, b]) =>
@@ -362,6 +364,9 @@
       if (mine !== rescueGen || q.value !== text) return;
       const useful = got.filter((g) => g && g.n > 0);
       if (!useful.length) return;
+      // The capsules that would bring the list back are marked where they stand.
+      RESCUE = { text, by: new Map(useful.map((g) => [g.term, g])) };
+      markRescues();
       rescueBox.innerHTML = "<span>" + escape_(T("Left out, one of these would find something:")) + "</span>" +
         useful.map((g, i) => '<button type="button" data-i="' + i + '"><code>' + escape_(g.term) + "</code>" +
           escape_(T("without it: {n} results", { n: fmt(g.n) + (g.capped ? "+" : "") })) + "</button>").join("");
