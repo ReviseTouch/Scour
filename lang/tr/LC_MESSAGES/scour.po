@@ -3115,3 +3115,9 @@ msgstr "← → yeni ucu, Shift eski ucu oynatır"
 
 msgid "Alt+click: leave it out"
 msgstr "Alt+tık: dışla"
+
+msgid "click: add or take away · Alt+click: leave out"
+msgstr "tık: ekle ya da çıkar · Alt+tık: dışla"
+
+msgid "Extensions in {kinds}"
+msgstr "{kinds} içindeki uzantılar"
