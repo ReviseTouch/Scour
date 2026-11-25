@@ -283,7 +283,7 @@
       return editTerm(hoverTerm, neg + (/^fuzzy:/i.test(body) ? body.slice(6) : "fuzzy:" + body));
     }
     // A Location capsule is excluded whole, each member on its own.
-    if (termEl(a)?.classList.contains("place")) return editTerm(hoverTerm, placeNegated(q.value, a, end));
+    if (placePill(a, end)) return;
     // Negation toggles rather than accumulating: `!!a` means nothing.
     editTerm(hoverTerm, term.startsWith("!") ? term.slice(1) : "!" + term);
   });
@@ -497,9 +497,9 @@
     let rest = v.slice(b);
     const head = v.slice(0, a);
     if ((!head || head.endsWith(" ")) && rest.startsWith(" ")) rest = rest.slice(1);
-    // A member of a `|` run goes with one `|`, so no bar is left behind.
+    // As `lens::remove_term`: a member of a `|` run goes with one `|`.
     const member = placeTerms(v).find((x) => x.start === a);
-    const next = member && placeRunOf(v, member).length > 1 ? placeRemove(v, member)[0] : head + rest;
+    const next = member ? placeRemove(v, member)[0] : head + rest;
     const caret = cur > b ? cur - (v.length - next.length) : Math.min(cur, a);
     lensClose();
     q.value = next;
@@ -709,6 +709,7 @@
   /* The offset of the query under a point of the screen. The textarea stands
      over the layer and sees nothing of it, so it steps aside for the question. */
   function offsetAtPoint(x, y) {
+    pressEdits = null;
     const was = q.style.pointerEvents;
     q.style.pointerEvents = "none";
     shadow.style.pointerEvents = "auto";
@@ -724,7 +725,10 @@
     q.style.pointerEvents = was;
     shadow.style.pointerEvents = "";
     const art = el && el.closest && el.closest(".art");
-    if (art && art.dataset.at !== undefined) return +art.dataset.at;
+    if (art && art.dataset.at !== undefined) {
+      pressEdits = art.dataset.edit === "1";
+      return +art.dataset.at;
+    }
     if (art) {
       const term = art.closest(".term");
       if (term) {
@@ -752,7 +756,7 @@
     // A caret sits between characters, so both neighbours are candidates:
     // backspace takes the one behind, Delete the one ahead.
     const caret = document.activeElement === q ? (q.selectionStart ?? -1) : -1;
-    const caps = placeCapsDrawn(text, caret >= 0 && q.selectionEnd === caret ? caret : null);
+    const caps = placeCapsDrawn(text, caret >= 0 && q.selectionEnd === caret ? queryCaret() : null);
     // A place run is one entry: drawn whole by `placeCapHtml`.
     const ts = terms(text).filter(([a, b]) => !caps.some((c) => a >= c.start && b <= c.end));
     for (const c of caps) ts.push([c.start, c.end, c]);

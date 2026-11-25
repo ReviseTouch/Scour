@@ -23,13 +23,17 @@
     return [out, cut < caret ? caret - gone : caret];
   }
 
-  /* `lens::place_add`: "Add". A member the folder lies in or holds, an empty
-     `under:` and `typing` (the lens's term while it is typed) give way to it
-     in place; else it joins. Never takes a folder out. */
-  function placeAdd(text, home, path, typing) {
+  /* `lens::place_add_at`: "Add". A member the folder lies in or holds, an
+     empty `under:` and the member being edited at `caret` give way to it in
+     place; else it joins. Never takes a folder out. */
+  function placeAddAt(text, home, path, caret) {
+    const typing = editedTerm(text, caret);
+    return placeAddWith(text, home, path, typing && isPlace(typing) ? typing : null);
+  }
+
+  function placeAddWith(text, home, path, typed) {
     const want = placeNorm(home, path);
     const add = "under:" + quotedPath(homeIn(home, want));
-    const typed = typing && isPlace(typing) && placeParts(typing.value)[1] ? typing : null;
     const run = placeRuns(text).find((r) => r.some(isPlace));
     if (!run) return placeUnexclude(placeAtEnd(text, add), home, want);
     const givesWay = (t) => {
@@ -59,12 +63,19 @@
     return placeAtEnd(rest, "!under:" + quotedPath(homeIn(home, want)));
   }
 
-  /* `lens::place_anchor`: where the caret rests after a press: the end of the
-     group's first member; else an empty `under:`, found or written at `at`. */
-  function placeAnchor(text, home, at) {
-    const first = placeScope(text, home).within[0];
-    if (first) return [text, first.term.end];
+  /* `lens::place_settle`: where the caret rests after a press of the place
+     lens wrote `text`. `not`: on the `!under:` nearest `at`. Else at the end
+     of the group's last `under:`; with none, an empty `under:`, found or
+     written at `at`. */
+  function placeSettle(text, at, not) {
     const all = placeTerms(text);
+    const excluded = all.filter((t) => t.not && t.field === "under");
+    if (not && excluded.length) {
+      const near = excluded.reduce((b, t) => (Math.abs(t.start - at) < Math.abs(b.start - at) ? t : b));
+      return [text, near.end];
+    }
+    const run = placeRuns(text).find((r) => r.some(isPlace));
+    if (run) return [text, run.filter(isPlace).pop().end];
     const empty = all.find((t) => isPlace(t) && t.value === "");
     if (empty) return [text, empty.end];
     let p = Math.min(at, text.length);

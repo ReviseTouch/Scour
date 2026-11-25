@@ -1,8 +1,8 @@
   /* ---------------- the terms ----------------
    * `scour_ui::lens::terms` (`lens/split.rs`) in the page's words: where one
    * term ends and the next begins as the service reads it. Words split on
-   * whitespace and `|` outside quotes; an `ext:` or `kind:` list goes on
-   * across a `;` with spaces round it. Offsets are the text's own. */
+   * whitespace, `|` and `;` outside quotes; an `ext:` or `kind:` list goes
+   * on across a `;` with spaces round it. Offsets are the text's own. */
 
   /* `lens::term`: one term by its offsets, its field folded to the lens's name. */
   function placeTerm(text, start, end) {
@@ -23,7 +23,7 @@
     for (const [s, e] of splitJoined(text, splitWords(text))) {
       const raw = text.slice(s, e);
       if (/^;+$/.test(raw)) continue;
-      const pieces = splitIsList(splitCondensed(raw)) ? splitCut(text, s, e) : [[s, e]];
+      const pieces = splitIsList(splitCondensed(raw)) ? splitCut(text, s, e) : splitSemis(text, s, e);
       for (const [a, b] of pieces) splitAlternatives(text, a, b, out);
     }
     return out;
@@ -77,6 +77,18 @@
       out.push(splitTrimmed(text, from, from + at));
       from += at + 1;
     }
+  }
+
+  /* A word that is no list, cut on every `;` outside quotes. */
+  function splitSemis(text, s, e) {
+    const out = [];
+    let from = s, at;
+    while ((at = splitUnquoted(text.slice(from, e), ";")) !== null) {
+      out.push([from, from + at]);
+      from += at + 1;
+    }
+    out.push([from, e]);
+    return out;
   }
 
   /* The terms of one piece: cut on `|` outside quotes. */

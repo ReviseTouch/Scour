@@ -789,6 +789,9 @@
     const anchor = e.shiftKey ? (q.selectionDirection === "backward" ? q.selectionEnd : q.selectionStart) : off;
     qDrag = { anchor };
     setRange(anchor, off);
+    // A press into a folder part edits it; one on a disk rests.
+    if (!e.shiftKey && pressEdits) editingAt(off);
+    else if (!e.shiftKey && pressEdits === false) qEdit = null;
   });
   document.addEventListener("mousemove", (e) => {
     if (!qDrag) return;

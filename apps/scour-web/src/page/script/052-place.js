@@ -32,12 +32,17 @@
     return !rest || rest.startsWith("/") ? home + rest : p;
   }
   const placeNorm = (home, p) => untrailed(fullIn(home, p));
-  /* A path as a term's value: quoted when a space or a `|` would cut it. */
-  const quotedPath = (p) => (/[\s|]/.test(p) ? '"' + p + '"' : p);
+  /* A path as a term's value: quoted when a space, `|` or `;` would cut it. */
+  const quotedPath = (p) => (/[\s|;]/.test(p) ? '"' + p + '"' : p);
 
-  /* `lens::replace`: one term for another; for nothing, a space beside it goes too. */
+  /* `lens::replace`: one term for another; for nothing, as `remove_term`. */
   function placeReplace(text, t, by) {
     if (by) return [text.slice(0, t.start) + by + text.slice(t.end), t.start + by.length];
+    return placeRemove(text, t);
+  }
+
+  /* `lens::drop_alone`: a term of no run taken out, and one space beside it. */
+  function placeDropAlone(text, t) {
     let a = t.start, b = t.end;
     if (text[b] === " ") b++;
     else if (text[a - 1] === " ") a--;
@@ -66,7 +71,7 @@
     const cut = (a, b) => [text.slice(0, a) + text.slice(b), a];
     if (k >= 0 && k + 1 < run.length) return cut(t.start, run[k + 1].start);
     if (k > 0) return cut(run[k - 1].end, t.end);
-    return placeReplace(text, t, "");
+    return placeDropAlone(text, t);
   }
 
   const isPlace = (t) => t.field === "under" && !t.not;

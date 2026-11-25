@@ -70,11 +70,6 @@
     return placeAt(t.value, HOME);
   }
 
-  /* The lens's term as the place model reads it. */
-  function placeLensTerm() {
-    return placeTerms(q.value).find((x) => x.start === LENS.a) || null;
-  }
-
   /* A folder's own folders: weighed by `usage`, and the light ones `tree` adds. */
   function placeDirsOf(part) {
     const want = fold(part);
@@ -147,7 +142,8 @@
   /* Write what a click made, and keep the lens on the place group's first
      term, so the panel does not move under the pointer. */
   function placeWrite(text, viewDir, sel) {
-    const [out, at] = placeAnchor(text, HOME, LENS.a);
+    const [out, at] = placeSettle(text, LENS.a, LENS.term.not);
+    qEdit = null;
     placeSelAfter = sel ?? LENS.sel;
     q.value = out;
     q.setSelectionRange(at, at);
@@ -178,8 +174,7 @@
 
   /* "Add": into the group, never out of it; the lens's term gives way while typed. */
   function placePressAdd(path) {
-    const typed = placeView && placeView.text === q.value ? null : placeLensTerm();
-    placeWrite(placeAdd(q.value, HOME, path, typed)[0], LENS.placeDir);
+    placeWrite(placeAddAt(q.value, HOME, path, queryCaret())[0], LENS.placeDir);
   }
 
   /* "Exclude": its own `!under:` term at the end, or taken away again. */
@@ -191,7 +186,7 @@
   function placeDrop(n) {
     const spot = spots(q.value, HOME, placeTilesNow())[n];
     if (!spot) return;
-    placeWrite(spotRemove(spot, q.value, HOME)[0], LENS.placeDir);
+    placeWrite(spotRemove(spot, q.value)[0], LENS.placeDir);
   }
 
   function placeAnswer(id, what) {

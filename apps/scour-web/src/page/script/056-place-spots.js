@@ -1,7 +1,7 @@
   /* ---------------- where the query looks ----------------
    * `scour_ui::lens::spots` and `lens::capsule` in the page's words: the
    * entries of "Searching in", the scope chip's line and dots, and the parts
-   * a run of `under:` terms is drawn as. Pure; kept alike by the page test. */
+   * a run of `under:` terms, or a block of `!under:` ones, is drawn as. Pure; kept alike by the page test. */
 
   /* `path::leaf`: the last component; a path of slashes is its own name. */
   function pathLeaf(p) {
@@ -19,9 +19,12 @@
     return { tile: null, name: shown, short: pathLeaf(shown), kind: null, not, paths: [h.path], terms: [h.term] };
   }
 
-  /* `Spot::remove`: a tile goes as `tile_toggle(…, Also)`, the rest as its term. */
-  function spotRemove(spot, text, home) {
-    return spot.tile !== null ? tileToggle(text, home, spot.paths, Pick.Also) : placeRemove(text, spot.terms[0]);
+  /* `Spot::remove`: the query without its terms, each with one `|` beside it,
+     in whichever run they are; the caret where the first was. */
+  function spotRemove(spot, text) {
+    let out = [text, spot.terms[0].start];
+    for (const t of [...spot.terms].reverse()) out = placeRemove(out[0], t);
+    return out;
   }
 
   /* `lens::tile_held`: the place group holds every root of the tile. */
@@ -36,30 +39,33 @@
   }
 
   /* `lens::spots`: where `text` looks, in the order of its terms — a tile
-     held whole as one — and then where it does not. */
+     held whole as one — and then where it does not, a tile left out whole too. */
   function spots(text, home, tiles) {
     const s = placeScope(text, home);
-    return [...placeGather(s.within, home, tiles, null), ...s.outside.map((h) => spotFolder(h, home, true))];
+    return [...placeGather(s.within, home, tiles, false, null), ...placeGather(s.outside, home, tiles, true, null)];
   }
 
-  /* `spots::gather`: each tile whose roots `members` all hold is one entry,
-     at its first member, `lone` left out of it; every other member its own. */
-  function placeGather(members, home, tiles, lone) {
-    const paths = members.map((h) => h.path);
+  /* `spots::gather`: `members` as entries in the order of the text, a tile
+     whose roots they all hold as one. With `raw` (a capsule's parts) a tile
+     collapses only over consecutive members, none of them raw. */
+  function placeGather(members, home, tiles, not, raw) {
     const taken = members.map(() => false);
     const out = [];
     tiles.forEach((t, k) => {
-      if (!tileChoosable(t) || !t.roots.length || !t.roots.every((r) => paths.includes(r))) return;
-      const terms = [];
-      members.forEach((h, i) => {
-        if (taken[i] || !t.roots.includes(h.path) || (lone && sameTerm(lone, h.term))) return;
-        taken[i] = true;
-        terms.push(h.term);
-      });
-      if (terms.length) out.push({ tile: k, name: t.name, short: t.name, kind: t.kind, not: false, paths: [...t.roots], terms });
+      const on = members.map((_, i) => i).filter((i) => !taken[i] && t.roots.includes(members[i].path));
+      if (!placeCollapses(t, members, on, raw)) return;
+      on.forEach((i) => { taken[i] = true; });
+      out.push({ tile: k, name: t.name, short: t.name, kind: t.kind, not, paths: [...t.roots], terms: on.map((i) => members[i].term) });
     });
-    members.forEach((h, i) => { if (!taken[i]) out.push(spotFolder(h, home, false)); });
+    members.forEach((h, i) => { if (!taken[i]) out.push(spotFolder(h, home, not)); });
     return out.sort((x, y) => x.terms[0].start - y.terms[0].start);
+  }
+
+  /* `spots::collapses`: the members at `on` stand for the whole tile. */
+  function placeCollapses(t, members, on, raw) {
+    const all = t.roots.every((r) => on.some((i) => members[i].path === r));
+    if (!tileChoosable(t) || !t.roots.length || !all) return false;
+    return !raw || (on.every((i) => !raw(members[i].term)) && on[on.length - 1] - on[0] + 1 === on.length);
   }
 
   /* `lens::chip_label`: "everywhere", or the short names joined by " + ",
@@ -91,21 +97,31 @@
     return out;
   }
 
-  /* `lens::place_caps`: every run made only of positive `under:` terms, as
-     one capsule of parts, every part shown. `caret` is null without one. */
-  function placeCaps(text, home, tiles, caret) {
-    const inside = (t) => caret !== null && t.start < caret && caret <= t.end;
-    return placeRuns(text).filter((r) => r.every(isPlace)).map((run) => {
-      const members = run.map((t) => ({ path: placeNorm(home, t.value), term: t }));
-      const lone = run.find(inside) || null;
-      const parts = placeGather(members, home, tiles, lone).map((spot) => {
-        const caretIn = spot.terms.some(inside);
-        const empty = spot.tile === null && spot.terms[0].value === "";
-        const steps = spot.tile === null && !empty ? crumbs(spot.paths[0], home) : [];
-        return { spot, crumbs: steps, raw: caretIn || empty, caret: caretIn, shown: true };
-      });
-      return { start: run[0].start, end: run[run.length - 1].end, parts, hidden: 0 };
+  /* `lens::place_caps_at`: every run made only of positive `under:` terms as
+     one capsule of parts, every part shown. `caret` is a `Caret`, or null. */
+  function placeCapsAt(text, home, tiles, caret) {
+    return placeRuns(text).filter((r) => r.every(isPlace)).map((run) => placeCapOfTerms(run, home, tiles, caret, false));
+  }
+
+  /* `lens::exclusion_caps`: each block of standalone `!under:` terms side by
+     side as one negated capsule, drawn as a group is. */
+  function exclusionCaps(text, home, tiles, caret) {
+    return exclusionBlocks(text).map((block) => placeCapOfTerms(block, home, tiles, caret, true));
+  }
+
+  function placeCapOfTerms(members, home, tiles, caret, not) {
+    const held = members.map((t) => ({ path: placeNorm(home, t.value), term: t }));
+    const parts = placeGather(held, home, tiles, not, (t) => isEdited(t, caret)).map((spot) => {
+      const empty = spot.tile === null && spot.terms[0].value === "";
+      return {
+        spot,
+        crumbs: spot.tile === null && !empty ? crumbs(spot.paths[0], home) : [],
+        raw: spot.tile === null && isEdited(spot.terms[0], caret),
+        caret: !!caret && spot.terms.some((t) => t.start < caret.at && caret.at <= t.end),
+        shown: true,
+      };
     });
+    return { start: members[0].start, end: members[members.length - 1].end, parts, hidden: 0 };
   }
 
   /* `PlaceCap::part_at`: the part an offset of the run is drawn at — the one

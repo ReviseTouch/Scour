@@ -777,7 +777,7 @@ test('a filter says what it holds in words, and an empty one waits for its value
     q, shadow: { innerHTML: '' },
     LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
     fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
-    placeCapsDrawn: () => [], placeCapKey: () => null,
+    placeCapsDrawn: () => [], placeCapKey: () => null, queryCaret: () => null, placeTerms: () => [],
     T: (id, v) => (v ? id.replace(/\{(\w+)\}/g, (_, k) => v[k]) : id), KIND_KEY: { doc: 'Document', code: 'Code' },
     Date, Intl, LANG: 'en', DAY: 86400, fmt: String,
   });
@@ -836,7 +836,7 @@ test('capsule field headers render as cap-head and block caret or backspace insi
     q, shadow: { innerHTML: '' },
     LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
     fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
-    placeCapsDrawn: () => [], placeCapKey: () => null,
+    placeCapsDrawn: () => [], placeCapKey: () => null, queryCaret: () => null, placeTerms: () => [],
     T: (id) => id, KIND_KEY: {}, KIND_VALUES: [],
   });
   vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
@@ -891,13 +891,16 @@ function placeModel() {
   vm.runInContext(section('  function placeParts(v) {', '\n  function lensClose()'), c);
   vm.runInContext(section('  /* ---------------- the terms', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
+  vm.runInContext(section('  /* ---------------- the caret over a place capsule', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place rules', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- where the query looks', '\n  /* ---------------- '), c);
   vm.runInContext(section('  function scopeSays(', '\n  /* As many names'), c);
-  return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeRuns, placeRunOf,
-    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, scopeSays, STRIP_FLOOR, DISK_KINDS,
-    placeTermAt, placeAdd, placeExclude, placeAnchor, placeAt, withoutPlaces, spots, spotRemove,
-    chipLabel, chipDots, tileHeld, tileLit, crumbs, placeCaps, capPartAt, capFold })`, c);
+  return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeReplace, placeRuns, placeRunOf,
+    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, scopeSays, STRIP_FLOOR, DISK_KINDS, quotedPath,
+    placeTermAt, placeAddAt, placeAddWith, placeExclude, placeSettle, placeAt, withoutPlaces, spots, spotRemove,
+    chipLabel, chipDots, tileHeld, tileLit, crumbs, placeCapsAt, exclusionCaps, capPartAt, capFold,
+    capStops, capStep, capBlocks, opensByItself, editedTerm, caretResting, caretEditing,
+    negatePlaces, unnegatePlaces, exclusionBlocks })`, c);
 }
 
 test('the place group: a disk in, a second beside it, one out, none left (lens/group_tests.rs)', () => {
@@ -1133,19 +1136,19 @@ function ruleMachine(M) {
 test('Add joins, narrows and widens in place, and never takes a folder out (lens/folders_tests.rs)', () => {
   const M = placeModel();
   const H = PLACE_HOME;
-  const add = (q, p) => M.placeAdd(q, H, p, null)[0];
+  const add = (q, p) => M.placeAddWith(q, H, p, null)[0];
   // add_joins_the_group_and_says_where_it_wrote
-  let [q, at] = M.placeAdd('rapor under:/mnt/depo ext:pdf', H, '/usr', null);
+  let [q, at] = M.placeAddWith('rapor under:/mnt/depo ext:pdf', H, '/usr', null);
   assert.equal(q, 'rapor under:/mnt/depo|under:/usr ext:pdf');
   assert.equal(q.slice(0, at), 'rapor under:/mnt/depo|under:/usr');
   assert.equal(add('rapor', '/home/hasan/Belgeler'), 'rapor under:~/Belgeler');
   assert.equal(add('', '/'), 'under:/');
   // add_never_takes_a_folder_out
   const g = 'rapor under:/mnt/depo|under:/usr';
-  assert.deepEqual(J(M.placeAdd(g, H, '/usr/', null)), [g, g.length]);
+  assert.deepEqual(J(M.placeAddWith(g, H, '/usr/', null)), [g, g.length]);
   assert.equal(add(add(g, '/opt'), '/opt'), add(g, '/opt'));
   // a_folder_inside_a_member_narrows_it_where_it_stands
-  [q, at] = M.placeAdd('rapor under:~|under:/mnt/depo', H, '~/Belgeler', null);
+  [q, at] = M.placeAddWith('rapor under:~|under:/mnt/depo', H, '~/Belgeler', null);
   assert.equal(q, 'rapor under:~/Belgeler|under:/mnt/depo');
   assert.equal(q.slice(0, at), 'rapor under:~/Belgeler');
   assert.equal(add('rapor ' + SYSTEM, '/home/hasan/Projeler/Scour'),
@@ -1157,13 +1160,14 @@ test('Add joins, narrows and widens in place, and never takes a folder out (lens
   // an_empty_place_or_one_being_typed_gives_way
   assert.equal(add('rapor under: ext:pdf', '/mnt/depo'), 'rapor under:/mnt/depo ext:pdf');
   const typed = 'rapor under:/mnt/depo|under:~/gel';
-  assert.equal(M.placeAdd(typed, H, '~/Belgeler', M.placeTermAt(typed, typed.length))[0], 'rapor under:/mnt/depo|under:~/Belgeler');
+  const at_ = (q, p, c) => M.placeAddAt(q, H, p, c)[0];
+  assert.equal(at_(typed, '~/Belgeler', M.caretEditing(typed.length)), 'rapor under:/mnt/depo|under:~/Belgeler');
   const walked = 'rapor under:~/';
-  assert.equal(M.placeAdd(walked, H, '~/Belgeler', M.placeTermAt(walked, walked.length))[0], 'rapor under:~/Belgeler');
+  assert.equal(at_(walked, '~/Belgeler', M.caretEditing(walked.length)), 'rapor under:~/Belgeler');
   const other = 'rapor under:/mnt/depo ext:pd';
-  assert.equal(M.placeAdd(other, H, '/usr', M.placeTermAt(other, other.length))[0], 'rapor under:/mnt/depo|under:/usr ext:pd');
+  assert.equal(at_(other, '/usr', M.caretEditing(other.length)), 'rapor under:/mnt/depo|under:/usr ext:pd');
   // add_takes_away_the_same_folders_exclusion
-  [q, at] = M.placeAdd('!under:~/x rapor under:/usr', H, '~/x', null);
+  [q, at] = M.placeAddWith('!under:~/x rapor under:/usr', H, '~/x', null);
   assert.equal(q, 'rapor under:/usr|under:~/x');
   assert.equal(q.slice(0, at), 'rapor under:/usr|under:~/x');
   assert.equal(add('rapor !under:~/x/y', '~/x'), 'rapor !under:~/x/y under:~/x');
@@ -1188,16 +1192,24 @@ test('Exclude toggles its own term and takes a held folder out (lens/folders_tes
   assert.equal(M.placeExclude('under:~', H, '~')[0], '!under:~');
 });
 
-test('the caret rests on the group, and the list shows the folder the value names (lens/folders_tests.rs)', () => {
+test('the caret settles, and the list shows the folder the value names (lens/folders_tests.rs)', () => {
   const M = placeModel();
   const H = PLACE_HOME;
-  // the_caret_rests_on_the_group_or_an_empty_place
-  const [q, at] = M.placeAnchor('rapor under:/a|under:/b', H, 0);
-  assert.equal(q.slice(0, at), 'rapor under:/a');
-  assert.deepEqual(J(M.placeAnchor('under: rapor', H, 9)), ['under: rapor', 6]);
-  assert.deepEqual(J(M.placeAnchor('rapor ext:pdf', H, 6)), ['rapor under: ext:pdf', 12]);
-  assert.deepEqual(J(M.placeAnchor('rapor', H, 99)), ['rapor under:', 12]);
-  assert.deepEqual(J(M.placeAnchor('rapor ext:pdf', H, 8)), ['rapor ext:pdf under:', 20], 'inside a term, after it');
+  // the_caret_rests_on_the_group_or_an_empty_place: its empty places, through place_settle
+  assert.deepEqual(J(M.placeSettle('under: rapor', 9, false)), ['under: rapor', 6]);
+  assert.deepEqual(J(M.placeSettle('rapor ext:pdf', 6, false)), ['rapor under: ext:pdf', 12]);
+  assert.deepEqual(J(M.placeSettle('rapor', 99, false)), ['rapor under:', 12]);
+  assert.deepEqual(J(M.placeSettle('rapor ext:pdf', 8, false)), ['rapor ext:pdf under:', 20], 'inside a term, after it');
+  // the_caret_settles_at_the_groups_end_or_stays_on_an_exclusion
+  let q = 'rapor under:/a|under:/b ext:pdf';
+  assert.equal(q.slice(0, M.placeSettle(q, 6, false)[1]), 'rapor under:/a|under:/b');
+  q = 'rapor under:/a !under:/x !under:/y';
+  assert.equal(q.slice(0, M.placeSettle(q, 25, true)[1]), q, 'on the exclusion it was on');
+  assert.equal(q.slice(0, M.placeSettle(q, 15, true)[1]), 'rapor under:/a !under:/x');
+  assert.equal(q.slice(0, M.placeSettle(q, 25, false)[1]), 'rapor under:/a');
+  assert.equal(M.placeSettle('rapor under:/a', 6, true)[1], 14);
+  assert.deepEqual(J(M.placeSettle('rapor ext:pdf', 6, true)), ['rapor under: ext:pdf', 12]);
+  assert.equal(M.placeSettle('rapor under:/a|under: x', 0, false)[1], 21);
   // the_list_shows_the_folder_the_value_names
   assert.deepEqual(J(M.placeAt('~/Bel', H)), [H, 'Bel']);
   assert.deepEqual(J(M.placeAt('', H)), [H, '']);
@@ -1241,8 +1253,8 @@ test('where the query looks: a disk held whole is one entry, and each goes alone
   assert.deepEqual([s[0].name, s[0].kind, s[0].tile], ['CACHY', 'system', 0]);
   assert.equal(s[0].terms.length, 5);
   assert.deepEqual([s[1].name, s[1].tile], ['Depo', 1]);
-  assert.equal(M.spotRemove(s[0], q, H)[0], 'rapor under:/mnt/depo');
-  assert.equal(M.spotRemove(s[1], q, H)[0], 'rapor ' + SYSTEM);
+  assert.equal(M.spotRemove(s[0], q)[0], 'rapor under:/mnt/depo');
+  assert.equal(M.spotRemove(s[1], q)[0], 'rapor ' + SYSTEM);
   // a_disk_held_in_part_is_its_folders
   assert.deepEqual(names('rapor under:~|under:/usr|under:/mnt/depo/PROJELER !under:~/tmp'),
     [['~', false], ['/usr', false], ['/mnt/depo/PROJELER', false], ['~/tmp', true]]);
@@ -1251,9 +1263,9 @@ test('where the query looks: a disk held whole is one entry, and each goes alone
   const es = M.spots(e, H, tiles);
   assert.deepEqual(J(es.map((x) => x.name)), ['/mnt/depo/My Docs', 'Depo', '/mnt/depo/tmp']);
   assert.equal(es[0].short, 'My Docs');
-  assert.equal(M.spotRemove(es[0], e, H)[0], 'under:/mnt/depo !under:/mnt/depo/tmp rapor');
-  assert.equal(M.spotRemove(es[1], e, H)[0], 'under:"/mnt/depo/My Docs" !under:/mnt/depo/tmp rapor');
-  assert.equal(M.spotRemove(es[2], e, H)[0], 'under:"/mnt/depo/My Docs"|under:/mnt/depo rapor');
+  assert.equal(M.spotRemove(es[0], e)[0], 'under:/mnt/depo !under:/mnt/depo/tmp rapor');
+  assert.equal(M.spotRemove(es[1], e)[0], 'under:"/mnt/depo/My Docs" !under:/mnt/depo/tmp rapor');
+  assert.equal(M.spotRemove(es[2], e)[0], 'under:"/mnt/depo/My Docs"|under:/mnt/depo rapor');
 });
 
 test('the chip says names cut at max, and lights the disks the query can reach (lens/spots_tests.rs)', () => {
@@ -1289,7 +1301,7 @@ test('a run of under: terms is one capsule of parts (lens/capsule_tests.rs)', ()
   const M = placeModel();
   const H = PLACE_HOME;
   const tiles = ruleMachine(M);
-  const caps = (q, caret) => M.placeCaps(q, H, tiles, caret);
+  const caps = (q, caret) => M.placeCapsAt(q, H, tiles, caret === null ? null : M.caretResting(caret));
   // the_system_disk_is_one_part_of_one_capsule
   let q = 'rapor ' + SYSTEM + ' ext:pdf';
   let c = caps(q, null);
@@ -1317,22 +1329,36 @@ test('a run of under: terms is one capsule of parts (lens/capsule_tests.rs)', ()
   assert.deepEqual(J(e.parts[1].crumbs), []);
 });
 
-test('the caret makes its member raw, every offset has a part, and folding keeps it (lens/capsule_tests.rs)', () => {
+test('a resting caret leaves a disk whole, an edited member comes apart (lens/capsule_tests.rs)', () => {
   const M = placeModel();
   const tiles = ruleMachine(M);
-  const caps = (q, caret) => M.placeCaps(q, PLACE_HOME, tiles, caret);
-  // the_member_the_caret_is_in_is_shown_raw
+  const at = (q, caret) => capSaid(M.placeCapsAt(q, PLACE_HOME, tiles, caret)[0]);
+  // a_caret_resting_on_a_tile_leaves_it_whole
   let q = SYSTEM + '|under:/mnt/depo';
-  const tilde = q.indexOf('~') + 1;
-  let c = caps(q, tilde)[0];
-  assert.deepEqual(capSaid(c), ['CACHY', '[1]', 'Depo']);
-  assert.ok(c.parts[1].caret && !c.parts[0].caret);
-  assert.equal(c.parts[0].spot.terms.length, 4);
-  assert.deepEqual(capSaid(caps(q, q.length)[0]), ['CACHY', '[1]'], 'editing Depo leaves no Depo part');
-  assert.deepEqual(capSaid(caps(q, 0)[0]), ['CACHY', 'Depo'], 'before the first letter, in none of it');
+  const first = 'under:/etc'.length;
+  const c = M.placeCapsAt(q, PLACE_HOME, tiles, M.caretResting(first))[0];
+  assert.deepEqual(capSaid(c), ['CACHY', 'Depo']);
+  assert.ok(c.parts[0].caret && !c.parts[0].raw);
+  assert.deepEqual(at(q, M.caretResting(q.length)), ['CACHY', 'Depo']);
+  assert.deepEqual(at(q, M.caretResting(0)), ['CACHY', 'Depo']);
+  // a_member_being_edited_is_raw_and_its_tile_comes_apart
+  const tilde = q.indexOf('~');
+  const apart = ['/ › etc', '[1]', '/ › opt', '/ › usr', '/ › var', 'Depo'];
+  assert.deepEqual(at(q, M.caretResting(tilde)), apart, 'strictly inside, however it got there');
+  assert.deepEqual(at(q, M.caretEditing(tilde + 1)), apart);
+  assert.deepEqual(at(q, M.caretEditing(q.length)), ['CACHY', '[1]']);
+  q = 'rapor under:~/Belgeler';
+  assert.deepEqual(at(q, M.caretResting(q.length)), ['~ › Belgeler'], 'a folder at rest is crumbs');
+  assert.deepEqual(at(q, M.caretEditing(q.length)), ['[1]'], 'typed into, its letters');
+});
+
+test('every offset of a run has a part, and folding keeps the caret part (lens/capsule_tests.rs)', () => {
+  const M = placeModel();
+  const tiles = ruleMachine(M);
+  const caps = (q, caret) => M.placeCapsAt(q, PLACE_HOME, tiles, caret === null ? null : M.caretResting(caret));
   // every_offset_of_the_run_has_a_part
-  q = 'rapor ' + SYSTEM + '|under:/mnt/depo|under:~/x';
-  c = caps(q, null)[0];
+  const q = 'rapor ' + SYSTEM + '|under:/mnt/depo|under:~/x';
+  const c = caps(q, null)[0];
   assert.deepEqual(capSaid(c), ['CACHY', 'Depo', '~ › x']);
   assert.equal(M.capPartAt(c, c.start - 1), null);
   assert.equal(M.capPartAt(c, c.end + 1), null);
@@ -1343,7 +1369,7 @@ test('the caret makes its member raw, every offset has a part, and folding keeps
   assert.equal(M.capPartAt(c, c.end), 2);
   for (let at = c.start + 1; at <= c.end; at++) {
     const k = M.capPartAt(c, at);
-    const raw = caps(q, at)[0].parts.find((p) => p.caret);
+    const raw = caps(q, at)[0].parts.find((p) => p.raw);
     if (!raw) continue;
     const t = raw.spot.terms[0];
     assert.ok(t.start < at && at <= t.end, String(at));
@@ -1361,6 +1387,166 @@ test('the caret makes its member raw, every offset has a part, and folding keeps
   assert.equal(fc.hidden, 0);
   M.capFold(fc, 0);
   assert.equal(fc.hidden, 4);
+});
+
+test('the arrows stop once a collapsed part, at every letter of a raw one (lens/caret_tests.rs)', () => {
+  const M = placeModel();
+  const tiles = ruleMachine(M);
+  const cap = (q, caret) => M.placeCapsAt(q, PLACE_HOME, tiles, caret)[0];
+  const walk = (c, q, forward) => {
+    let at = forward ? c.start : c.end;
+    const out = [at];
+    for (let next; (next = M.capStep(c, q, at, forward)) !== null; at = next) out.push(next);
+    return out;
+  };
+  const ends = (q) => M.placeTerms(q).map((t) => t.end);
+  // the_arrows_cross_a_collapsed_disk_in_one_step
+  let q = 'rapor ' + SYSTEM + '|under:/mnt/depo ext:pdf';
+  let c = cap(q, M.caretResting(6 + 'under:/etc'.length));
+  const varEnd = q.indexOf('|under:/mnt');
+  assert.deepEqual(walk(c, q, true), [6, varEnd, c.end]);
+  assert.deepEqual(walk(c, q, false), [c.end, varEnd, 6]);
+  assert.equal(M.capStep(c, q, c.end, true), null, '→ at the end leaves the capsule');
+  assert.equal(M.capStep(c, q, 3, true), null, 'outside it, the face moves');
+  // a_block_of_hidden_parts_is_one_stop
+  q = 'under:/a|under:/b|under:/c|under:/d|under:/e';
+  const e = ends(q);
+  c = cap(q, null);
+  M.capFold(c, 2);
+  assert.deepEqual(J(M.capBlocks(c)), [[2, 3]]);
+  assert.deepEqual(walk(c, q, true), [0, e[0], e[1], e[4]]);
+  c = cap(q, M.caretResting(e[2]));
+  M.capFold(c, 2);
+  assert.deepEqual(J(M.capBlocks(c)), [[1, 1], [3, 2]]);
+  assert.deepEqual(walk(c, q, true), [0, e[0], e[1], e[2], e[4]]);
+  // a_raw_part_stops_at_every_letter_and_never_inside_a_collapsed_one (offsets in UTF-16 here)
+  q = 'under:/mnt/depo|under:~/Müzik';
+  c = cap(q, M.caretEditing(q.length));
+  const raw = M.placeTerms(q)[1];
+  const stops = J(M.capStops(c, q));
+  const letters = [];
+  for (let o = raw.start; o <= raw.end; o++) letters.push(o);
+  assert.deepEqual(stops.slice(0, 2), [0, 'under:/mnt/depo'.length]);
+  assert.deepEqual(stops.slice(2), letters);
+  assert.ok(!stops.includes(3), "not inside Depo's letters");
+  const u = q.indexOf('ü');
+  assert.equal(M.capStep(c, q, u, true), u + 'ü'.length);
+});
+
+test('a lens opens by itself only where the person edits, and the edited term is said once (lens/caret_tests.rs)', () => {
+  const M = placeModel();
+  // a_lens_opens_by_itself_only_where_the_person_edits
+  const rests = (q) => M.opensByItself(q, M.caretResting(q.length));
+  const types = (q) => M.opensByItself(q, M.caretEditing(q.length));
+  let q = 'rapor under:~/Belgeler';
+  assert.ok(!rests(q) && types(q));
+  assert.ok(M.opensByItself(q, M.caretResting(q.length - 1)), 'inside it');
+  assert.ok(rests('rapor under:'), 'nothing chosen yet');
+  assert.ok(!rests(SYSTEM) && !rests('rapor !under:/tmp'));
+  assert.ok(types('rapor !under:/tmp'));
+  assert.ok(M.opensByItself('!under:/a|under:/b', M.caretResting(9)), 'not a capsule: as before');
+  assert.ok(M.opensByItself('under:/a|ext:pdf', M.caretResting(8)));
+  assert.ok(rests('rapor dm:7d') && !rests('rapor'));
+  // the_edited_term_is_said_once
+  q = 'rapor under:~/Bel';
+  assert.equal(M.editedTerm(q, M.caretEditing(q.length)).start, 6);
+  assert.equal(M.editedTerm(q, M.caretResting(q.length)), null);
+  assert.equal(M.editedTerm(q, M.caretResting(14)).start, 6);
+  assert.ok(M.editedTerm('under:', M.caretResting(6)));
+  assert.equal(M.editedTerm(q, M.caretEditing(6)), null, 'before its first letter');
+});
+
+test('Add lets only the member being edited give way, and every writer quotes | and ; (lens/folders_tests.rs)', () => {
+  const M = placeModel();
+  const H = PLACE_HOME;
+  const at = (q, p, c) => M.placeAddAt(q, H, p, c)[0];
+  // add_at_lets_only_the_member_being_edited_give_way
+  let q = 'rapor under:/mnt/depo';
+  assert.equal(at(q, '/usr', M.caretResting(q.length)), 'rapor under:/mnt/depo|under:/usr');
+  q = 'rapor under:~/gel';
+  assert.equal(at(q, '~/Belgeler', M.caretResting(q.length)), 'rapor under:~/gel|under:~/Belgeler');
+  assert.equal(at(q, '~/Belgeler', M.caretEditing(q.length)), 'rapor under:~/Belgeler');
+  q = 'rapor under:/mnt/depo';
+  assert.equal(at(q, '/usr', M.caretEditing(q.length)), 'rapor under:/usr');
+  assert.equal(at(q, '/usr', M.caretResting(14)), 'rapor under:/usr', 'inside it');
+  q = 'rapor under:/a ext:pd';
+  assert.equal(at(q, '/b', M.caretEditing(q.length)), 'rapor under:/a|under:/b ext:pd');
+  assert.equal(at('rapor under:', '/b', M.caretResting(0)), 'rapor under:/b');
+  // every_path_writer_quotes_a_bar_and_a_semicolon (no `lens::place` here; the page writes through quotedPath)
+  for (const [path, written] of [['/srv/a;b', 'under:"/srv/a;b"'], ['/srv/a|b', 'under:"/srv/a|b"'], ['/srv/a b', 'under:"/srv/a b"']]) {
+    assert.equal(M.placeAddWith('', H, path, null)[0], written);
+    assert.equal(M.placeExclude('', H, path)[0], '!' + written);
+    assert.equal('under:' + M.quotedPath(path), written);
+    assert.equal(M.placeScope(written, H).within[0].path, path, 'read back whole');
+  }
+});
+
+test('a group turned round is one exclusion each, and back (lens/negate_tests.rs)', () => {
+  const M = placeModel();
+  const NONE_OF = '!under:/etc !under:~ !under:/opt !under:/usr !under:/var !under:/mnt/depo';
+  // a_group_turned_round_is_one_exclusion_each_and_back
+  const q = 'rapor ' + SYSTEM + '|under:/mnt/depo ext:pdf';
+  const [out, at] = M.negatePlaces(q, 10);
+  assert.equal(out, 'rapor ' + NONE_OF + ' ext:pdf');
+  assert.equal(out.slice(0, at), 'rapor ' + NONE_OF);
+  const [back, at2] = M.unnegatePlaces(out, out.length - 9);
+  assert.equal(back, q);
+  assert.equal(back.slice(0, at2), 'rapor ' + SYSTEM + '|under:/mnt/depo');
+  // quotes_spaces_and_empty_members
+  const sp = 'under:"/mnt/depo/My Docs" | under:~';
+  const [neg] = M.negatePlaces(sp, 0);
+  assert.equal(neg, '!under:"/mnt/depo/My Docs" !under:~');
+  assert.equal(M.unnegatePlaces(neg, 0)[0], 'under:"/mnt/depo/My Docs"|under:~');
+  assert.equal(M.negatePlaces('under:/a|under:', 0)[0], '!under:/a');
+  assert.deepEqual(J(M.negatePlaces('rapor under:/a', 2)), ['rapor under:/a', 2]);
+  assert.equal(M.negatePlaces('under:/a|ext:pdf', 0)[0], 'under:/a|ext:pdf');
+  assert.equal(M.unnegatePlaces('!under:/a|!under:/b', 0)[0], '!under:/a|!under:/b');
+  // exclusions_side_by_side_are_one_block
+  const spans = (s) => J(M.exclusionBlocks(s).map((b) => b.map((t) => t.start)));
+  assert.deepEqual(spans('!under:/a !under:/b rapor !under:/c'), [[0, 10], [26]]);
+  assert.deepEqual(spans('!under:/a|under:/b'), []);
+  assert.deepEqual(spans('!under:/a !ext:pdf !under:/b'), [[0], [19]]);
+  // an_excluded_disk_is_one_part_of_one_negated_capsule
+  const tiles = ruleMachine(M);
+  const x = 'rapor ' + NONE_OF + ' !under:/tmp';
+  let caps = M.exclusionCaps(x, PLACE_HOME, tiles, null);
+  assert.equal(caps.length, 1);
+  assert.deepEqual(J(caps[0].parts.map((p) => p.spot.name)), ['CACHY', 'Depo', '/tmp']);
+  assert.ok(caps[0].parts.every((p) => p.spot.not));
+  assert.equal(x.slice(caps[0].start, caps[0].end), NONE_OF + ' !under:/tmp');
+  caps = M.exclusionCaps(x, PLACE_HOME, tiles, M.caretEditing(x.indexOf('~') + 1));
+  assert.equal(caps[0].parts.length, 7, 'editing one root takes its disk apart');
+  assert.ok(caps[0].parts[1].raw);
+});
+
+test('a spot leaves its own run, a disk left out whole is one entry, an empty member takes its bar (lens/spots_tests.rs, group_tests.rs)', () => {
+  const M = placeModel();
+  const H = PLACE_HOME;
+  const tiles = ruleMachine(M);
+  // a_spot_of_any_run_is_taken_out_of_its_own_run
+  let q = 'under:/a rapor under:/mnt/depo|under:/c';
+  const caps = M.placeCapsAt(q, H, tiles, null);
+  const depo = caps[1].parts[0].spot;
+  assert.equal(depo.name, 'Depo');
+  assert.deepEqual(J(M.spotRemove(depo, q)), ['under:/a rapor under:/c', 15]);
+  assert.equal(M.spotRemove(caps[1].parts[1].spot, q)[0], 'under:/a rapor under:/mnt/depo');
+  // a_disk_left_out_whole_is_one_negated_entry
+  q = 'rapor !under:/etc !under:~ !under:/opt !under:/usr !under:/var !under:/mnt/depo/tmp';
+  const s = M.spots(q, H, tiles);
+  assert.deepEqual(J(s.map((x) => [x.name, x.not])), [['CACHY', true], ['/mnt/depo/tmp', true]]);
+  assert.deepEqual(J(M.spotRemove(s[0], q)), ['rapor !under:/mnt/depo/tmp', 6]);
+  assert.equal(M.chipLabel(s, 3, 'Everywhere'), 'Everywhere');
+  // dropping_an_empty_member_takes_its_bar_too
+  for (const [text, at, want] of [
+    ['rapor under:/a|under: ext:pdf', 2, 'rapor under:/a ext:pdf'],
+    ['rapor under:|under:/a', 1, 'rapor under:/a'],
+    ['rapor under: | under:/a', 1, 'rapor under:/a'],
+    ['rapor under: ext:pdf', 1, 'rapor ext:pdf'],
+  ]) {
+    const t = M.placeTerms(text)[at];
+    assert.equal(M.placeReplace(text, t, '')[0], want, text);
+    assert.equal(M.placeReplace(text, t, '')[0].trim(), want, text);
+  }
 });
 
 // Page only: what the scope chip is drawn from.
@@ -1386,7 +1572,7 @@ test('the scope chip is drawn from the spots and the dots of the volumes answer'
 /* The page's place capsule, drawn and edited: a context with the model and
    the owner's machine as the `volumes` and `sources` answers. */
 function capContext(value, caret) {
-  const q = { value, selectionStart: caret, selectionEnd: caret };
+  const q = { value, selectionStart: caret, selectionEnd: caret, addEventListener() {} };
   const c = context();
   Object.assign(c, { q, HOME: PLACE_HOME, T: (id) => id });
   vm.runInContext(section('  const escape_ = (s) =>', '\n  const SIZE_RE'), c);
@@ -1395,6 +1581,7 @@ function capContext(value, caret) {
   vm.runInContext(section('  const homeForm = (p) =>', '\n  function lensClose()'), c);
   vm.runInContext(section('  /* ---------------- the terms', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
+  vm.runInContext(section('  /* ---------------- the caret over a place capsule', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place rules', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- where the query looks', '\n  /* ---------------- '), c);
   vm.runInContext(section('  function capHint(raw) {', '\n  /* A filter with nothing after'), c);
@@ -1437,15 +1624,16 @@ test('the Location capsule keeps every letter of its run, and says the disks and
   c.capFold(cap, 1);
   const folded = c.placeCapHtml(c.q.value, cap, -1);
   assert.equal(lettersOf(folded), run);
-  assert.match(folded, /class="art pv more" data-at="\d+">\+2<\/span>/);
+  assert.match(folded, /class="art pv more" data-blk="1" data-at="\d+">\+2<\/span>/, 'one +N for the hidden block');
   // The caret in `~`: its letters as typed, in the well; the rest collapsed.
   const at = c.q.value.indexOf('~') + 1;
-  const [edit] = vm.runInContext('placeCapsDrawn(q.value, ' + at + ')', c);
+  const [edit] = vm.runInContext('placeCapsDrawn(q.value, caretEditing(' + at + '))', c);
   const raw = c.placeCapHtml(c.q.value, edit, at);
   assert.equal(lettersOf(raw), run);
   assert.match(raw, /class="term cap place edit"/);
   assert.match(raw, /<span class="pw" data-k="\d" data-hint="which folder\?"><span class="r-value">~<\/span><\/span>/);
-  assert.match(raw, />CACHY<\/span>/);
+  assert.match(raw, /<b>etc<\/b>/, 'editing a root takes its disk apart, as the model says');
+  assert.match(raw, />Depo<\/span>/);
 });
 
 test('Backspace and Delete at a collapsed part take the whole part; typing there starts a word after', () => {
@@ -1465,7 +1653,8 @@ test('Backspace and Delete at a collapsed part take the whole part; typing there
   const typed = capContext(run, tilde);
   assert.deepEqual(J(typed.placeCapType('x')), ['rapor ' + SYSTEM + '|under:/mnt/depo x ext:pdf', run.indexOf(' ext') + 2]);
   assert.equal(capContext(run, depo + 3).placeCapType('x'), null);
-  assert.equal(typed.placeNegated('under:/a|under:"/b c"', 0, 21), '!under:/a !under:"/b c"');
+  assert.equal(key(depo - 1, true)[0], 'rapor under:/mnt/depo ext:pdf', 'Backspace at a disk\'s edge at rest takes the disk');
+  assert.equal(capContext('rapor under:~/x ext:pdf', 15).placeCapType('y'), null, 'at a folder\'s edge, typing edits it');
 });
 
 // The time, type and size panels' model: `scour_ui::lens` `time.rs`,
@@ -1811,12 +2000,19 @@ test('a list goes on across a spaced semicolon, and the drawn terms agree (lens/
     ['x | ext:pdf ; odt', ['x', 'ext:pdf ; odt']], ['ext:pdf|x ; odt', ['ext:pdf', 'x', 'odt']],
     // a_lone_semicolon_is_a_separator_and_other_words_are_as_they_were
     ['rapor ; fatura', ['rapor', 'fatura']], ['under:/a ; under:/b', ['under:/a', 'under:/b']],
-    ['rapor;fatura', ['rapor;fatura']], ['under:/a;b', ['under:/a;b']],
+    // a_semicolon_outside_a_list_cuts_as_the_service_cuts
+    ['rapor;fatura', ['rapor', 'fatura']], ['under:/a;b', ['under:/a', 'b']],
+    ['under:"/a;b" "x;y"', ['under:"/a;b"', '"x;y"']], ['under:/a;', ['under:/a']],
+    ['under:/a;b|under:/c', ['under:/a', 'b', 'under:/c']], ['dm:7d;rapor', ['dm:7d', 'rapor']],
+    ['fuzzy:ab;cd', ['fuzzy:ab', 'cd']], ['ext:pdf ; odt;rapor x;y', ['ext:pdf ; odt;rapor', 'x', 'y']],
+    ['ext:pdf;dm:7d;x', ['ext:pdf', 'dm:7d', 'x']],
     ['a|!b "x ; y" under:"/m y"', ['a', '!b', '"x ; y"', 'under:"/m y"']], ['', []], [' ; ', []],
   ];
   for (const [q, want] of cases) assert.deepEqual(raw(q), want, q);
   assert.equal(terms('ext:pdf ; dm:7d')[1].field, 'dm');
   assert.equal(run('placeRuns("ext:pdf ; odt|rs").length'), 1, 'one run: (pdf or odt) or rs');
+  assert.deepEqual(run('placeRuns("under:/a;b|under:/c").map((r) => r.length)'), [1, 2], 'under a, and (b or under c)');
+  assert.equal(terms('rapor;fatura')[1].start, 6);
   // the_caret_in_a_spaced_list_is_in_that_list
   for (const c of [13, 14, 15, 19]) assert.equal(run(`placeTermAt("rapor ext:pdf ; odt", ${c}).field`), 'ext', String(c));
   // The capsules are cut the same way, but for two things the drawing does
@@ -1824,7 +2020,6 @@ test('a list goes on across a spaced semicolon, and the drawn terms agree (lens/
   // list a `;` reads as the space the service takes it for.
   const drawn = (q) => run(`terms(${JSON.stringify(q)})`).map(([a, b]) => q.slice(a, b));
   for (const [q, want] of cases) {
-    if (/^(rapor;fatura|under:\/a;b)$/.test(q)) continue;
     assert.deepEqual(drawn(q), want.map((w) => w.replace(/[\s;]+$/, (m) => (/^ext:\s*$/.test(w) ? m : ''))), q);
   }
   assert.deepEqual(drawn('rapor;fatura'), ['rapor', 'fatura']);

@@ -74,7 +74,8 @@
     return [...t.value].length >= 2 ? "word" : null;
   }
 
-  const quoteIf = (v) => (/[\s|]/.test(v) ? '"' + v + '"' : v);
+  /* `lens::quoted`: quoted when a space, `|` or `;` would cut it. */
+  const quoteIf = (v) => (/[\s|;]/.test(v) ? '"' + v + '"' : v);
   const neg = (t) => (t.not ? "!" : "");
   /* A path as a person writes it: under the home folder, with `~`. */
   const homeForm = (p) => (HOME && (p === HOME || p.startsWith(HOME + "/")) ? "~" + p.slice(HOME.length) : p);
@@ -96,6 +97,12 @@
     q.setAttribute("aria-expanded", String(!hintBox.hidden));
   }
 
+  /* The caret only rests on a capsule's part: its lens waits for a press. */
+  function restsOnCapsule(caret) {
+    const t = placeTermAt(q.value, caret);
+    return !!t && capsuleRests(q.value, t, queryCaret());
+  }
+
   /* Open, follow or close the lens for where the caret now is. `asked` is a
      click on the term or Ctrl+Space; otherwise a lens opens by itself only
      at the end of a filter being typed, never for a plain word. */
@@ -105,7 +112,9 @@
     const t = lensTerm(q.value, caret);
     const kind = t && lensKindOf(t);
     const keep = LENS && t && LENS.a === t.a;
-    if (!kind || !(asked || keep || (kind !== "word" && caret === t.b))) { lensClose(); return; }
+    // By itself only at the end of a filter, and never over a capsule's part at rest.
+    const by = kind !== "word" && caret === t.b && !restsOnCapsule(caret);
+    if (!kind || !(asked || keep || by)) { lensClose(); return; }
     const sel = keep && LENS.kind === kind ? LENS.sel : 0;
     const opening = kind === "place" && LENS?.kind !== "place";
     // A panel stays the same opening while its own presses rewrite the text.
@@ -154,7 +163,7 @@
         LENS.title = T("How “{w}” is read", { w: v });
         LENS.foot = T("Only this word changes. Every word at once: Settings → Searching.");
         const out = [L("as typed", "", neg(t) + quoteIf(v), { count: true })];
-        if (!/\s/.test(v)) {
+        if (quoteIf(v) === v) {
           out.push(L("a letter off still matches", "fuzzy:", neg(t) + "fuzzy:" + v, { count: true }));
           out.push(L("these letters in this order", "letters:", neg(t) + "letters:" + v, { count: true }));
         }
@@ -473,9 +482,12 @@
         return true;
       }
       if (c === head && c === tb) {
+        // As `lens::remove_term`: one space, or the `|` of its run, goes with it.
+        const pt = placeTerms(v).find((x) => x.start === ta);
         let a = ta, b = tb;
         if (v[b] === " ") b++; else if (v[a - 1] === " ") a--;
-        q.value = v.slice(0, a) + v.slice(b);
+        if (pt) [q.value, a] = placeRemove(v, pt);
+        else q.value = v.slice(0, a) + v.slice(b);
         q.setSelectionRange(a, a);
         lastQueryCaret = a;
         lensClose();
@@ -643,6 +655,16 @@
     }
     if (e.key === "Delete" && !e.ctrlKey && !e.altKey && !e.metaKey &&
         q.selectionStart === q.selectionEnd && frameDelete()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    // Over a capsule the arrows go part by part — unless a lens on a folder
+    // being edited takes → to go into it.
+    const arrow = e.key === "ArrowRight" || e.key === "ArrowLeft";
+    const into = LENS && !lensBox.hidden && e.key === "ArrowRight" && q.selectionStart === LENS.b &&
+      opensByItself(q.value, queryCaret());
+    if (arrow && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !into && placeArrow(e.key === "ArrowRight")) {
       e.preventDefault();
       e.stopImmediatePropagation();
       return;
