@@ -1,8 +1,14 @@
 //! How a disk is spoken of, by the names the wire gives its kind and state:
-//! one wording for every face, and English msgids for `scour-i18n`.
+//! one wording for every face, and English msgids for `scour-i18n`; and the
+//! place lens's tiles and strip, from the `volumes` and `sources` answers.
+
+mod strip;
+mod tiles;
+pub use strip::*;
+pub use tiles::*;
 
 /// Every kind the wire names, for a face that builds its table up front.
-pub const KINDS: [&str; 4] = ["system", "fixed", "removable", "network"];
+pub const KINDS: [&str; 5] = ["system", "fixed", "removable", "network", "optical"];
 
 /// Every state the wire names.
 pub const STATES: [&str; 7] = [
