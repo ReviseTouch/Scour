@@ -1,7 +1,7 @@
   /* ---------------- the place lens: disks first ----------------
      The strip and the tiles across the top, the folders under them, and
      what the query searches in at the foot. */
-  .lens.lens-place { max-height: min(640px, calc(100vh - 110px)); }
+  .lens.lens-place { max-height: min(640px, var(--lens-room, calc(100vh - 110px))); }
   .lens.lens-place .lp-grid {
     flex: 1 1 auto; min-height: 150px; max-height: 300px;
     grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);

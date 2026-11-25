@@ -359,14 +359,19 @@
     }
     lensBox.hidden = false;
     q.setAttribute("aria-expanded", "true");
-    /* Under the term, at its first letter, on the line it ends on. */
+    /* At the term's first letter; under the line it ends on, or under the
+       whole bar once the query wraps, so no line of it is hidden. */
     const el = termEl(LENS.a);
     const box = qfield.getBoundingClientRect();
     const rects = el ? [...el.getClientRects()] : [];
     const r = rects[rects.length - 1];
     const left = r ? Math.min(rects[0].left, r.left) - box.left : 0;
+    const bar = q.closest(".qline").getBoundingClientRect();
+    const wraps = q.offsetHeight > 1.5 * (parseFloat(getComputedStyle(qfield).getPropertyValue("--q-lh")) || 36);
+    const top = r && !wraps ? r.bottom - box.top + 8 : bar.bottom - box.top + 6;
     lensBox.style.left = Math.max(-box.left + 12, Math.min(left, innerWidth - box.left - lensBox.offsetWidth - 14)) + "px";
-    lensBox.style.top = (r ? r.bottom - box.top + 8 : box.height + 8) + "px";
+    lensBox.style.top = top + "px";
+    lensBox.style.setProperty("--lens-room", Math.max(160, innerHeight - box.top - top - 12) + "px");
     const on = lensBox.querySelector(".lopt.on");
     if (on) on.scrollIntoView({ block: "nearest" });
   }
