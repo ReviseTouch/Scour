@@ -283,3 +283,32 @@ mod side_effects {
         assert!(read >= 20, "{read} closed after reading");
     }
 }
+
+#[test]
+fn a_document_s_markup_is_searched_only_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let docx = make_zip(&[
+        ("[Content_Types].xml", 8, b"<Types/>"),
+        (
+            "word/document.xml",
+            8,
+            b"<w:document><w:body><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Karar</w:t></w:r></w:p></w:body></w:document>",
+        ),
+    ]);
+    let files = [put(dir.path(), "a.docx", &docx)];
+    let read = |needle: &str, markup: bool| {
+        let options = Options {
+            markup,
+            ..Options::default()
+        };
+        scanner(text(needle), options, dir.path()).scan(&files, &Budget::unlimited())[0].clone()
+    };
+    // The words, either way; the tags only when the markup is asked for.
+    assert!(matches!(read("karar", false), Outcome::Found { .. }));
+    assert_eq!(read("w:rPr", false), Outcome::Clean);
+    match read("w:rPr", true) {
+        Outcome::Found { hits, .. } => assert!(hits[0].text.contains("<w:rPr>"), "{:?}", hits[0]),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(read("karar", true), Outcome::Found { .. }));
+}

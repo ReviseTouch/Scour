@@ -52,6 +52,7 @@ pub fn api_grep(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
         mode,
         exact_case: req.param("exact") == Some("1"),
         binary: req.param("binary") == Some("1"),
+        markup: req.param("markup") == Some("1"),
         sort,
         descending,
         offset: req

@@ -64,6 +64,7 @@ fn round(engine: &scour_engine::Engine, from: u32) -> u32 {
         needle: Needle::Text("\u{1}scour-read-ahead\u{1}".into()),
         exact_case: true,
         binary: false,
+        markup: false,
         sort: scour_core::SortKey::Modified,
         descending: true,
         offset: from,

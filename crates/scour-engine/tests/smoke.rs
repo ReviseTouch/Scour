@@ -2309,6 +2309,7 @@ fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
         needle: scour_grep::Needle::Text("needle".into()),
         exact_case: false,
         binary: false,
+        markup: false,
         sort: SortKey::Modified,
         descending: true,
         offset: 0,

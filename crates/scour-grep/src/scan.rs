@@ -56,6 +56,9 @@ pub struct Options {
     pub excerpt: usize,
     /// Read at the lowest disk and CPU priority: a reading nobody waits on.
     pub quiet: bool,
+    /// Search a ZIP-based document's XML as it is, tags and attributes too,
+    /// rather than the text it shows: for markup, not for words.
+    pub markup: bool,
 }
 
 impl Default for Options {
@@ -66,6 +69,7 @@ impl Default for Options {
             hits_per_file: 3,
             excerpt: 160,
             quiet: false,
+            markup: false,
         }
     }
 }

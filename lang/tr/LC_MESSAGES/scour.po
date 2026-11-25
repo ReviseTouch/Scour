@@ -2992,3 +2992,6 @@ msgstr "Seçilmedikçe dışarıda kalır: diskten okumak yavaştır."
 
 msgid "CD or DVD"
 msgstr "CD ya da DVD"
+
+msgid "Search documents' XML, tags included"
+msgstr "Belgelerin XML'inde ara, etiketler dahil"

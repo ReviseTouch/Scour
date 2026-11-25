@@ -179,7 +179,7 @@ impl ZipScratch {
             zip::local_headers(archive, |e| entries.push(EntryMeta::of(e)));
         }
         let names_src = archive;
-        let kind = triage(&mut entries, names_src, opts.binary);
+        let kind = triage(&mut entries, names_src, opts.binary, opts.markup);
         for e in &entries {
             if tally.more || tally.uncomp_spent >= MAX_ARCHIVE_UNCOMP {
                 break;
@@ -229,7 +229,7 @@ impl ZipScratch {
         }
         let mut work = std::mem::take(&mut self.entries);
         let cd_snap = std::mem::take(&mut self.cd);
-        let kind = triage(&mut work, &cd_snap, opts.binary);
+        let kind = triage(&mut work, &cd_snap, opts.binary, opts.markup);
         // Sort strictly forward on disk for monotonic NVMe/HDD reads, except when
         // an Office container prioritises `sharedStrings.xml` / `document.xml`.
         if kind == Container::Archive {
@@ -558,7 +558,10 @@ fn scan_bytes(
     );
 }
 
-fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Container {
+/// `markup`: a document is an archive like any other — each of its parts
+/// searched as the XML it is, tags and all — for somebody looking for
+/// the markup itself.
+fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool, markup: bool) -> Container {
     let name_of = |e: &EntryMeta| &names[e.name_range.0..e.name_range.1];
     let has_docx = entries.iter().any(|e| name_of(e) == b"word/document.xml");
     let has_xlsx = entries
@@ -576,7 +579,7 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
                 .iter()
                 .any(|e| name_of(e) == b"mimetype" || name_of(e) == b"META-INF/manifest.xml"));
 
-    if has_docx || has_xlsx || has_pptx || has_odf_udf {
+    if !markup && (has_docx || has_xlsx || has_pptx || has_odf_udf) {
         entries.retain_mut(|e| {
             let n = name_of(e);
             let keep = if has_docx {
@@ -650,7 +653,10 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool) -> Contai
         if n.is_empty() || n.ends_with(b"/") {
             return false;
         }
-        e.role = classify_archive_entry(n, allow_bin);
+        e.role = match classify_archive_entry(n, allow_bin) {
+            Role::DocXml if markup => Role::PlainStream,
+            role => role,
+        };
         true
     });
     Container::Archive

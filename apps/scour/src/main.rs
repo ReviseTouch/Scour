@@ -148,6 +148,10 @@ enum Command {
         /// and look for the text as UTF-16 in it.
         #[arg(long, short = 'b')]
         binary: bool,
+        /// Search a DOCX, XLSX, ODT or UDF as the XML it is — tags,
+        /// attributes, styles — rather than the text it shows.
+        #[arg(long)]
+        markup: bool,
         /// Stop at this many files with a find.
         #[arg(long, short = 'n', default_value_t = 50)]
         top: u32,
@@ -613,6 +617,7 @@ fn build(args: &Args) -> Result<Request> {
             hex,
             case,
             binary,
+            markup,
             top,
             lines,
             budget_mb,
@@ -630,6 +635,7 @@ fn build(args: &Args) -> Result<Request> {
             },
             exact_case: *case,
             binary: *binary,
+            markup: *markup,
             sort: SortKey::Modified,
             descending: true,
             offset: *from,

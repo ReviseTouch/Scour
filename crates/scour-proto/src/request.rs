@@ -100,6 +100,10 @@ pub enum Request {
         /// Read what is not text as well, looking for UTF-16 in it too.
         #[serde(default)]
         binary: bool,
+        /// Search a DOCX, XLSX, ODT or UDF as the XML it is, tags included,
+        /// rather than the text it shows.
+        #[serde(default)]
+        markup: bool,
         /// Order in which candidate files are drawn from the index.
         #[serde(default)]
         sort: SortKey,

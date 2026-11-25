@@ -152,6 +152,7 @@ fn run(
             mode,
             exact_case,
             binary,
+            markup,
             sort,
             descending,
             offset,
@@ -168,6 +169,7 @@ fn run(
                 exact_case,
                 // Bytes are looked for where bytes are.
                 binary: binary || mode == scour_proto::GrepMode::Hex,
+                markup,
                 sort,
                 descending,
                 offset,

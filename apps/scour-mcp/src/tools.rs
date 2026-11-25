@@ -110,6 +110,10 @@ pub struct GrepArgs {
     /// text as UTF-16 in them. Default false.
     #[serde(default)]
     pub binary: bool,
+    /// Search a DOCX, XLSX, ODT or UDF as the XML it is — tags, attributes,
+    /// styles — rather than the text it shows. Default false.
+    #[serde(default)]
+    pub markup: bool,
     /// Stop at this many files with a find. Default 20.
     #[serde(default)]
     pub top: Option<u32>,
@@ -265,6 +269,7 @@ impl Scour {
             },
             exact_case: a.exact_case,
             binary: a.binary,
+            markup: a.markup,
             sort: scour_core::SortKey::Modified,
             descending: true,
             offset: a.from.unwrap_or(0),
