@@ -26,7 +26,19 @@ pub fn api_volumes(stream: &mut TcpStream, client: &Pool) {
     }
 }
 
-/// An answer about one disk: `do` is `index`, `leave` or `later`.
+/// What is indexed, as the service says it: `{sources: [{id, name, kind,
+/// roots, caps}]}`. `caps` is not liveness: it says `WATCH` for unwatched ones.
+pub fn api_sources(stream: &mut TcpStream, client: &Pool) {
+    match call(client, Request::Sources {}) {
+        Ok(Response::Sources { sources }) => match serde_json::to_value(&sources) {
+            Ok(s) => http::json(stream, &serde_json::json!({ "sources": s })),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        },
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 /// Walk a disk's or a folder's root again, now: the refresh button beside it.
 pub fn api_rescan(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
@@ -54,6 +66,7 @@ pub fn api_reread(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     }
 }
 
+/// An answer about one disk: `do` is `index`, `leave` or `later`.
 pub fn api_volume(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
     let volume = req.param("id").unwrap_or_default().to_owned();
     let request = match req.param("do") {

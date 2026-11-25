@@ -22,6 +22,7 @@ use status::*;
 
 mod disks;
 mod dupes;
+mod facets;
 mod grep;
 mod hotkey;
 mod http;
@@ -315,6 +316,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         "/api/strings" => api_strings(&mut stream, client, &req),
         "/api/places" => api_places(&mut stream, client),
         "/api/volumes" => disks::api_volumes(&mut stream, client),
+        "/api/sources" => disks::api_sources(&mut stream, client),
         "/api/volume" => disks::api_volume(&mut stream, client, &req),
         "/api/rescan" => disks::api_rescan(&mut stream, client, &req),
         "/api/reread" => disks::api_reread(&mut stream, client, &req),
@@ -323,7 +325,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         "/api/index-do" => disks::api_index_do(&mut stream, client, &req, doing.launch),
         "/api/rules" => api_rules(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
-        "/api/facets" => api_facets(&mut stream, client, &req),
+        "/api/facets" => facets::api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
         "/api/tree" => grep::api_tree(&mut stream, client, &req),
         "/api/grep" if doing.preview => grep::api_grep(&mut stream, client, &req),
@@ -391,5 +393,7 @@ const POOL: usize = 8;
 /// always meant restarting.
 static CONFIGURED_LANGUAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+#[cfg(all(test, unix))]
+mod served;
 #[cfg(test)]
 mod tests;

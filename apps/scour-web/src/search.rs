@@ -1,9 +1,9 @@
-//! Routes that search: a page of rows, its count, the rail, the sentence, a
-//! folder's weight, duplicates, and the whole answer as CSV.
+//! Routes that search: a page of rows, its count, the sentence, a folder's
+//! weight, duplicates, and the whole answer as CSV.
 
 use super::*;
 use scour_client::Pool;
-use scour_core::{DirUsage, FacetBy, Owner, Page, SortKey};
+use scour_core::{DirUsage, Owner, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 use std::io::Write;
@@ -252,66 +252,6 @@ pub(super) fn api_usage(stream: &mut TcpStream, client: &Pool, req: &http::Req) 
                     "root": dir(&r.root),
                     "children": r.children.iter().map(dir).collect::<Vec<_>>(),
                     "child_count": r.child_count,
-                    "took_us": r.took_us,
-                }),
-            );
-        }
-        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
-        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
-    }
-}
-
-/// Everything the sidebar needs, from one walk: `by=kind,age` asks both, and a
-/// group per question comes back in the order asked, with the exact total.
-pub(super) fn api_facets(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
-    let edges: Vec<u32> = req
-        .param("edges")
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let by: Vec<FacetBy> = req
-        .param("by")
-        .unwrap_or("kind")
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|name| match name {
-            "age" => FacetBy::Age {
-                edges: edges.clone(),
-            },
-            "ext" => FacetBy::Ext { top: 24 },
-            _ => FacetBy::Kind,
-        })
-        .collect();
-    let request = Request::Facets {
-        query: req.param("q").unwrap_or_default().to_owned(),
-        by,
-    };
-    match call(client, request) {
-        Ok(Response::Facets(r)) => {
-            let groups: Vec<serde_json::Value> = r
-                .groups
-                .iter()
-                .map(|g| {
-                    serde_json::json!({
-                        "by": match &g.by {
-                            FacetBy::Kind => "kind",
-                            FacetBy::Ext { .. } => "ext",
-                            FacetBy::Dir { .. } => "dir",
-                            FacetBy::Age { .. } => "age",
-                        },
-                        "facets": g.facets.iter()
-                            .map(|f| serde_json::json!({ "key": f.key, "count": f.count }))
-                            .collect::<Vec<_>>(),
-                    })
-                })
-                .collect();
-            http::json(
-                stream,
-                &serde_json::json!({
-                    "groups": groups,
-                    "total": r.total,
-                    "capped": r.capped,
                     "took_us": r.took_us,
                 }),
             );
