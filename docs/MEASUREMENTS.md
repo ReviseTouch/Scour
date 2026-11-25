@@ -1119,6 +1119,52 @@ by hand:
 The walk asks `surefoot` the same question and still reads these with one
 thread; the same check belongs there, in a release of `surefoot`.
 
+## Windows: a 7,200 rpm disk in place order, and the volume read raw (2026-11-25)
+
+PC2 (Windows, NTFS, ST500DM002). Every set is 12,000 files under 1 MiB that
+nothing of ours had read, picked from the service's own index (an export,
+so the disk is not walked to list them); a set read a second time took
+2.7 s against its first 266 s, so the first readings were cold.
+
+**Place order, through the system** (`scan`, one reader, ABBA):
+
+| set | order | total | asking where each file is | reading |
+|---|---|---:|---:|---:|
+| 0 | place | 314.7 s | 215.9 s | ~99 s |
+| 1 | path | 278.4 s | — | 278 s |
+| 2 | path | 266.0 s | — | 266 s |
+| 3 | place | 300.8 s | 204.3 s | ~96 s |
+
+Read in place order the files come 2.8× faster, but asking for each file's
+place by opening it to read costs 17 ms a file on Windows and eats all of
+it. Windows reads by path.
+
+**The volume read raw** (`tools/ntfsraw`, elevated): each file opened for its
+attributes only and its extents asked for, the volume opened as a device
+and read uncached in place order in spans of up to 4 MiB (gaps under
+256 KiB read through); files inside their MFT record taken from the record;
+compressed, encrypted and sparse files the normal way:
+
+| | total | asking | reading |
+|---|---:|---:|---:|
+| through the system, never-read set | 264.6 s | — | 264.6 s |
+| **raw, never-read set** | **173.9 s** | 66.8 s | 107.1 s |
+| **raw again, the MFT warm** | **75.4 s** | 0.9 s | 74.5 s |
+
+Every one of the 10,484 files read both ways was the same, 4 KiB block by
+block. The 1,516 the asking account may not open were not read raw either:
+the open for attributes is refused first. The asking is the cost now —
+5.6 ms a file while the MFT is cold — so the next step is the MFT itself,
+read once from start to end, for every file's extents; and wider spans,
+9,572 of them for 1.4 GiB.
+
+```sh
+cd tools/ntfsraw && cargo xwin build --release --target x86_64-pc-windows-msvc
+ntfsraw.exe raw set.txt      # elevated
+ntfsraw.exe normal set.txt
+ntfsraw.exe verify set.txt   # elevated: both ways, every block compared
+```
+
 ## Reproducing
 
 ```sh

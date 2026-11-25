@@ -1,0 +1,20 @@
+[package]
+name = "ntfsraw"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Memory",
+] }
+
+[workspace]
+
+[profile.release]
+debug = false
