@@ -3049,3 +3049,54 @@ msgstr "Ctrl+tık: birden çok"
 
 msgid "Where it searches"
 msgstr "Nerede arıyor"
+
+msgid "Day"
+msgstr "Gün"
+
+msgid "Week"
+msgstr "Hafta"
+
+msgid "Month"
+msgstr "Ay"
+
+msgid "Year"
+msgstr "Yıl"
+
+msgid "Between"
+msgstr "Arasında"
+
+msgid "Before"
+msgstr "Önce"
+
+msgid "After"
+msgstr "Sonra"
+
+msgid "Empty"
+msgstr "Boş"
+
+msgid "last hour"
+msgstr "son bir saat"
+
+msgid "last {n} hours"
+msgstr "son {n} saat"
+
+msgid "last {n} days"
+msgstr "son {n} gün"
+
+msgid "last {n} weeks"
+msgstr "son {n} hafta"
+
+msgid "last {n} years"
+msgstr "son {n} yıl"
+
+msgid "before {date}"
+msgstr "{date} öncesi"
+
+msgid "after {date}"
+msgstr "{date} sonrası"
+
+msgid "since {date}"
+msgstr "{date} itibarıyla"
+
+msgid "until {date}"
+msgstr "{date} tarihine kadar"
