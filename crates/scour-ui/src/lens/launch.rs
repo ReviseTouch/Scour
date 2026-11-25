@@ -163,8 +163,12 @@ fn holds(field: &str, t: &Term) -> bool {
         .is_some_and(|f| filter_of(f).is_some_and(|x| x.field == field))
 }
 
-/// The first term of `query` that is of `field`'s filter.
+/// The first term of `query` that is of `field`'s filter. Never `fuzzy`: a
+/// query takes a forgiving word as often as it has words.
 pub fn held(query: &str, field: &str) -> Option<Term> {
+    if field == "fuzzy" {
+        return None;
+    }
     terms(query).into_iter().find(|t| holds(field, t))
 }
 

@@ -709,6 +709,7 @@ test('the launcher groups its rows, finds their shortcuts and goes into a held f
   const held = (q) => run(`launchRows(${JSON.stringify(q)}, ":")`).filter((r) => r.held).map((r) => r.field);
   assert.deepEqual(held('rapor :'), []);
   assert.deepEqual(held('rapor !ext:pdf :'), ['ext']);
+  assert.deepEqual(held('fuzzy:rapro :'), []);
   assert.deepEqual(held('tür:doc : rapor'), ['kind']);
   assert.deepEqual(held('parent:/srv :'), ['under']);
   assert.deepEqual(held(':kind'), []);
@@ -725,9 +726,9 @@ test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos'
   assert.deepEqual(run('subseqSpans("scour-gui", "scrgui")'), [[0, 2], [4, 5], [6, 9]]);
   // Every word everywhere, as `Unaccented::marks` in Rust: `hasan salih`
   // marks both in `HASAN SALİHOĞLU`, and the second `hasan` too.
-  assert.deepEqual(run('spans("HASAN SALİHOĞLU-hasan", ["hasan", "salih"])'), [[0, 5], [6, 5], [16, 5]]);
-  assert.deepEqual(run('spans("raporapor", ["rapor", "apora"])'), [[0, 9]]);
-  assert.deepEqual(run('spans("main.rs", ["zzz", ""])'), []);
+  assert.deepEqual(run('nameSpans("HASAN SALİHOĞLU-hasan", ["hasan", "salih"])'), [[0, 5], [6, 5], [16, 5]]);
+  assert.deepEqual(run('nameSpans("raporapor", ["rapor", "apora"])'), [[0, 9]]);
+  assert.deepEqual(run('nameSpans("main.rs", ["zzz", ""])'), []);
   assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
 });
 
@@ -852,4 +853,15 @@ test('capsule field headers render as cap-head and block caret or backspace insi
   q.setSelectionRange(4, 4);
   assert.equal(c.frameBackspace(), true);
   assert.equal(q.value, '');
+});
+
+// The page is one scope: a second `function x` silently replaces the first,
+// and node parses it without a word.
+test('no top-level function of the page is declared twice', () => {
+  const seen = new Map();
+  for (const m of html.matchAll(/^ {2}(?:async )?function (\w+)\(/gm)) {
+    seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+  }
+  const twice = [...seen].filter(([, n]) => n > 1).map(([name]) => name);
+  assert.deepEqual(twice, []);
 });

@@ -16,6 +16,7 @@
 
   /* The first term of `text` of this field, as [start, end], or null. */
   function heldTerm(text, field) {
+    if (field === "fuzzy") return null; // one for every word a query has
     return terms(text).find(([a, b]) => launchFieldOf(text.slice(a, b)) === field) || null;
   }
 

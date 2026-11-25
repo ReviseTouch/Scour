@@ -103,7 +103,7 @@
     // A drive's root has no name of its own: `C:/` is called by its path.
     const name = f.name || f.path.replace(/\/+$/, "");
     // Every place each word is, not the first only.
-    const all = spans(name, terms);
+    const all = nameSpans(name, terms);
     if (all.length) {
       let pos = 0;
       for (const [from, len] of all) {
@@ -220,7 +220,7 @@
 
   /* Every place each term is, as `Unaccented::marks` finds them in Rust:
      in order, overlapping and touching ones joined, as [from, length]. */
-  function spans(name, terms) {
+  function nameSpans(name, terms) {
     if (!terms.length) return [];
     const [text, at] = bare(name);
     const found = [];

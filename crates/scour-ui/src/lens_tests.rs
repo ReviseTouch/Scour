@@ -209,6 +209,8 @@ fn a_filter_the_query_holds_is_marked_whatever_its_spelling() {
     assert_eq!(held_fields("İÇERİK:\"a b\" dm:7d"), ["dm:", "content:"]);
     // The launcher's own letters are not a field.
     assert!(held_fields(":kind").is_empty());
+    // A second forgiving word can always be started.
+    assert!(held_fields("fuzzy:rapro :").is_empty());
 }
 
 #[test]
