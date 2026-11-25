@@ -21,13 +21,18 @@ use windows_sys::Win32::System::Ioctl::{
 };
 use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc};
 
-const BLOCK: usize = 4096;
+pub(crate) const BLOCK: usize = 4096;
 /// One read of the volume at most.
-const SPAN: u64 = 4 << 20;
+pub(crate) const SPAN: u64 = 4 << 20;
 /// Pieces nearer than this are read in one span, the gap read and dropped.
 const GAP: u64 = 256 << 10;
+
+/// `NTFSRAW_GAP_KIB` widens what is read through, for measuring.
+fn gap() -> u64 {
+    std::env::var("NTFSRAW_GAP_KIB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(GAP, |k| k << 10)
+}
 /// An extent is cut into pieces of at most this.
-const PIECE: u64 = 1 << 20;
+pub(crate) const PIECE: u64 = 1 << 20;
 
 pub fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -50,12 +55,12 @@ pub fn main() {
             }
             report("normal", paths.len(), bytes, t.elapsed().as_secs_f64(), 0.0, fails, &[]);
         }
-        "raw" => {
-            let (_, stats) = raw(&paths);
+        "raw" | "mft" => {
+            let (_, stats) = raw(&paths, mode == "mft");
             stats.print();
         }
-        "verify" => {
-            let (hashes, stats) = raw(&paths);
+        "verify" | "verify-mft" => {
+            let (hashes, stats) = raw(&paths, mode == "verify-mft");
             stats.print();
             let (mut same, mut differ, mut missing) = (0, 0, 0);
             for (i, p) in paths.iter().enumerate() {
@@ -72,7 +77,7 @@ pub fn main() {
             }
             println!("verify same {same} differ {differ} unread {missing}");
         }
-        _ => eprintln!("mode: normal | raw | verify"),
+        _ => eprintln!("mode: normal | raw | mft | verify | verify-mft"),
     }
 }
 
@@ -99,7 +104,7 @@ fn block_hash(data: &[u8], index: u64) -> u64 {
     h ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-fn hash_range(sum: &mut u64, data: &[u8], file_offset: u64, size: u64) {
+pub(crate) fn hash_range(sum: &mut u64, data: &[u8], file_offset: u64, size: u64) {
     let mut at = 0usize;
     while at < data.len() {
         let off = file_offset + at as u64;
@@ -156,6 +161,8 @@ struct Stats {
     total: f64,
     bytes_raw: u64,
     bytes_files: u64,
+    mft_mib: f64,
+    mft_s: f64,
 }
 
 impl Stats {
@@ -175,6 +182,8 @@ impl Stats {
                 ("normal_way", self.fallback.to_string()),
                 ("empty", self.empty.to_string()),
                 ("file_mib", format!("{:.1}", self.bytes_files as f64 / 1048576.0)),
+                ("mft_mib", format!("{:.1}", self.mft_mib)),
+                ("mft_read_s", format!("{:.3}", self.mft_s)),
             ],
         );
     }
@@ -182,14 +191,14 @@ impl Stats {
 
 /// One piece of one file: where it is on the volume and in the file.
 #[derive(Clone, Copy)]
-struct Piece {
-    file: usize,
-    lcn: u64,
-    clusters: u64,
-    file_offset: u64,
+pub(crate) struct Piece {
+    pub file: usize,
+    pub lcn: u64,
+    pub clusters: u64,
+    pub file_offset: u64,
 }
 
-fn raw(paths: &[String]) -> (HashMap<usize, u64>, Stats) {
+fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
     let began = Instant::now();
     let letter: String = paths[0].chars().take(2).collect();
     let volume = open_volume(&letter);
@@ -210,75 +219,92 @@ fn raw(paths: &[String]) -> (HashMap<usize, u64>, Stats) {
         total: 0.0,
         bytes_raw: 0,
         bytes_files: 0,
+        mft_mib: 0.0,
+        mft_s: 0.0,
     };
     let mut sums: HashMap<usize, u64> = HashMap::new();
     let mut sizes: Vec<u64> = vec![0; paths.len()];
     let mut pieces: Vec<Piece> = Vec::new();
     let mut normal_way: Vec<usize> = Vec::new();
-    for (i, p) in paths.iter().enumerate() {
-        let Some((info, size, handle)) = attributes(p) else {
-            stats.failed += 1;
-            continue;
-        };
-        sizes[i] = size;
-        stats.bytes_files += size;
-        let flags = info.dwFileAttributes;
-        if flags & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
-            normal_way.push(i);
-            unsafe { CloseHandle(handle) };
-            continue;
-        }
-        if size == 0 {
-            stats.empty += 1;
-            sums.insert(i, 0);
-            unsafe { CloseHandle(handle) };
-            continue;
-        }
-        match extents(handle) {
-            Some(list) if !list.is_empty() => {
-                stats.nonresident += 1;
-                let mut covered = 0u64;
-                for (vcn, lcn, n) in list {
-                    let mut done = 0u64;
-                    while done < n {
-                        let take = (n - done).min(PIECE / cluster);
-                        pieces.push(Piece {
-                            file: i,
-                            lcn: lcn + done,
-                            clusters: take,
-                            file_offset: (vcn + done) * cluster,
-                        });
-                        done += take;
+    if from_mft {
+        let got = crate::mft::gather(volume, &data, paths);
+        pieces = got.pieces;
+        normal_way = got.normal_way;
+        sizes = got.sizes;
+        sums = got.sums;
+        stats.nonresident = got.placed;
+        stats.resident = got.in_mft;
+        stats.empty = got.empty;
+        stats.bytes_files = sizes.iter().sum();
+        stats.mft_mib = got.mft_bytes as f64 / 1048576.0;
+        stats.mft_s = got.mft_seconds;
+    } else {
+        for (i, p) in paths.iter().enumerate() {
+            let Some((info, size, handle)) = attributes(p) else {
+                stats.failed += 1;
+                continue;
+            };
+            sizes[i] = size;
+            stats.bytes_files += size;
+            let flags = info.dwFileAttributes;
+            if flags & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
+                normal_way.push(i);
+                unsafe { CloseHandle(handle) };
+                continue;
+            }
+            if size == 0 {
+                stats.empty += 1;
+                sums.insert(i, 0);
+                unsafe { CloseHandle(handle) };
+                continue;
+            }
+            match extents(handle) {
+                Some(list) if !list.is_empty() => {
+                    stats.nonresident += 1;
+                    let mut covered = 0u64;
+                    for (vcn, lcn, n) in list {
+                        let mut done = 0u64;
+                        while done < n {
+                            let take = (n - done).min(PIECE / cluster);
+                            pieces.push(Piece {
+                                file: i,
+                                lcn: lcn + done,
+                                clusters: take,
+                                file_offset: (vcn + done) * cluster,
+                            });
+                            done += take;
+                        }
+                        covered += n * cluster;
                     }
-                    covered += n * cluster;
+                    if covered < size {
+                        // Not all of it is placed: the normal way.
+                        pieces.retain(|pc| pc.file != i);
+                        normal_way.push(i);
+                        stats.nonresident -= 1;
+                    }
                 }
-                if covered < size {
-                    // Not all of it is placed: the normal way.
-                    pieces.retain(|pc| pc.file != i);
-                    normal_way.push(i);
-                    stats.nonresident -= 1;
+                _ => {
+                    let record = ((info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64) & 0x0000_FFFF_FFFF_FFFF;
+                    match resident_data(volume, record, record_size) {
+                        Some(bytes) if bytes.len() as u64 == size => {
+                            stats.resident += 1;
+                            let mut sum = 0;
+                            hash_range(&mut sum, &bytes, 0, size);
+                            sums.insert(i, sum);
+                        }
+                        _ => normal_way.push(i),
+                    }
                 }
             }
-            _ => {
-                let record = ((info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64) & 0x0000_FFFF_FFFF_FFFF;
-                match resident_data(volume, record, record_size) {
-                    Some(bytes) if bytes.len() as u64 == size => {
-                        stats.resident += 1;
-                        let mut sum = 0;
-                        hash_range(&mut sum, &bytes, 0, size);
-                        sums.insert(i, sum);
-                    }
-                    _ => normal_way.push(i),
-                }
-            }
+            unsafe { CloseHandle(handle) };
         }
-        unsafe { CloseHandle(handle) };
     }
     stats.gather = began.elapsed().as_secs_f64();
 
     let t = Instant::now();
     pieces.sort_by_key(|p| p.lcn);
-    let buf = aligned(SPAN as usize + GAP as usize + PIECE as usize);
+    let gap_limit = gap();
+    let buf = aligned(SPAN as usize + gap_limit as usize + PIECE as usize);
     let mut i = 0;
     while i < pieces.len() {
         let start = pieces[i].lcn;
@@ -288,7 +314,7 @@ fn raw(paths: &[String]) -> (HashMap<usize, u64>, Stats) {
             let next = &pieces[j];
             let gap = next.lcn.saturating_sub(end) * cluster;
             let new_end = end.max(next.lcn + next.clusters);
-            if gap > GAP || (new_end - start) * cluster > SPAN {
+            if gap > gap_limit || (new_end - start) * cluster > SPAN {
                 break;
             }
             end = new_end;
@@ -430,7 +456,7 @@ fn extents(handle: HANDLE) -> Option<Vec<(u64, u64, u64)>> {
 }
 
 /// The unnamed $DATA attribute of a record, when it is resident.
-fn resident_data(volume: HANDLE, record: u64, record_size: usize) -> Option<Vec<u8>> {
+pub(crate) fn resident_data(volume: HANDLE, record: u64, record_size: usize) -> Option<Vec<u8>> {
     let input = record as i64;
     let mut out = vec![0u8; 12 + record_size];
     let mut got = 0u32;
@@ -485,7 +511,7 @@ fn resident_data(volume: HANDLE, record: u64, record_size: usize) -> Option<Vec<
 }
 
 /// The update sequence: each sector's last two bytes stand in the array.
-fn fixup(rec: &mut [u8]) {
+pub(crate) fn fixup(rec: &mut [u8]) {
     let off = u16::from_le_bytes([rec[4], rec[5]]) as usize;
     let count = u16::from_le_bytes([rec[6], rec[7]]) as usize;
     if count < 2 || off + count * 2 > rec.len() {
@@ -504,13 +530,13 @@ fn fixup(rec: &mut [u8]) {
     }
 }
 
-fn aligned(len: usize) -> &'static mut [u8] {
+pub(crate) fn aligned(len: usize) -> &'static mut [u8] {
     let p = unsafe { VirtualAlloc(std::ptr::null(), len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
     assert!(!p.is_null());
     unsafe { std::slice::from_raw_parts_mut(p as *mut u8, len) }
 }
 
-fn read_at(volume: HANDLE, offset: u64, buf: &mut [u8]) {
+pub(crate) fn read_at(volume: HANDLE, offset: u64, buf: &mut [u8]) {
     unsafe { SetFilePointerEx(volume, offset as i64, std::ptr::null_mut(), FILE_BEGIN) };
     let mut done = 0usize;
     while done < buf.len() {

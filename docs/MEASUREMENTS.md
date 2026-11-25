@@ -1153,16 +1153,33 @@ compressed, encrypted and sparse files the normal way:
 
 Every one of the 10,484 files read both ways was the same, 4 KiB block by
 block. The 1,516 the asking account may not open were not read raw either:
-the open for attributes is refused first. The asking is the cost now —
-5.6 ms a file while the MFT is cold — so the next step is the MFT itself,
-read once from start to end, for every file's extents; and wider spans,
-9,572 of them for 1.4 GiB.
+the open for attributes is refused first. The asking was the cost —
+5.6 ms a file while the MFT is cold — so the MFT itself was read next,
+once from start to end, for every file's extents (`ntfsraw mft`): no file
+is opened at all. 12,000 more never-read entries (10,511 files; the rest
+are folders the export also named, which neither way reads):
+
+| | total | MFT read (507 MB) | files read |
+|---|---:|---:|---:|
+| through the system | 263.4 s | — | 263.4 s |
+| **from the MFT, gaps under 256 KiB read through** | **86.8 s** | 14.7 s | 71.3 s |
+| **from the MFT, gaps under 1 MiB read through** | **75.6 s** | 4.5 s | 70.3 s |
+
+**3.0–3.5× with everything cold**, and the 10,511 files the same both ways,
+block by block (`verify-mft`). Reading through wider gaps made no
+difference (71.3 s against 70.3, more bytes in fewer spans); the MFT read
+itself varied from 4.5 to 28 s between runs, a fixed cost whatever the
+number of files asked for. Without opening files there is no access check
+either: a reading of the service's must check each file's security
+descriptor (`$Secure`) against the asker's token before it reads.
 
 ```sh
 cd tools/ntfsraw && cargo xwin build --release --target x86_64-pc-windows-msvc
 ntfsraw.exe raw set.txt      # elevated
 ntfsraw.exe normal set.txt
 ntfsraw.exe verify set.txt   # elevated: both ways, every block compared
+ntfsraw.exe mft set.txt      # elevated: extents from the MFT, no file opened
+NTFSRAW_GAP_KIB=1024 ntfsraw.exe mft set.txt
 ```
 
 ## Reproducing
