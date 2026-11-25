@@ -1,5 +1,5 @@
 //! The time, type and size terms in the query line drawn as their words
-//! while the caret is outside them: `dm:` as `time_said`, a `kind:` or
+//! while not being edited (`lens::Caret`): `dm:` as `time_said`, a `kind:` or
 //! `ext:` list as its values with `·` between and `+N` for the rest when
 //! the line is narrow, a `size:` or `empty:` as its preset. A term the words
 //! cannot say is drawn as typed.
@@ -30,12 +30,12 @@ impl Said {
 /// The query's filter terms drawn as words. `room` is the field's width:
 /// while the line is wider, the longest list gives up a value at a time.
 pub fn folded(app: &App, room: usize) -> Vec<Folded> {
-    let caret = app.caret.min(app.query.len());
+    let edited = lens::edited_term(&app.query, app.caret_at());
     let now = crate::v2::unix_now();
     let offset = scour_ui::format::local_offset(now);
     let mut said: Vec<Said> = lens::terms(&app.query)
         .into_iter()
-        .filter(|t| !(t.start < caret && caret <= t.end))
+        .filter(|t| edited.as_ref() != Some(t))
         .filter_map(|t| {
             let values = words(app, &t, now, offset)?;
             Some(Said {

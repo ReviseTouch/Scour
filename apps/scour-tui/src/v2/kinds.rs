@@ -183,6 +183,7 @@ impl App {
         let (q, caret) = lens::value_toggle(&self.query, field, &value, exclude);
         self.query = q;
         self.caret = caret;
+        self.v2.editing = false;
         self.ask_type();
         self.typed()
     }

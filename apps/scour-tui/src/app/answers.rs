@@ -340,6 +340,7 @@ impl App {
     pub fn insert(&mut self, c: char) -> Want {
         self.query.insert(self.caret, c);
         self.caret += c.len_utf8();
+        self.v2.editing = true;
         self.typed()
     }
 
@@ -357,6 +358,7 @@ impl App {
             .unwrap_or(0);
         self.query.remove(at);
         self.caret = at;
+        self.v2.editing = true;
         self.typed()
     }
 }

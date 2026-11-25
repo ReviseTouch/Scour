@@ -60,5 +60,5 @@ fn taking_out_one_folder_of_several_keeps_the_rest_together() {
     ));
     key(&mut app, '2');
     assert_eq!(app.query, format!("rapor under:{h}/Belgeler|under:/usr"));
-    assert_eq!(&app.query[..app.caret], format!("rapor under:{h}/Belgeler"));
+    assert_eq!(app.caret, app.query.len(), "at the group's trailing edge");
 }

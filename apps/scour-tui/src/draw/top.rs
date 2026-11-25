@@ -215,7 +215,8 @@ fn with_folds(
                     if at == f.start && f.place {
                         let disk = f.kind.map_or(theme.key(), |k| theme.disk(k));
                         out.push(Span::styled("⛁", cap.fg(disk)));
-                        out.push(Span::styled(format!(" {}", f.label), cap.fg(theme.val())));
+                        let ink = if f.not { theme.not() } else { theme.val() };
+                        out.push(Span::styled(format!(" {}", f.label), cap.fg(ink)));
                     } else if at == f.start {
                         let ink = if f.not { theme.not() } else { theme.val() };
                         out.push(Span::styled(f.label.clone(), cap.fg(ink)));

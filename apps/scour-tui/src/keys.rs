@@ -28,6 +28,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+↑ ↓", "reverse the order"),
     ("Tab", "the rail, and back"),
     ("Ctrl+P · Ctrl+F", "folder explorer · filter & fuzzy lens"),
+    ("!", "Exclude this term"),
     ("Ctrl+G", "search inside matching files (grep)"),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
@@ -381,6 +382,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             KeyCode::Char(c) if !ctrl => app.insert(c),
             KeyCode::Backspace => app.backspace(),
             KeyCode::Left => {
+                app.v2.editing = false;
                 app.caret = app.query[..app.caret]
                     .char_indices()
                     .next_back()
@@ -390,6 +392,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 Want::Nothing
             }
             KeyCode::Right => {
+                app.v2.editing = false;
                 if let Some(c) = app.query[app.caret..].chars().next() {
                     app.caret += c.len_utf8();
                     app.dirty = true;

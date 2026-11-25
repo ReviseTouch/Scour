@@ -47,6 +47,11 @@ pub struct V2 {
     pub disks: place::Disks,
     /// The time, type and size panels.
     pub filters: Filters,
+    /// The person is typing at the caret: set by a letter typed or rubbed
+    /// out, cleared by a lens press or a caret moved. See `lens::Caret`.
+    pub editing: bool,
+    /// The place lens was opened on an `!under:`: a press stays on one.
+    pub place_not: bool,
 }
 
 fn home() -> String {
@@ -58,7 +63,7 @@ pub fn home_form(p: &str) -> String {
 }
 
 fn quote_if(s: &str) -> String {
-    if s.chars().any(|c| c.is_whitespace() || c == '|') {
+    if s.chars().any(|c| c.is_whitespace() || c == '|' || c == ';') {
         format!("\"{s}\"")
     } else {
         s.to_string()
@@ -82,6 +87,8 @@ impl App {
             None => self.v2.place_dir.clone(),
         };
         self.v2.place_part = at.filter(|(_, part)| !part.is_empty());
+        self.v2.place_not = lens::term_at(&self.query, self.caret.min(self.query.len()))
+            .is_some_and(|t| t.not && lens::lens_of(&self.query, &t) == Some(Lens::Place));
         self.v2.place_mode = true;
         self.v2.place_dir = dir.clone();
         self.v2.tree_dirs.clear();
@@ -294,6 +301,14 @@ impl App {
         self.typed()
     }
 
+    /// The caret, and whether the person is typing at it.
+    pub fn caret_at(&self) -> lens::Caret {
+        lens::Caret {
+            at: self.caret.min(self.query.len()),
+            editing: self.v2.editing,
+        }
+    }
+
     /// The positive place term the caret is in.
     fn place_term(&self) -> Option<lens::Term> {
         let t = lens::term_at(&self.query, self.caret.min(self.query.len()))?;
@@ -306,9 +321,8 @@ impl App {
     fn place_press(&mut self, at: usize, dir: Option<String>) -> Want {
         let home = home();
         let here = self.v2.place_dir.clone();
-        let typing = self.place_term().filter(|_| self.v2.place_part.is_some());
         let written = match (at, dir) {
-            (0, _) => lens::place_add(&self.query, &home, &here, typing.as_ref()),
+            (0, _) => lens::place_add_at(&self.query, &home, &here, self.caret_at()),
             (1, _) => lens::place_exclude(&self.query, &home, &here),
             (2, _) => {
                 let start = std::path::Path::new(&here);

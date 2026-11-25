@@ -86,9 +86,10 @@ fn the_disks_come_once_this_openings_sources_have_and_are_counted_once() {
     ));
     assert_eq!(app.disk_row_count(), 1, "no disk until the sources say");
 
-    // An older opening's answer is dropped.
+    // The sources read at start name the disks, and count nothing.
     assert_eq!(app.sources_came(0, sources.clone()), Want::Nothing);
-    assert_eq!(app.disk_row_count(), 1);
+    assert!(app.disk_row_count() > 1);
+    assert!(!app.v2.disks.fresh);
 
     let Want::DiskCounts { opening: 1, asks } = app.sources_came(1, sources.clone()) else {
         panic!("the choosable disks are counted");
@@ -116,6 +117,11 @@ fn the_disks_come_once_this_openings_sources_have_and_are_counted_once() {
         Want::Place { opening: 2, .. }
     ));
     assert!(app.v2.disks.files.is_empty());
+    assert_eq!(
+        app.sources_came(1, sources.clone()),
+        Want::Nothing,
+        "an older opening's"
+    );
     assert!(matches!(
         app.sources_came(2, sources),
         Want::DiskCounts { opening: 2, .. }
@@ -336,8 +342,9 @@ fn add_on_a_folder_already_held_leaves_it() {
     let mut app = lens_on("rapor under:/mnt/depo|under:/usr", "/usr");
     add(&mut app);
     assert_eq!(app.query, "rapor under:/mnt/depo|under:/usr");
-    // The caret rests at the end of the group's first member.
-    assert_eq!(&app.query[..app.caret], "rapor under:/mnt/depo");
+    // The caret rests at the group's trailing edge, not editing it.
+    assert_eq!(&app.query[..app.caret], "rapor under:/mnt/depo|under:/usr");
+    assert!(!app.v2.editing);
 }
 
 #[test]
@@ -389,4 +396,87 @@ fn exclude_toggles_and_takes_the_folder_out_of_the_group() {
     app.v2.place_dir = "/mnt/data".into();
     key(&mut app, '!');
     assert_eq!(app.query, "under:/mnt/depo");
+}
+
+/// The query line's row, drawn as the whole screen draws it.
+fn bar(app: &App) -> String {
+    let row =
+        crate::v2::filters::tests::screen(app, 100, 30)[crate::draw::QUERY_ROW as usize].clone();
+    row.trim_end().to_string()
+}
+
+/// A disk chosen in the lens reads as one unit at once: the caret rests at
+/// its edge, nobody is typing there.
+#[test]
+fn the_system_disk_just_chosen_reads_collapsed() {
+    let (mut app, sources) = machine();
+    app.query = "rapor ".into();
+    app.caret = app.query.len();
+    app.open_place_lens();
+    app.sources_came(1, sources);
+    let tiles = app.place_tiles();
+    let cachy = tiles.iter().position(|t| t.name == "CACHY").unwrap();
+    let rows = app.disk_rows(&tiles);
+    app.panel_at = rows.iter().position(|r| *r == Row::Tile(cachy)).unwrap();
+    enter(&mut app);
+    assert!(app.query.contains("under:"), "{}", app.query);
+    assert_eq!(app.caret, app.query.len());
+    assert!(
+        bar(&app).starts_with(" SCOUR rapor ⛁ CACHY"),
+        "{}",
+        bar(&app)
+    );
+
+    // Typed into, the member is the person's letters again.
+    key(&mut app, 'x');
+    assert!(bar(&app).contains("under:/varx"), "{}", bar(&app));
+}
+
+/// The sources read at start name a disk in the query line before the place
+/// lens was ever opened; a block of exclusions is one negated unit.
+#[test]
+fn the_query_line_names_disks_before_any_lens() {
+    let (mut app, sources) = machine();
+    app.query = "under:~|under:/usr|under:/etc|under:/opt|under:/var rapor".into();
+    app.caret = app.query.len();
+    assert!(
+        !bar(&app).contains("CACHY"),
+        "its sources unknown: {}",
+        bar(&app)
+    );
+    app.sources_came(0, sources);
+    assert!(
+        bar(&app).starts_with(" SCOUR ⛁ CACHY rapor"),
+        "{}",
+        bar(&app)
+    );
+
+    app.query = "rapor !under:/mnt/depo !under:/srv/x".into();
+    app.caret = 5;
+    assert!(
+        bar(&app).starts_with(" SCOUR rapor ⛁ !Depo · /srv/x"),
+        "{}",
+        bar(&app)
+    );
+}
+
+/// Opened on an exclusion, a press leaves the caret on one.
+#[test]
+fn a_lens_opened_on_an_exclusion_stays_on_it() {
+    let (mut app, sources) = machine();
+    app.query = "rapor !under:/tmp".into();
+    app.caret = app.query.len();
+    app.open_place_lens();
+    assert!(app.v2.place_not);
+    app.sources_came(1, sources);
+    app.v2.place_dir = "/srv".into();
+    app.rebuild_lens();
+    app.panel_at = app.place_line(1);
+    enter(&mut app);
+    assert_eq!(app.query, "rapor !under:/tmp !under:/srv");
+    assert!(
+        app.query[..app.caret].ends_with("!under:/tmp")
+            || app.query[..app.caret].ends_with("!under:/srv")
+    );
+    assert!(!app.v2.editing);
 }

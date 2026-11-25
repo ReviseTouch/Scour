@@ -153,13 +153,19 @@ impl App {
         }
     }
 
-    /// This opening's sources came: the disks can be counted.
+    /// This opening's sources came: the disks can be counted. Opening 0 is
+    /// the sources read outside any opening, at start and when a disk
+    /// comes: kept for the query line, never counted from.
     pub fn sources_came(&mut self, opening: u64, sources: Vec<(String, Vec<String>)>) -> Want {
-        if opening != self.v2.disks.opening {
+        if opening != 0 && opening != self.v2.disks.opening {
             return Want::Nothing;
         }
         let before = self.disk_row_count();
         self.v2.disks.sources = Some(sources);
+        if opening != self.v2.disks.opening {
+            self.dirty = true;
+            return Want::Nothing;
+        }
         self.v2.disks.fresh = true;
         // A cursor already moved stays on the line it was on.
         if self.panel_at > 0 {

@@ -66,7 +66,7 @@ fn the_presets_are_counted_and_the_bars_drawn_between_their_ends() {
     assert_eq!(texts(&app)[0], "  today|", "nothing before the answer");
     assert_eq!(
         texts(&app)[BARS_LINE],
-        format!("10-26 {} 11-25|← → ⇧", "·".repeat(30))
+        format!("26 Oct {} 25 Nov|← → ⇧", "·".repeat(30))
     );
 
     app.lens_faceted(asks[0].tag, &day_answer());
@@ -84,7 +84,7 @@ fn the_presets_are_counted_and_the_bars_drawn_between_their_ends() {
     assert_eq!(t[SCALE_LINE], "Day  Week  Month  Year|← →");
     assert_eq!(t[MODE_LINE], "Between  Before  After|← →");
     let bars = format!("▂{}▄{}█", "·".repeat(22), "·".repeat(5));
-    assert_eq!(t[BARS_LINE], format!("10-26 {bars} 11-25|← → ⇧"));
+    assert_eq!(t[BARS_LINE], format!("26 Oct {bars} 25 Nov|← → ⇧"));
     assert_eq!(t[SAID_LINE], "·|");
     let (_, lines) = app.lens_panel_lines(60);
     assert_eq!(lines[SCALE_LINE].lit, Some((0, 3)), "Day is chosen");
@@ -106,7 +106,7 @@ fn the_arrows_choose_a_run_of_bars_and_enter_writes_it() {
     assert_eq!(app.v2.filters.sel, Some((23, 29)));
     assert_eq!(texts(&app)[SAID_LINE], "last 7 days|14");
     let (_, lines) = app.lens_panel_lines(60);
-    assert_eq!(lines[BARS_LINE].lit, Some((6 + 23, 6 + 30)));
+    assert_eq!(lines[BARS_LINE].lit, Some((7 + 23, 7 + 30)));
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.query, "rapor dm:7d");
     assert_eq!(app.panel, Panel::None);
@@ -122,14 +122,14 @@ fn a_band_reads_as_its_dates_and_the_modes_write_one_end() {
     }
     shift(&mut app, KeyCode::Left, 22);
     assert_eq!(app.v2.filters.sel, Some((0, 22)));
-    assert_eq!(texts(&app)[SAID_LINE], "10-26–11-18|2");
+    assert_eq!(texts(&app)[SAID_LINE], "26 Oct – 18 Nov|2");
 
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Right);
     assert_eq!(app.v2.filters.mode, Mode::Before);
     assert_eq!(
         texts(&app)[SAID_LINE],
-        "before 11-18|102",
+        "before 18 Nov|102",
         "and every older row"
     );
     key(&mut app, KeyCode::Right);
@@ -155,7 +155,7 @@ fn reopened_on_a_term_the_panel_shows_it() {
     let app = opened("dm:3m..1m");
     assert_eq!(app.v2.filters.scale, lens::Scale::Month);
     assert_eq!(app.v2.filters.sel, Some((21, 22)));
-    assert_eq!(texts(&app)[SAID_LINE], "08-27–10-26|");
+    assert_eq!(texts(&app)[SAID_LINE], "27 Aug – 26 Oct|");
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn another_scale_is_asked_once_and_the_old_answer_dropped() {
     app.lens_faceted(asks[1].tag, &month);
     assert_eq!(app.v2.filters.hist.as_ref().map(|h| h.bars.len()), Some(24));
     assert!(
-        texts(&app)[BARS_LINE].starts_with("2024-12 "),
+        texts(&app)[BARS_LINE].starts_with("Dec 2024 "),
         "{}",
         texts(&app)[BARS_LINE]
     );
@@ -223,7 +223,7 @@ fn another_scale_is_asked_once_and_the_old_answer_dropped() {
 fn a_click_chooses_the_bars_and_the_scale_drawn_under_it() {
     for size in [(100, 30), (80, 30)] {
         let mut app = answered("rapor dm:");
-        let lead = 6;
+        let lead = 7;
         let (c, r) = cell_of(&app, size, BARS_LINE, lead + 23);
         click(&mut app, c, r, size, KeyModifiers::NONE);
         assert_eq!(app.v2.filters.sel, Some((23, 23)), "{size:?}");
@@ -237,7 +237,7 @@ fn a_click_chooses_the_bars_and_the_scale_drawn_under_it() {
         );
         assert!(
             shot.iter()
-                .any(|l| l.contains("10-26 ▂") && l.contains("11-25"))
+                .any(|l| l.contains("26 Oct ▂") && l.contains("25 Nov"))
         );
 
         let (c, r) = cell_of(&app, size, SCALE_LINE, "Day  Week  ".len());
@@ -250,33 +250,31 @@ fn a_click_chooses_the_bars_and_the_scale_drawn_under_it() {
 }
 
 #[test]
-fn a_date_is_written_as_the_list_writes_dates() {
-    let day = lens::Date {
-        day: (NOW / DAY),
+fn a_date_is_said_with_its_month_shortened_as_the_language_does() {
+    let mut app = App::default();
+    let day = Date {
+        day: NOW / DAY,
         form: DateForm::DayMonthYear,
     };
-    assert_eq!(date_text(day), "2026-11-25");
+    assert_eq!(app.date_text(day), "25 Nov 2026");
+    let form = |form| Date { form, ..day };
+    assert_eq!(app.date_text(form(DateForm::DayMonth)), "25 Nov");
+    assert_eq!(app.date_text(form(DateForm::MonthYear)), "Nov 2026");
+    assert_eq!(app.date_text(form(DateForm::Year)), "2026");
+    assert_eq!(app.date_text(form(DateForm::Day)), "25");
+    // A year that is not this one is said, on both ends.
     assert_eq!(
-        date_text(Date {
-            form: DateForm::MonthYear,
-            ..day
-        }),
-        "2026-11"
+        app.time_words("2025-10-21..2026-11-25", NOW, 0).as_deref(),
+        Some("21 Oct 2025 – 25 Nov")
     );
     assert_eq!(
-        date_text(Date {
-            form: DateForm::Year,
-            ..day
-        }),
-        "2026"
+        app.time_words("2026-11-12..2026-11-25", NOW, 0).as_deref(),
+        Some("12 – 25 Nov")
     );
-    let earlier = Date {
-        day: day.day - 400,
-        form: DateForm::DayMonthYear,
-    };
-    let now = Date {
-        form: DateForm::DayMonth,
-        ..day
-    };
-    assert_eq!(range_text(earlier, now), "2025-10-21–2026-11-25");
+    app.words = scour_i18n::Catalogue::for_language("tr");
+    assert_eq!(app.date_text(form(DateForm::DayMonth)), "25 Kas");
+    assert_eq!(
+        app.time_words("30d..7d", NOW, 0).as_deref(),
+        Some("26 Eki – 18 Kas")
+    );
 }

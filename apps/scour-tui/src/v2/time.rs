@@ -4,6 +4,7 @@
 //! scale change answers the presets and the bars together.
 
 use scour_core::{FacetBy, FacetResponse};
+use scour_ui::calendar::MONTHS;
 use scour_ui::format::DAY;
 use scour_ui::lens::{
     self, Date, DateForm, MODES, Mode, PRESET_EDGES, SCALES, Selected, TIME_PRESETS, Term, TimeSaid,
@@ -93,14 +94,14 @@ impl App {
         })
     }
 
-    /// A `dm:` value in words, its dates as the list writes them.
+    /// A `dm:` value in words, as the other faces say it.
     pub fn time_words(&self, value: &str, now: i64, offset: i64) -> Option<String> {
         Some(match lens::time_said(value, now, offset)? {
             TimeSaid::Label(m) => self.say(m).into_owned(),
             TimeSaid::Count(m, n) => self.say(m).replace("{n}", &n.to_string()),
-            TimeSaid::Date(d) => date_text(d),
-            TimeSaid::Bound(m, d) => self.say(m).replace("{date}", &date_text(d)),
-            TimeSaid::Range(a, b) => range_text(a, b),
+            TimeSaid::Date(d) => self.date_text(d),
+            TimeSaid::Bound(m, d) => self.say(m).replace("{date}", &self.date_text(d)),
+            TimeSaid::Range(a, b) => format!("{} – {}", self.date_text(a), self.date_text(b)),
         })
     }
 
@@ -114,7 +115,7 @@ impl App {
             None => (f.now - n as i64 * unit, f.now),
         };
         let end = |s: i64| {
-            date_text(Date {
+            self.date_text(Date {
                 day: (s + f.offset).div_euclid(DAY),
                 form: f.scale.ends(),
             })
@@ -249,30 +250,21 @@ pub(super) fn switch(words: &[String]) -> (String, Vec<(usize, usize)>) {
     (text, spans)
 }
 
-/// A date as the list writes one, as much of it as its form says:
-/// `2026-11-25`, `11-25`, `2026-11`, `2026`, `25`.
-pub fn date_text(d: Date) -> String {
-    let (y, m, day) = d.ymd();
-    match d.form {
-        DateForm::Day => format!("{day:02}"),
-        DateForm::DayMonth => format!("{m:02}-{day:02}"),
-        DateForm::DayMonthYear => format!("{y}-{m:02}-{day:02}"),
-        DateForm::MonthYear => format!("{y}-{m:02}"),
-        DateForm::Year => format!("{y}"),
+impl App {
+    /// A day in the person's words, as much of it as its form says: "26
+    /// Oct", "26 Oct 2025", "Oct 2025", "2025", "26"; the month the first
+    /// three letters of its name, which is how both languages shorten it.
+    pub fn date_text(&self, d: Date) -> String {
+        let (y, m, day) = d.ymd();
+        let mon: String = self.say(MONTHS[m as usize - 1]).chars().take(3).collect();
+        match d.form {
+            DateForm::Day => format!("{day}"),
+            DateForm::DayMonth => format!("{day} {mon}"),
+            DateForm::DayMonthYear => format!("{day} {mon} {y}"),
+            DateForm::MonthYear => format!("{mon} {y}"),
+            DateForm::Year => format!("{y}"),
+        }
     }
-}
-
-/// Two days with an en dash: ISO reads from the year down, so both ends
-/// are written to the same depth, the year on both when either has it.
-fn range_text(a: Date, b: Date) -> String {
-    let full = [a.form, b.form].contains(&DateForm::DayMonthYear);
-    let form = if full {
-        DateForm::DayMonthYear
-    } else {
-        DateForm::DayMonth
-    };
-    let at = |d: Date| date_text(Date { form, ..d });
-    format!("{}–{}", at(a), at(b))
 }
 
 #[cfg(test)]

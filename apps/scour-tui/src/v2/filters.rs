@@ -292,6 +292,7 @@ impl App {
     /// `new` in place of `t`, or after the query; the panel closes on it.
     pub(super) fn write_term(&mut self, t: Option<&Term>, new: &str) -> Want {
         let (q, caret) = match t {
+            Some(t) if new.is_empty() => lens::remove_term(&self.query, t),
             Some(t) => lens::replace(&self.query, t, new),
             None => {
                 let q = lens::with_term(&self.query, new);
@@ -301,6 +302,7 @@ impl App {
         };
         self.query = q;
         self.caret = caret;
+        self.v2.editing = false;
         self.panel = Panel::None;
         self.typed()
     }

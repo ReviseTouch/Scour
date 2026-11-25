@@ -74,6 +74,10 @@ fn main() -> Result<()> {
     pump(&beats, answers);
     // Where this desktop keeps things. Asked once: it does not change.
     link.later(Ask::Places);
+    // The disks and the sources, so the query line can name a disk before
+    // the place lens was ever opened.
+    link.later(Ask::Volumes);
+    link.later(Ask::Sources { opening: 0 });
     // And from here on, whenever the index moves.
     link.doze(Ask::Await { since: 0 });
 
@@ -707,7 +711,11 @@ fn act(want: Want, link: &Link) {
             });
         }
         Want::Rules => link.later(Ask::Rules),
-        Want::Disks => link.later(Ask::Volumes),
+        // A disk came or went: the sources are read again beside it.
+        Want::Disks => {
+            link.later(Ask::Volumes);
+            link.later(Ask::Sources { opening: 0 });
+        }
         // The list after the answer, on the same lane: it says what the answer did.
         Want::Disk { volume, what } => {
             link.later(Ask::Disk { volume, what });

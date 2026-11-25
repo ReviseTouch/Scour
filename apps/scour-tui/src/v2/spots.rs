@@ -18,10 +18,12 @@ impl App {
     pub(super) fn place_wrote(&mut self, (q, caret): (String, usize)) -> Want {
         let home = home();
         let held = !lens::scope(&q, &home).within.is_empty();
-        let (q, caret) = match held {
-            true => lens::place_anchor(&q, &home, caret),
+        let not = self.v2.place_not && !lens::scope(&q, &home).outside.is_empty();
+        let (q, caret) = match held || not {
+            true => lens::place_settle(&q, caret, not),
             false => (q, caret),
         };
+        self.v2.editing = false;
         self.v2.place_left = Some((q.clone(), caret));
         self.v2.place_part = None;
         self.query = q;
