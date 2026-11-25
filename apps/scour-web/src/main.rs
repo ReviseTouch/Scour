@@ -62,8 +62,9 @@ struct Args {
     /// one is wrong or there is none to detect. The file's path is appended.
     #[arg(long, value_name = "CMD")]
     quicklook: Option<String>,
-    /// Refuse `/api/preview`, so the page never receives a file's contents:
-    /// the panel then shows what the index knows and nothing else.
+    /// Refuse `/api/preview` and `/api/grep`, and send no `content:` find's
+    /// line, so the page never receives a file's contents: the panel then
+    /// shows what the index knows and nothing else.
     #[arg(long)]
     no_preview: bool,
     /// Never ask the desktop to make a thumbnail it has not made yet. Pictures
@@ -307,7 +308,7 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
 
     match req.path.as_str() {
         "/" => http::page(&mut stream, page().as_bytes(), nonce()),
-        "/api/search" => api_search(&mut stream, client, &req),
+        "/api/search" => api_search(&mut stream, client, &req, doing.preview),
         "/api/csv" => api_csv(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream, client, &req),

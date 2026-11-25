@@ -2411,8 +2411,8 @@ msgstr "belge okunmadı"
 msgid "locked"
 msgstr "kilitli"
 
-msgid "in the cloud"
-msgstr "bulutta"
+msgid "not downloaded"
+msgstr "indirilmedi"
 
 msgid "without text"
 msgstr "metinsiz"
@@ -2836,8 +2836,8 @@ msgstr "{n} belge okunmadı"
 msgid "{n} locked"
 msgstr "{n} kilitli"
 
-msgid "{n} in the cloud"
-msgstr "{n} bulutta"
+msgid "{n} not downloaded"
+msgstr "{n} indirilmedi"
 
 msgid "{n} without text"
 msgstr "{n} metinsiz"
@@ -2983,3 +2983,12 @@ msgstr "Boştayken önceden oku"
 
 msgid "When nobody has searched for five minutes and the machine is quiet, documents are read and kept before they are asked for: slowly, at the lowest priority."
 msgstr "Beş dakikadır arama yapılmamışsa ve makine sakinse belgeler sorulmadan önce okunup saklanır: yavaşça, en düşük öncelikle."
+
+msgid "CD and DVD discs"
+msgstr "CD ve DVD diskleri"
+
+msgid "Left out unless chosen: a disc is slow to read."
+msgstr "Seçilmedikçe dışarıda kalır: diskten okumak yavaştır."
+
+msgid "CD or DVD"
+msgstr "CD ya da DVD"

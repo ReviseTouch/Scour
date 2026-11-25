@@ -255,6 +255,15 @@ impl Contents {
         })
     }
 
+    /// The rows the reading of this query has found so far, in its order;
+    /// None when no reading is of it.
+    pub(crate) fn rows(&self, ast: &Ast) -> Option<Vec<Hit>> {
+        let current = self.current.lock();
+        let reading = current.as_ref().filter(|r| r.ast == *ast)?;
+        let hits = reading.state.lock().hits.clone();
+        Some(hits)
+    }
+
     /// How many files of this query the reading has found, and whether that
     /// is a floor. Nothing yet, and a floor, when it is not the query read.
     pub(crate) fn found(&self, ast: &Ast) -> (u64, bool) {

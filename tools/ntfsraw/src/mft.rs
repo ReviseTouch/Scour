@@ -108,7 +108,9 @@ pub fn gather(volume: HANDLE, data: &NTFS_VOLUME_DATA_BUFFER, paths: &[String]) 
             continue;
         };
         let path = format!("{dir}\\{}", rec.name).to_lowercase();
-        let Some(&i) = wanted.get(&path) else { continue };
+        let Some(&i) = wanted.get(&path) else {
+            continue;
+        };
         found[i] = true;
         let _ = n;
         out.sizes[i] = rec.size;
@@ -185,7 +187,10 @@ fn mft_runs(volume: HANDLE, data: &NTFS_VOLUME_DATA_BUFFER, size: usize) -> Vec<
     let buf = aligned(span as usize);
     read_at(volume, lcn * cluster, &mut buf[..span as usize]);
     match parse(&mut buf[..size], cluster) {
-        Some(Record { data: Data::Runs(runs), .. }) => runs,
+        Some(Record {
+            data: Data::Runs(runs),
+            ..
+        }) => runs,
         _ => panic!("the MFT's own record could not be read"),
     }
 }

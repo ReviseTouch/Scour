@@ -81,7 +81,13 @@ fn a_disks_wire_names_are_the_ones_serde_writes() {
         assert_eq!(json, format!("\"{}\"", st.as_str()));
     }
     use scour_volumes::Kind;
-    for k in [Kind::System, Kind::Fixed, Kind::Removable, Kind::Network] {
+    for k in [
+        Kind::System,
+        Kind::Fixed,
+        Kind::Removable,
+        Kind::Network,
+        Kind::Optical,
+    ] {
         let json = serde_json::to_string(&k).expect("kind");
         assert_eq!(json, format!("\"{}\"", k.as_str()));
     }

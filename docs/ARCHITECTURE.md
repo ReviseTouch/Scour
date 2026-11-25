@@ -115,10 +115,20 @@ correct on the day it is written.
   eight, an unnamed one on four; a FUSE or ZFS volume on four at most. A disk that
   says it spins is asked again, on Linux, before a large read: flash behind a
   USB bridge says so too, and is read by two.
+- **An NTFS volume may be read raw.** Where the process may open `\\.\X:` —
+  the Windows service — a spinning disk's large set is read from the volume
+  itself (`scour-grep/src/raw`): places from the MFT, read once, the files'
+  clusters in platter order 32 requests deep, no file opened. Only what the
+  normal way would answer: the asker's token checked against each file's
+  descriptor in `$Secure`, files the change journal says changed in the last
+  five minutes or during the read left to the normal way, and every file
+  found to hold the pattern read again the normal way — the raw read only
+  says what is not there.
 - **Documents it cannot stream go to another process.** PDF, `.doc`, `.xls`,
   `.ppt` and `.eml` are handed to `scour_grep::Texts`, which `scourd` answers
   (`src/documents.rs`): their text kept in `scour-textcache` (zstd blocks,
-  keyed by path, size and time), and read on a miss by `scour-extractor`
+  keyed by path, size and time to the nanosecond, in a folder of its own
+  that a folder of somebody's files is never taken for), and read on a miss by `scour-extractor`
   processes — 30 s and 2 GiB each, killed and started again when one dies or
   hangs, ended after 20 s idle. The reading thread opens the file itself,
   under the asker's identity, and pipes its bytes over: the extractor opens

@@ -47,7 +47,8 @@ pub struct GrepResponse {
     /// Held open by another program that shares it with nobody.
     #[serde(default)]
     pub locked: u64,
-    /// Cloud placeholders, OneDrive's or iCloud's: reading would download them.
+    /// Cloud placeholders, OneDrive's or iCloud's, and files on a FUSE mount
+    /// that fetches them: reading would download them.
     #[serde(default)]
     pub offline: u64,
     /// Documents that opened and hold no text: scans without a text layer.

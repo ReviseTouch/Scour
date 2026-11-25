@@ -48,6 +48,8 @@ pub struct Change {
     /// See [`Settings::removable`] and [`Settings::network`].
     pub removable: Option<String>,
     pub network: Option<String>,
+    /// See [`Settings::optical`].
+    pub optical: Option<String>,
     /// Replace the list outright. See [`Settings::folders`].
     pub folders: Option<Vec<String>>,
     /// Replace the list outright. See [`Settings::folders_off`].
@@ -107,6 +109,7 @@ impl Change {
     pub fn moves_sources(&self) -> bool {
         self.removable.is_some()
             || self.network.is_some()
+            || self.optical.is_some()
             || self.folders.is_some()
             || self.folders_off.is_some()
             || self.folders_unwatched.is_some()
@@ -203,6 +206,9 @@ impl Change {
         }
         if let Some(v) = self.removable {
             to.removable = v;
+        }
+        if let Some(v) = self.optical {
+            to.optical = v;
         }
         if let Some(v) = self.network {
             to.network = v;

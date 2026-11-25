@@ -1,7 +1,7 @@
 //! One file, read a megabyte at a time and searched as it is read.
 
 use std::fs::File;
-use std::io::{ErrorKind, Read as _};
+use std::io::{Cursor, ErrorKind, Read};
 use std::path::Path;
 
 use memchr::{memchr_iter, memrchr};
@@ -20,6 +20,23 @@ const RTF_TEXT: usize = 64 << 20;
 const CHUNK: usize = 1 << 20;
 /// Carried into the next read, so a find across the seam is still whole.
 const KEEP: usize = 64 << 10;
+
+/// Where a file's bytes come from: the file itself, or all of it already in
+/// memory — read raw from the volume. Both are read a megabyte at a time, so
+/// the two find the same.
+enum Src<'a> {
+    Disk(&'a mut File),
+    Whole(Cursor<&'a [u8]>),
+}
+
+impl Read for Src<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Src::Disk(file) => file.read(buf),
+            Src::Whole(bytes) => bytes.read(buf),
+        }
+    }
+}
 
 /// One thread's buffer, kept between files.
 #[derive(Debug)]
@@ -53,6 +70,36 @@ impl Reader {
             Err(Refused::Skip(skip)) => return (Outcome::Skipped(skip), 0),
             Err(Refused::Io(kind)) => return (Outcome::Unreadable(kind), 0),
         };
+        let found = self.search_in(Src::Disk(&mut file), file_len, path, pattern, opts, texts);
+        found.expect("a file on disk is always read")
+    }
+
+    /// The same for a file whose bytes are all here: None when it needs the
+    /// file itself — a document handed over, a ZIP too large for one read.
+    pub(crate) fn search_bytes(
+        &mut self,
+        path: &Path,
+        whole: &[u8],
+        pattern: &Pattern,
+        opts: &Options,
+    ) -> Option<(Outcome, u64)> {
+        let src = Src::Whole(Cursor::new(whole));
+        self.search_in(src, whole.len() as u64, path, pattern, opts, None)
+    }
+
+    fn search_in(
+        &mut self,
+        mut file: Src<'_>,
+        file_len: u64,
+        path: &Path,
+        pattern: &Pattern,
+        opts: &Options,
+        texts: Option<&dyn Texts>,
+    ) -> Option<(Outcome, u64)> {
+        let whole = match &file {
+            Src::Whole(bytes) => Some(*bytes.get_ref()),
+            Src::Disk(_) => None,
+        };
         self.buf.resize(CHUNK, 0);
         let buf = &mut self.buf[..];
         let (mut filled, mut base, mut eof, mut total) = (0usize, 0u64, false, 0u64);
@@ -71,7 +118,7 @@ impl Reader {
                         }
                     }
                     Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                    Err(e) => return (Outcome::Unreadable(e.kind()), total),
+                    Err(e) => return Some((Outcome::Unreadable(e.kind()), total)),
                 }
             }
             let hay = &buf[..filled];
@@ -79,27 +126,38 @@ impl Reader {
                 let extension = extension_of(path);
                 let document = matches!(signature(hay), Some(Signature::Unread))
                     || (extension == "eml" && handed_over(&extension));
-                if let (Some(texts), true) = (texts, document) {
+                // Handed over by its path: the reader opens it itself.
+                if document && (whole.is_some() || texts.is_some()) {
+                    let (Src::Disk(disk), Some(texts)) = (&mut file, texts) else {
+                        return None;
+                    };
                     let (outcome, extra) = self.document(
-                        &mut file, file_len, filled, eof, path, &extension, texts, pattern, opts,
+                        disk, file_len, filled, eof, path, &extension, texts, pattern, opts,
                     );
-                    return (outcome, total + extra);
+                    return Some((outcome, total + extra));
                 }
                 match signature(hay) {
                     Some(Signature::Zip) if self.zip_on => {
+                        let disk = match &mut file {
+                            Src::Disk(disk) => Some(&mut **disk),
+                            Src::Whole(_) if eof => None,
+                            Src::Whole(_) => return None,
+                        };
                         let (outcome, extra) = self
                             .zip
-                            .search_file(&mut file, file_len, hay, eof, pattern, opts);
-                        return (outcome, total + extra);
+                            .search_file(disk, file_len, hay, eof, pattern, opts);
+                        return Some((outcome, total + extra));
                     }
                     Some(Signature::Rtf) => {
                         let (outcome, extra) =
                             self.rtf(&mut file, file_len, filled, eof, pattern, opts);
-                        return (outcome, total + extra);
+                        return Some((outcome, total + extra));
                     }
-                    Some(Signature::Media) => return (Outcome::Skipped(Skip::HeaderOnly), total),
+                    Some(Signature::Media) => {
+                        return Some((Outcome::Skipped(Skip::HeaderOnly), total));
+                    }
                     Some(Signature::Unread) if !opts.binary => {
-                        return (Outcome::Skipped(Skip::NoReader), total);
+                        return Some((Outcome::Skipped(Skip::NoReader), total));
                     }
                     Some(Signature::Unread | Signature::Packed) => kind = Some(Kind::Binary),
                     _ => {}
@@ -111,7 +169,7 @@ impl Reader {
             let kind = *kind.get_or_insert_with(|| Kind::sniff(hay));
             // A run of bytes is looked for in binary files without being asked.
             if kind == Kind::Binary && !opts.binary && !pattern.is_raw_bytes() {
-                return (Outcome::Skipped(Skip::Binary), total);
+                return Some((Outcome::Skipped(Skip::Binary), total));
             }
             let regex = pattern.reading(kind);
             let cut = if eof { filled } else { seam(hay, kind) };
@@ -127,7 +185,7 @@ impl Reader {
                     Kind::Binary => pattern.settled(hay, found.start(), found.end()),
                     _ => (found.start(), found.end()),
                 };
-                let line = (kind == Kind::Text).then(|| lines.at(path, base, hay, start));
+                let line = (kind == Kind::Text).then(|| lines.at(path, whole, base, hay, start));
                 // A second find on a line already shown is the same line again.
                 if line.is_some() && hits.last().is_some_and(|last: &Hit| last.line == line) {
                     continue;
@@ -158,7 +216,7 @@ impl Reader {
         } else {
             Outcome::Found { hits, more }
         };
-        (outcome, total)
+        Some((outcome, total))
     }
 }
 
@@ -177,7 +235,7 @@ impl Reader {
         pattern: &Pattern,
         opts: &Options,
     ) -> (Outcome, u64) {
-        let (whole, extra) = match self.rest_of(file, file_len, filled, eof) {
+        let (whole, extra) = match self.rest_of(&mut *file, file_len, filled, eof) {
             Ok(pair) => pair,
             Err(kind) => return (Outcome::Unreadable(kind), 0),
         };
@@ -186,7 +244,7 @@ impl Reader {
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs() as i64);
+            .map_or(0, |d| d.as_nanos() as i64);
         let doc = Doc {
             path,
             size: file_len,
@@ -199,7 +257,7 @@ impl Reader {
     /// The whole file: the first `filled` bytes from the buffer, the rest read.
     fn rest_of(
         &mut self,
-        file: &mut File,
+        file: &mut dyn Read,
         file_len: u64,
         filled: usize,
         eof: bool,
@@ -220,7 +278,7 @@ impl Reader {
     /// The first `filled` bytes are in the buffer already.
     fn rtf(
         &mut self,
-        file: &mut File,
+        file: &mut dyn Read,
         file_len: u64,
         filled: usize,
         eof: bool,
@@ -257,10 +315,15 @@ struct Lines {
 }
 
 impl Lines {
-    fn at(&mut self, path: &Path, base: u64, hay: &[u8], pos: usize) -> u64 {
-        let (seen, count) = *self
-            .known
-            .get_or_insert_with(|| (base, newlines_before(path, base)));
+    /// `whole`: the file is all in memory, and its lines are counted there.
+    fn at(&mut self, path: &Path, whole: Option<&[u8]>, base: u64, hay: &[u8], pos: usize) -> u64 {
+        let (seen, count) = *self.known.get_or_insert_with(|| {
+            let before = match whole {
+                Some(all) => memchr_iter(b'\n', &all[..base as usize]).count() as u64,
+                None => newlines_before(path, base),
+            };
+            (base, before)
+        });
         let from = (seen - base) as usize;
         let count = count + memchr_iter(b'\n', &hay[from.min(pos)..pos]).count() as u64;
         self.known = Some(((base + pos as u64).max(seen), count));

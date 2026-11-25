@@ -44,7 +44,10 @@ impl Queue {
                 std::ptr::null_mut(),
             )
         };
-        assert!(volume != INVALID_HANDLE_VALUE, "the volume would not open for overlapped reads");
+        assert!(
+            volume != INVALID_HANDLE_VALUE,
+            "the volume would not open for overlapped reads"
+        );
         let slots = (0..depth)
             .map(|_| Slot {
                 buf: aligned(cap),
@@ -56,7 +59,13 @@ impl Queue {
     }
 
     /// Every span read, each handed to `take` with its bytes; the bytes read.
-    pub fn run(mut self, spans: &[Span], cluster: u64, base: u64, take: &mut dyn FnMut(&[u8], Span)) -> u64 {
+    pub fn run(
+        mut self,
+        spans: &[Span],
+        cluster: u64,
+        base: u64,
+        take: &mut dyn FnMut(&[u8], Span),
+    ) -> u64 {
         let mut free: Vec<usize> = (0..self.slots.len()).collect();
         let mut flying: VecDeque<(usize, Span, usize)> = VecDeque::new();
         let mut next = 0usize;
@@ -71,12 +80,16 @@ impl Queue {
                 flying.push_back((k, span, len));
                 next += 1;
             }
-            let Some((k, span, len)) = flying.pop_front() else { break };
+            let Some((k, span, len)) = flying.pop_front() else {
+                break;
+            };
             let slot = &mut self.slots[k];
             let mut got = 0u32;
             let ok = unsafe { GetOverlappedResult(self.volume, &*slot.over, &mut got, 1) };
             if ok == 0 || got as usize != len {
-                eprintln!("an overlapped read failed (error {})", unsafe { GetLastError() });
+                eprintln!("an overlapped read failed (error {})", unsafe {
+                    GetLastError()
+                });
             }
             total += len as u64;
             take(&slot.buf[..len], span);
@@ -101,7 +114,9 @@ impl Queue {
             )
         };
         if ok == 0 && unsafe { GetLastError() } != ERROR_IO_PENDING {
-            eprintln!("an overlapped read was refused (error {})", unsafe { GetLastError() });
+            eprintln!("an overlapped read was refused (error {})", unsafe {
+                GetLastError()
+            });
         }
     }
 }

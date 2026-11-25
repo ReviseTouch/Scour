@@ -336,6 +336,9 @@ pub(crate) fn wire(wiring: &Wiring) {
             } else if kind == "network" {
                 w.set_network_choice(value.clone());
                 change.network = Some(value.to_string());
+            } else if kind == "optical" {
+                w.set_optical_choice(value.clone());
+                change.optical = Some(value.to_string());
             } else {
                 w.set_removable_choice(value.clone());
                 change.removable = Some(value.to_string());

@@ -6,15 +6,22 @@
 pub struct Key {
     pub path: String,
     pub size: u64,
-    /// Seconds since the epoch.
+    /// Nanoseconds since the epoch, as finely as the filesystem keeps them.
     pub mtime: i64,
 }
 
+const SECOND: i64 = 1_000_000_000;
+
 impl Key {
-    /// Whether `other` names the same file unchanged. FAT and exFAT keep
-    /// times in steps of two seconds, so a second either way is the same time.
+    /// Whether `other` names the same file unchanged: the same time to the
+    /// nanosecond. Only where both times are whole seconds — FAT keeps them
+    /// in steps of two, some network filesystems in seconds — is a second
+    /// either way the same time; on a finer filesystem an edit in the same
+    /// second that keeps the size is still an edit.
     pub fn same_file(&self, other: &Key) -> bool {
-        self.path == other.path && self.size == other.size && (self.mtime - other.mtime).abs() <= 1
+        let coarse = self.mtime % SECOND == 0 && other.mtime % SECOND == 0;
+        let near = (self.mtime - other.mtime).abs() <= if coarse { SECOND } else { 0 };
+        self.path == other.path && self.size == other.size && near
     }
 }
 

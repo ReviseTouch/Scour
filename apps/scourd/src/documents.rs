@@ -97,10 +97,12 @@ impl Documents {
             *keep = None;
             return;
         }
+        // A place somebody picked gets a folder of the cache's own inside
+        // it: the picked folder itself is never emptied or locked down.
         let dir = if settings.texts_dir.is_empty() {
             state_dir.join("texts")
         } else {
-            PathBuf::from(&settings.texts_dir)
+            PathBuf::from(&settings.texts_dir).join("scour-texts")
         };
         let mb = if settings.texts_max_mb == 0 {
             DEFAULT_MB
@@ -150,6 +152,16 @@ impl Documents {
         match self.keep.read().as_ref() {
             Some(k) => k.store.clear(),
             None => Ok(()),
+        }
+    }
+
+    /// Every text taken so far written out: on the way down, so the last
+    /// minutes' documents are not read again after a restart.
+    pub fn flush(&self) {
+        if let Some(k) = self.keep.read().as_ref()
+            && let Err(e) = k.store.flush()
+        {
+            scour_core::note!("scourd: documents' text could not be written: {e}");
         }
     }
 

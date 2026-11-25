@@ -29,12 +29,19 @@ const GAP: u64 = 256 << 10;
 
 /// `NTFSRAW_QD`: spans in flight at once, for the disk to order itself.
 fn queue_depth() -> usize {
-    std::env::var("NTFSRAW_QD").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1)
+    std::env::var("NTFSRAW_QD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .max(1)
 }
 
 /// `NTFSRAW_GAP_KIB` widens what is read through, for measuring.
 fn gap() -> u64 {
-    std::env::var("NTFSRAW_GAP_KIB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(GAP, |k| k << 10)
+    std::env::var("NTFSRAW_GAP_KIB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(GAP, |k| k << 10)
 }
 /// An extent is cut into pieces of at most this.
 pub(crate) const PIECE: u64 = 1 << 20;
@@ -58,7 +65,15 @@ pub fn main() {
                     None => fails += 1,
                 }
             }
-            report("normal", paths.len(), bytes, t.elapsed().as_secs_f64(), 0.0, fails, &[]);
+            report(
+                "normal",
+                paths.len(),
+                bytes,
+                t.elapsed().as_secs_f64(),
+                0.0,
+                fails,
+                &[],
+            );
         }
         "raw" | "mft" => {
             let (_, stats) = raw(&paths, mode == "mft");
@@ -86,7 +101,15 @@ pub fn main() {
     }
 }
 
-fn report(mode: &str, files: usize, bytes: u64, total: f64, gather: f64, fails: usize, extra: &[(&str, String)]) {
+fn report(
+    mode: &str,
+    files: usize,
+    bytes: u64,
+    total: f64,
+    gather: f64,
+    fails: usize,
+    extra: &[(&str, String)],
+) {
     print!(
         "{mode} files {files} seconds {total:.3} gather {gather:.3} mib {:.1} files_per_s {:.0} failed {fails}",
         bytes as f64 / 1048576.0,
@@ -150,7 +173,10 @@ fn normal(path: &str) -> Option<(u64, u64)> {
 }
 
 pub(crate) fn wide(s: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(s).encode_wide().chain(Some(0)).collect()
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(Some(0))
+        .collect()
 }
 
 struct Stats {
@@ -187,7 +213,10 @@ impl Stats {
                 ("in_mft", self.resident.to_string()),
                 ("normal_way", self.fallback.to_string()),
                 ("empty", self.empty.to_string()),
-                ("file_mib", format!("{:.1}", self.bytes_files as f64 / 1048576.0)),
+                (
+                    "file_mib",
+                    format!("{:.1}", self.bytes_files as f64 / 1048576.0),
+                ),
                 ("mft_mib", format!("{:.1}", self.mft_mib)),
                 ("mft_read_s", format!("{:.3}", self.mft_s)),
                 ("queue_depth", self.depth.to_string()),
@@ -218,7 +247,10 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
         fat_layout(volume).expect("neither NTFS nor FAT32")
     };
     let record_size = data.BytesPerFileRecordSegment as usize;
-    assert!(cluster as usize % BLOCK == 0, "cluster {cluster} under 4 KiB");
+    assert!(
+        cluster as usize % BLOCK == 0,
+        "cluster {cluster} under 4 KiB"
+    );
     let mut stats = Stats {
         files: paths.len(),
         nonresident: 0,
@@ -261,7 +293,12 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
             sizes[i] = size;
             stats.bytes_files += size;
             let flags = info.dwFileAttributes;
-            if flags & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
+            if flags
+                & (FILE_ATTRIBUTE_COMPRESSED
+                    | FILE_ATTRIBUTE_ENCRYPTED
+                    | FILE_ATTRIBUTE_SPARSE_FILE)
+                != 0
+            {
                 normal_way.push(i);
                 unsafe { CloseHandle(handle) };
                 continue;
@@ -298,9 +335,14 @@ fn raw(paths: &[String], from_mft: bool) -> (HashMap<usize, u64>, Stats) {
                     }
                 }
                 _ => {
-                    let record = ((info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64) & 0x0000_FFFF_FFFF_FFFF;
-                    let resident = if record_size > 0 { resident_data(volume, record, record_size) } else { None };
-                match resident {
+                    let record = ((info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64)
+                        & 0x0000_FFFF_FFFF_FFFF;
+                    let resident = if record_size > 0 {
+                        resident_data(volume, record, record_size)
+                    } else {
+                        None
+                    };
+                    match resident {
                         Some(bytes) if bytes.len() as u64 == size => {
                             stats.resident += 1;
                             let mut sum = 0;
@@ -392,7 +434,10 @@ fn open_volume(letter: &str) -> HANDLE {
         )
     };
     if h == INVALID_HANDLE_VALUE {
-        eprintln!("the volume {letter} would not open (error {}): run elevated", unsafe { GetLastError() });
+        eprintln!(
+            "the volume {letter} would not open (error {}): run elevated",
+            unsafe { GetLastError() }
+        );
         std::process::exit(2);
     }
     h
@@ -425,7 +470,10 @@ fn volume_data(volume: HANDLE) -> NTFS_VOLUME_DATA_BUFFER {
 fn fat_layout(volume: HANDLE) -> Option<(u64, u64)> {
     let buf = aligned(4096);
     read_at(volume, 0, &mut buf[..4096]);
-    let bias: u64 = std::env::var("NTFSRAW_FAT_BIAS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let bias: u64 = std::env::var("NTFSRAW_FAT_BIAS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
     // exFAT: the cluster heap's offset and the sizes, as powers of two.
     if &buf[3..11] == b"EXFAT   " {
         let heap = u32::from_le_bytes(buf[0x58..0x5C].try_into().ok()?) as u64;
@@ -593,7 +641,14 @@ pub(crate) fn fixup(rec: &mut [u8]) {
 }
 
 pub(crate) fn aligned(len: usize) -> &'static mut [u8] {
-    let p = unsafe { VirtualAlloc(std::ptr::null(), len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+    let p = unsafe {
+        VirtualAlloc(
+            std::ptr::null(),
+            len,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
+    };
     assert!(!p.is_null());
     unsafe { std::slice::from_raw_parts_mut(p as *mut u8, len) }
 }
@@ -613,7 +668,9 @@ pub(crate) fn read_at(volume: HANDLE, offset: u64, buf: &mut [u8]) {
             )
         };
         if ok == 0 || got == 0 {
-            eprintln!("volume read failed at {offset} (error {})", unsafe { GetLastError() });
+            eprintln!("volume read failed at {offset} (error {})", unsafe {
+                GetLastError()
+            });
             return;
         }
         done += got as usize;

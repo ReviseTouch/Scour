@@ -167,6 +167,17 @@ impl App {
                 self.say("Network disks").into_owned(),
                 format!("‹ {} ›", self.say(word(&self.network))),
             ),
+            (
+                self.say("CD and DVD discs").into_owned(),
+                format!(
+                    "‹ {} ›",
+                    self.say(match self.optical.as_str() {
+                        "always" => "Always scan",
+                        "ask" => "Ask",
+                        _ => "Never",
+                    })
+                ),
+            ),
         ];
         for f in &self.folders {
             lines.push((f.clone(), format!("× {}", self.say("remove"))));
@@ -253,11 +264,19 @@ impl App {
                     ..Default::default()
                 }
             }
-            at if at < 2 + folders => {
+            2 => {
+                let next = Self::cycle(&["", "ask", "always"], &self.optical, by);
+                self.optical = next.clone();
+                scour_settings::Change {
+                    optical: Some(next),
+                    ..Default::default()
+                }
+            }
+            at if at < 3 + folders => {
                 if !pressed {
                     return Want::Nothing;
                 }
-                self.folders.remove(at - 2);
+                self.folders.remove(at - 3);
                 self.panel_at = self.panel_at.min(self.panel_lines().saturating_sub(1));
                 scour_settings::Change {
                     folders: Some(self.folders.clone()),

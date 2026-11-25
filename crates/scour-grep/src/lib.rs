@@ -10,6 +10,7 @@ mod ground;
 mod order;
 mod pattern;
 mod quiet;
+mod raw;
 mod read;
 mod scan;
 mod settle;

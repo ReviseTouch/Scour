@@ -1223,6 +1223,37 @@ NTFSRAW_GAP_KIB=1024 ntfsraw.exe mft set.txt
 NTFSRAW_QD=32 ntfsraw.exe mft set.txt   # 32 reads in flight
 ```
 
+## The service's own raw lane, PC2 (2026-11-25)
+
+`scour-grep`'s raw lane (`src/raw`), through `examples/scan.rs`, elevated,
+`SCOUR_GREP_RAW_LOG=1`. Sets of 12,000 paths from G:'s index never read
+before, 7,200 rpm, raw and normal in turn:
+
+| set | way | total | of it |
+|---|---|---:|---|
+| svd0 | raw | 192.4 s | 10,403 files raw: MFT 507.5 MiB in 7.0 s, their data in 44.5 s; 1,596 the normal way |
+| svd1 | normal | 219.4 s | |
+
+The 1,596 left are mostly directories — the sets were exported with them,
+and a search never hands one to the reader (`scour-engine/src/grep.rs`
+leaves them out) — opened the normal way on a cold disk at about 90 ms
+each. The raw part itself read 10,403 files in 51.5 s; the comparison
+without directories is still to be run. The MFT's own reading varied from
+7 s to 39 s between runs on the same disk. Every answer the same both ways
+on one set with a needle that is found: 1,048 lines, 0 different.
+
+Two faults found on the way, both fixed: `$SDS` keeps freed descriptors as
+zeros with entries after them (the parser stopped at the first), and
+`%TEMP%` given in its short 8.3 form names nothing the MFT spells (a short
+name is read the normal way; the test now uses the long one).
+
+C: (solid), the component and driver stores, never read: the normal way took
+7.2–11.2 s cold and 0.58 s warm for 12,000 files — opening, not reading, on
+Windows even on flash. The raw lane did not run there: C:'s MFT is in so
+many pieces that its own record holds an attribute list, which the lane now
+follows (`mft::mft_runs`). **Not yet measured on C:**, so raw reading stays
+off by default on a solid disk.
+
 ## Reproducing
 
 ```sh

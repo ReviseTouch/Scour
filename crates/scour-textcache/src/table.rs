@@ -3,10 +3,21 @@
 //! the old one or the new one.
 
 use std::collections::HashMap;
-use std::io::{self, Read as _};
+use std::io::Read as _;
 use std::path::Path;
 
-const MAGIC: &[u8; 6] = b"SCTC2\n";
+/// 3: times in nanoseconds. A table of an earlier version is dropped with
+/// its blocks, read again as documents are searched.
+const MAGIC: &[u8; 6] = b"SCTC3\n";
+
+/// A table of this cache, of this version or an earlier one: what says a
+/// directory is a cache's and not somebody's documents.
+pub(crate) fn version_of(path: &Path) -> Option<bool> {
+    let mut head = [0u8; 6];
+    let mut file = std::fs::File::open(path).ok()?;
+    file.read_exact(&mut head).ok()?;
+    head.starts_with(b"SCTC").then_some(&head == MAGIC)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
@@ -80,7 +91,8 @@ fn take<const N: usize>(b: &mut &[u8]) -> Option<[u8; N]> {
     Some(*head)
 }
 
-pub(crate) fn save(path: &Path, table: &Table, dead: u64) -> io::Result<()> {
+/// The table's bytes, made under the lock; written after it is let go.
+pub(crate) fn encode(table: &Table, dead: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(64 * table.len() + MAGIC.len() + 8);
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&dead.to_le_bytes());
@@ -100,7 +112,12 @@ pub(crate) fn save(path: &Path, table: &Table, dead: u64) -> io::Result<()> {
         out.extend_from_slice(&row.offset.to_le_bytes());
         out.extend_from_slice(&row.len.to_le_bytes());
     }
-    crate::block::write_private(path, &out)
+    out
+}
+
+#[cfg(test)]
+pub(crate) fn save(path: &Path, table: &Table, dead: u64) -> std::io::Result<()> {
+    crate::block::write_private(path, &encode(table, dead))
 }
 
 #[cfg(test)]

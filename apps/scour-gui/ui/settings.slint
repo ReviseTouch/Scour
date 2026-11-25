@@ -144,6 +144,10 @@ export component SettingsPage inherits Rectangle {
     in property <string> set-network-note;
     in property <[string]> network-labels;
     in property <string> network-choice;
+    in property <string> set-optical;
+    in property <string> set-optical-note;
+    in property <[string]> optical-labels;
+    in property <string> optical-choice;
     in property <string> set-folders;
     in property <string> set-folders-note;
     in property <[FolderRow]> folder-rows;
@@ -772,6 +776,17 @@ export component SettingsPage inherits Rectangle {
                                         values: ["", "never"];
                                         value: root.network-choice;
                                         picked(v) => { root.policy-picked("network", v); }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-optical;
+                                    note: root.set-optical-note;
+                                    Choice {
+                                        labels: root.optical-labels;
+                                        values: ["", "ask", "always"];
+                                        value: root.optical-choice;
+                                        picked(v) => { root.policy-picked("optical", v); }
                                     }
                                 }
                             }

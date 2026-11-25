@@ -11,7 +11,7 @@ use std::path::Path;
 pub struct Doc<'a> {
     pub path: &'a Path,
     pub size: u64,
-    /// Seconds since the epoch.
+    /// Nanoseconds since the epoch.
     pub mtime: i64,
     /// Lower case, without the dot; what tells `.doc` from `.xls`.
     pub extension: &'a str,
@@ -62,7 +62,7 @@ pub(crate) fn unopened(path: &Path) -> Option<(u64, i64)> {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs() as i64);
+        .map_or(0, |d| d.as_nanos() as i64);
     Some((meta.len(), mtime))
 }
 

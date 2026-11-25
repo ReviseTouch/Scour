@@ -102,7 +102,7 @@ pub fn human(r: &Response) -> String {
                 (g.locked, "locked by another program"),
                 (
                     g.offline,
-                    "left in the cloud (OneDrive or iCloud placeholders; reading would download them)",
+                    "not downloaded (cloud placeholders and FUSE mounts such as rclone or sshfs; reading would download them)",
                 ),
                 (
                     g.no_text,

@@ -104,7 +104,7 @@
     if (res.header_only) skips.push(T("{n} media skipped", { n: fmt(res.header_only) }));
     if (res.no_reader) skips.push(T("{n} documents not read", { n: fmt(res.no_reader) }));
     if (res.locked) skips.push(T("{n} locked", { n: fmt(res.locked) }));
-    if (res.offline) skips.push(T("{n} in the cloud", { n: fmt(res.offline) }));
+    if (res.offline) skips.push(T("{n} not downloaded", { n: fmt(res.offline) }));
     if (res.no_text) skips.push(T("{n} without text", { n: fmt(res.no_text) }));
     if (res.broken) skips.push(T("{n} would not open", { n: fmt(res.broken) }));
     const sortBtn = (key, msgid, num) => {

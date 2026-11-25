@@ -48,6 +48,16 @@ struct Shared {
     /// One compressor at a time: the background thread and a flush would
     /// otherwise write the same block through the same temporary file.
     packer: Mutex<()>,
+    /// The generation of the table last written: the table is encoded under
+    /// the lock and written after it, so searches do not wait on a disk's
+    /// flush, and an older encoding never lands over a newer one.
+    written: Mutex<u64>,
+}
+
+/// A table encoded and not yet written.
+struct Snapshot {
+    generation: u64,
+    bytes: Vec<u8>,
 }
 
 struct Inner {
@@ -62,6 +72,7 @@ struct Inner {
     blocks: HashMap<u32, u64>,
     dead: u64,
     dirty: bool,
+    generation: u64,
 }
 
 impl std::fmt::Debug for Store {
@@ -72,18 +83,63 @@ impl std::fmt::Debug for Store {
     }
 }
 
+/// The file whose presence says a directory is a text cache.
+const MARK: &str = "SCOUR-TEXTS";
+
+/// `dir` as a cache: made, or empty, or marked, or holding a table of an
+/// earlier cache — marked then. Anything else is somebody's.
+fn claim(dir: &Path) -> io::Result<()> {
+    let mark = dir.join(MARK);
+    if mark.is_file() {
+        return Ok(());
+    }
+    let empty = match std::fs::read_dir(dir) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => true,
+        Err(e) => return Err(e),
+    };
+    if !empty && table::version_of(&dir.join("table")).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "{} holds files that are not a Scour text cache",
+                dir.display()
+            ),
+        ));
+    }
+    std::fs::create_dir_all(dir)?;
+    block::write_private(
+        &mark,
+        b"Scour keeps documents' text here. Safe to delete.\n",
+    )
+}
+
 impl Store {
     /// The cache in `dir`, made if missing; `max_disk` bytes compressed at
     /// most, the oldest blocks given up first. Zero is no limit.
+    ///
+    /// **A directory that holds anything but a cache is refused**: blocks are
+    /// known by their names, and clearing removes them, so a folder of
+    /// somebody's files picked by mistake would lose those that look alike.
     pub fn open(dir: &Path, max_disk: u64) -> io::Result<Store> {
+        claim(dir)?;
         block::private_dir(dir)?;
+        if table::version_of(&dir.join("table")) == Some(false) {
+            // An older cache's: its blocks go with its table.
+            for entry in std::fs::read_dir(dir)?.flatten() {
+                if block::is_block(&entry.file_name().to_string_lossy()) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+            let _ = std::fs::remove_file(dir.join("table"));
+        }
         let mut blocks = HashMap::new();
         for entry in std::fs::read_dir(dir)?.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(n) = name
-                .strip_suffix(".zst")
-                .and_then(|n| n.parse::<u32>().ok())
+            if let Some(n) = block::is_block(&name)
+                .then(|| name[..8].parse::<u32>().ok())
+                .flatten()
             {
                 blocks.insert(n, entry.metadata().map_or(0, |m| m.len()));
             }
@@ -101,6 +157,7 @@ impl Store {
             blocks,
             dead,
             dirty: false,
+            generation: 0,
         };
         Ok(Store {
             shared: Arc::new(Shared {
@@ -109,6 +166,7 @@ impl Store {
                 inner: Mutex::new(inner),
                 hot: Mutex::new(Vec::new()),
                 packer: Mutex::new(()),
+                written: Mutex::new(0),
             }),
         })
     }
@@ -269,7 +327,9 @@ impl Store {
         inner.dead = 0;
         inner.dirty = true;
         self.shared.hot.lock().clear();
-        self.shared.save(&mut inner)?;
+        let snapshot = self.shared.snapshot(&mut inner);
+        drop(inner);
+        self.shared.write_out(snapshot)?;
         Ok(true)
     }
 
@@ -284,8 +344,11 @@ impl Store {
         inner.pending.clear();
         inner.sealed.clear();
         inner.dead = 0;
+        inner.dirty = true;
         self.shared.hot.lock().clear();
-        table::save(&self.shared.dir.join("table"), &inner.table, 0)
+        let snapshot = self.shared.snapshot(&mut inner);
+        drop(inner);
+        self.shared.write_out(snapshot)
     }
 
     pub fn stats(&self) -> Stats {
@@ -371,21 +434,24 @@ impl Shared {
                     .min_by_key(|(n, _)| *n)
             };
             let Some((n, text)) = next else {
-                let mut inner = self.inner.lock();
-                return self.save(&mut inner);
+                let snapshot = self.snapshot(&mut self.inner.lock());
+                return self.write_out(snapshot);
             };
             let packed = block::write(&self.dir, n, &text)?;
-            let mut inner = self.inner.lock();
-            inner.blocks.insert(n, packed);
-            inner.sealed.remove(&n);
-            inner.dirty = true;
-            self.save(&mut inner)?;
+            let snapshot = {
+                let mut inner = self.inner.lock();
+                inner.blocks.insert(n, packed);
+                inner.sealed.remove(&n);
+                inner.dirty = true;
+                self.snapshot(&mut inner)
+            };
+            self.write_out(snapshot)?;
         }
     }
 
-    /// Fit under the ceiling, oldest blocks first, then write the table if
-    /// anything changed.
-    fn save(&self, inner: &mut Inner) -> io::Result<()> {
+    /// Fit under the ceiling, oldest blocks first, then the table encoded
+    /// if anything changed — to be written once the lock is let go.
+    fn snapshot(&self, inner: &mut Inner) -> Option<Snapshot> {
         while self.max_disk > 0 && inner.blocks.values().sum::<u64>() > self.max_disk {
             let Some(&oldest) = inner.blocks.keys().min() else {
                 break;
@@ -398,11 +464,36 @@ impl Shared {
             self.hot.lock().retain(|(b, _)| *b != oldest);
             inner.dirty = true;
         }
-        if inner.dirty {
-            table::save(&self.dir.join("table"), &inner.table, inner.dead)?;
-            inner.dirty = false;
+        if !inner.dirty {
+            return None;
         }
-        Ok(())
+        inner.dirty = false;
+        inner.generation += 1;
+        Some(Snapshot {
+            generation: inner.generation,
+            bytes: table::encode(&inner.table, inner.dead),
+        })
+    }
+
+    /// Outside the lock. A write that fails leaves the table dirty, so the
+    /// next one writes it.
+    fn write_out(&self, snapshot: Option<Snapshot>) -> io::Result<()> {
+        let Some(s) = snapshot else { return Ok(()) };
+        let mut last = self.written.lock();
+        if s.generation <= *last {
+            return Ok(());
+        }
+        match block::write_private(&self.dir.join("table"), &s.bytes) {
+            Ok(()) => {
+                *last = s.generation;
+                Ok(())
+            }
+            Err(e) => {
+                drop(last);
+                self.inner.lock().dirty = true;
+                Err(e)
+            }
+        }
     }
 
     /// A finished block, uncompressed: from the hot few, or read and kept.

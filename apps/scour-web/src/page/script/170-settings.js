@@ -151,6 +151,8 @@
       k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
     seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
       k.network || "", (v) => { KEPT.network = v; keep({ network: v }); loadDisks(); drawSettings(); });
+    seg("seg-optical", [["", T("Never")], ["ask", T("Ask")], ["always", T("Always scan")]],
+      k.optical || "", (v) => { KEPT.optical = v; keep({ optical: v }); loadDisks(); drawSettings(); });
     seg("seg-every",
       [["1", T("1 min")], ["5", T("5 min")], ["10", T("10 min")], ["30", T("30 min")], ["60", T("1 hour")]],
       String(k.folders_every || 10),

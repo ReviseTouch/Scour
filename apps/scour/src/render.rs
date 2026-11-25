@@ -214,7 +214,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 (g.header_only, "media"),
                 (g.no_reader, "documents not read"),
                 (g.locked, "locked"),
-                (g.offline, "in the cloud"),
+                (g.offline, "not downloaded"),
                 (g.no_text, "without text"),
                 (g.broken, "would not open"),
             ] {

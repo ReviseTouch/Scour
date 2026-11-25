@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 /// at 2 GB/s; compressed once, by a thread nobody waits on.
 const LEVEL: i32 = 19;
 
+/// A block's name: eight digits and `.zst`, exactly as [`path_of`] writes.
+pub(crate) fn is_block(name: &str) -> bool {
+    name.len() == 12
+        && name.ends_with(".zst")
+        && name.as_bytes()[..8].iter().all(u8::is_ascii_digit)
+}
+
 pub(crate) fn path_of(dir: &Path, block: u32) -> PathBuf {
     dir.join(format!("{block:08}.zst"))
 }

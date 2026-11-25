@@ -252,6 +252,9 @@ pub(crate) fn run(args: Args) -> Result<()> {
             Arc::clone(&stop),
         );
         live.shutdown();
+        if let Some(documents) = documents::shared() {
+            documents.flush();
+        }
     };
     // A Mac's key is held on the main thread, where Carbon delivers it, so
     // the accept loop takes another; when that ends, so does the process.

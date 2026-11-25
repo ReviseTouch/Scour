@@ -13,6 +13,8 @@ pub struct Ground {
     lanes: Vec<Medium>,
     /// The most readers a lane's filesystem bears, whatever its disk does.
     caps: Vec<Option<usize>>,
+    /// A lane whose files a FUSE driver fetches from somewhere: not read.
+    remote: Vec<bool>,
 }
 
 impl Ground {
@@ -31,12 +33,13 @@ impl Ground {
         }));
         for root in &roots {
             let lane = ground.lane_of(root);
-            if let Some(cap) = surefoot::probe::filesystem_of(root)
-                .as_deref()
-                .and_then(cap_of)
-            {
+            let fs = surefoot::probe::filesystem_of(root);
+            if let Some(cap) = fs.as_deref().and_then(cap_of) {
                 let slot = &mut ground.caps[lane];
                 *slot = Some(slot.map_or(cap, |c| c.min(cap)));
+            }
+            if fs.as_deref().is_some_and(fetched) {
+                ground.remote[lane] = true;
             }
         }
         ground
@@ -54,6 +57,7 @@ impl Ground {
                     disks.push(disk);
                     ground.lanes.push(medium);
                     ground.caps.push(None);
+                    ground.remote.push(false);
                     disks.len() - 1
                 }
             };
@@ -85,6 +89,16 @@ impl Ground {
             .map(|(root, _)| root.as_path())
     }
 
+    #[cfg(test)]
+    pub(crate) fn fetching(&mut self, lane: usize) {
+        self.remote[lane] = true;
+    }
+
+    /// Whether this lane's files would be fetched to be read: see [`fetched`].
+    pub(crate) fn remote(&self, lane: usize) -> bool {
+        self.remote.get(lane).copied().unwrap_or(false)
+    }
+
     pub(crate) fn medium(&self, lane: usize) -> Medium {
         self.lanes.get(lane).copied().unwrap_or(Medium::Unknown)
     }
@@ -114,6 +128,15 @@ pub(crate) fn forced() -> Option<usize> {
 fn cap_of(filesystem: &str) -> Option<usize> {
     let fs = filesystem.to_ascii_lowercase();
     (fs == "fuseblk" || fs == "fuse" || fs.starts_with("fuse.") || fs == "zfs").then_some(4)
+}
+
+/// A filesystem a driver in user space serves from somewhere else: rclone,
+/// a Google Drive or GNOME online-accounts mount, sshfs. Reading a file there
+/// downloads it, and nothing in the file says so: none is read. `fuseblk` is
+/// a FUSE driver over a local disk — ntfs-3g, exfat-fuse — and is read.
+fn fetched(filesystem: &str) -> bool {
+    let fs = filesystem.to_ascii_lowercase();
+    fs != "fuseblk" && (fs.contains("fuse") || fs.contains("winfsp") || fs.contains("dokan"))
 }
 
 /// How many threads reading file contents a medium is worth. Measured
@@ -171,6 +194,23 @@ mod tests {
             ground.readers(ground.lane_of(Path::new("/elsewhere")), 20),
             4
         );
+    }
+
+    #[test]
+    fn what_a_driver_fetches_from_elsewhere_is_told_from_a_local_disk() {
+        for fs in [
+            "fuse.rclone",
+            "fuse.sshfs",
+            "fuse.gvfsd-fuse",
+            "fuse",
+            "macfuse",
+            "FUSE-rclone",
+        ] {
+            assert!(fetched(fs), "{fs}");
+        }
+        for fs in ["fuseblk", "ntfs3", "btrfs", "nfs", "cifs", "NTFS"] {
+            assert!(!fetched(fs), "{fs}");
+        }
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 use scour_textcache::{Kept, Key, Store};
 
+const S: i64 = 1_000_000_000;
+
 fn key(path: &str, size: u64, mtime: i64) -> Key {
     Key {
         path: path.into(),
@@ -14,13 +16,13 @@ fn key(path: &str, size: u64, mtime: i64) -> Key {
 fn a_text_is_found_again_until_its_file_changes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), 0).unwrap();
-    let k = key("/d/a.pdf", 100, 1_000);
+    let k = key("/d/a.pdf", 100, 1_000 * S);
     store.put(&k, &Kept::Words("İcra dairesi".into())).unwrap();
     assert_eq!(store.get(&k, 1), Some(Kept::Words("İcra dairesi".into())));
-    // FAT keeps time in two-second steps.
-    assert!(store.get(&key("/d/a.pdf", 100, 1_001), 1).is_some());
-    assert_eq!(store.get(&key("/d/a.pdf", 101, 1_000), 1), None);
-    assert_eq!(store.get(&key("/d/a.pdf", 100, 1_005), 1), None);
+    // FAT keeps time in two-second steps: whole seconds, a second apart.
+    assert!(store.get(&key("/d/a.pdf", 100, 1_001 * S), 1).is_some());
+    assert_eq!(store.get(&key("/d/a.pdf", 101, 1_000 * S), 1), None);
+    assert_eq!(store.get(&key("/d/a.pdf", 100, 1_005 * S), 1), None);
     store.flush().unwrap();
     drop(store);
     let again = Store::open(dir.path(), 0).unwrap();
@@ -149,4 +151,68 @@ fn full_blocks_are_read_while_they_are_compressed_and_after() {
         assert_eq!(got, Some(Kept::Words(text(i))), "document {i}");
     }
     assert_eq!(again.stats().documents, 40);
+}
+
+#[test]
+fn an_edit_within_the_second_on_a_fine_filesystem_is_an_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), 0).unwrap();
+    // ext4 and NTFS keep fractions: the same size, 0.3 s later, is new text.
+    let k = key("/d/mail.eml", 900, 1_000 * S + 100_000_000);
+    store.put(&k, &Kept::Words("eski".into())).unwrap();
+    assert_eq!(
+        store.get(&key("/d/mail.eml", 900, 1_000 * S + 400_000_000), 1),
+        None
+    );
+    assert!(store.get(&k, 1).is_some());
+}
+
+#[test]
+fn a_folder_of_somebody_s_files_is_not_taken_for_a_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let theirs = dir.path().join("Belgeler");
+    std::fs::create_dir(&theirs).unwrap();
+    std::fs::write(theirs.join("00000001.zst"), b"their archive").unwrap();
+    std::fs::write(theirs.join("table"), b"their notes").unwrap();
+    let e = Store::open(&theirs, 0).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        std::fs::read(theirs.join("00000001.zst")).unwrap(),
+        b"their archive"
+    );
+    assert_eq!(std::fs::read(theirs.join("table")).unwrap(), b"their notes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&theirs).unwrap().permissions().mode() & 0o777;
+        assert_ne!(mode, 0o700, "the folder's own permissions are left alone");
+    }
+    // An empty one is taken, and marked: opened again, it is the cache.
+    let empty = dir.path().join("empty");
+    let store = Store::open(&empty, 0).unwrap();
+    store.put(&key("/d/a.pdf", 1, S), &Kept::NoText).unwrap();
+    store.flush().unwrap();
+    drop(store);
+    assert!(
+        Store::open(&empty, 0)
+            .unwrap()
+            .get(&key("/d/a.pdf", 1, S), 1)
+            .is_some()
+    );
+}
+
+#[test]
+fn an_older_cache_is_kept_as_a_place_and_emptied() {
+    let dir = tempfile::tempdir().unwrap();
+    // A cache of the version before marks: its table, one of its blocks.
+    std::fs::write(dir.path().join("table"), b"SCTC2\n\0\0\0\0\0\0\0\0").unwrap();
+    std::fs::write(dir.path().join("00000000.zst"), b"old").unwrap();
+    std::fs::write(dir.path().join("notes.zst"), b"not a block").unwrap();
+    let store = Store::open(dir.path(), 0).unwrap();
+    assert_eq!(store.stats().documents, 0);
+    assert!(!dir.path().join("00000000.zst").exists());
+    assert!(
+        dir.path().join("notes.zst").exists(),
+        "only a block's name is a block"
+    );
 }

@@ -611,6 +611,7 @@ fn main() -> Result<()> {
         .into(),
     );
     window.set_network_choice(kept.network.as_str().into());
+    window.set_optical_choice(kept.optical.as_str().into());
     let folders = Rc::new(RefCell::new(kept.folders.clone()));
     // Which of them are switched off, and which only walked: replaced whole
     // when either changes, as `Change` carries them.

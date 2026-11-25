@@ -193,7 +193,7 @@ pub fn answered(
         (header_only, "{n} media skipped"),
         (no_reader, "{n} documents not read"),
         (locked, "{n} locked"),
-        (offline, "{n} in the cloud"),
+        (offline, "{n} not downloaded"),
         (no_text, "{n} without text"),
         (broken, "{n} would not open"),
     ] {

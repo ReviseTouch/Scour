@@ -172,6 +172,12 @@ fn state_of(
         // Nobody has answered for this one: what was said for its kind.
         let policy = match v.kind {
             Kind::Network => settings.network.as_str(),
+            // A disc is left out unless somebody said otherwise.
+            Kind::Optical => match settings.optical.as_str() {
+                "always" => "always",
+                "ask" => "",
+                _ => "never",
+            },
             _ => settings.removable.as_str(),
         };
         match policy {
@@ -244,7 +250,7 @@ fn source_of(v: &Volume) -> SourceCfg {
         name: v.id.clone(),
         kind: match v.kind {
             Kind::System | Kind::Fixed => SourceKindCfg::Local,
-            Kind::Removable => SourceKindCfg::Removable,
+            Kind::Removable | Kind::Optical => SourceKindCfg::Removable,
             Kind::Network => SourceKindCfg::Network,
         },
         roots: v.roots.iter().map(PathBuf::from).collect(),

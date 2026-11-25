@@ -9,6 +9,9 @@ use scour_core::{
 /// How much CSV goes into one frame of an export. A frame is a line of JSON, so a
 /// row per frame pays an envelope and a write each; 128 KB is about two thousand.
 const EXPORT_CHUNK: usize = 128 * 1024;
+/// How long an export of a `content:` query nobody has searched for yet goes
+/// on reading before it writes what it found.
+const EXPORT_READING: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Engine {
     /// The whole matching set, as CSV, in pieces; returns how many rows were written.
@@ -46,6 +49,44 @@ impl Engine {
         };
 
         let mut wrote = 0u64;
+        // The index cannot answer `content:`: what was read for it can. The
+        // rows of a query already being read, as the screen has them, are
+        // written as they are, without disturbing that reading; else it is
+        // read now, for as long as an export may wait.
+        let ast = self.shared.ast(query);
+        if let Some(plan) = crate::content::plan(&ast) {
+            let contents = &self.shared.contents;
+            if contents.rows(&ast).is_none() {
+                let began = std::time::Instant::now();
+                loop {
+                    let page = Page {
+                        offset: 0,
+                        limit: 10_000,
+                        count_cap: u32::MAX,
+                    };
+                    let res = contents.page(
+                        self.lent(),
+                        ast.clone(),
+                        plan.clone(),
+                        SortKey::default(),
+                        true,
+                        page,
+                    )?;
+                    if !res.capped || began.elapsed() > EXPORT_READING {
+                        break;
+                    }
+                }
+            }
+            for hit in contents.rows(&ast).unwrap_or_default() {
+                sheet.row(&hit, &mut buf);
+                wrote += 1;
+                if buf.len() >= EXPORT_CHUNK && !flush(&mut buf, &mut stopped) {
+                    return Ok(wrote);
+                }
+            }
+            flush(&mut buf, &mut stopped);
+            return Ok(wrote);
+        }
         let scanned = self.shared.index.scan(
             &scour_core::ScanRequest {
                 query: self.shared.ast(query),

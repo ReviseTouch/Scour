@@ -119,10 +119,11 @@ struct Tally {
 
 impl ZipScratch {
     /// Search a `PK\x03\x04` file. When `eof` is true, `head` already holds the
-    /// entire file in memory and zero extra syscalls are made.
+    /// entire file in memory and zero extra syscalls are made; `file` is only
+    /// read when it is not.
     pub(crate) fn search_file(
         &mut self,
-        file: &mut File,
+        file: Option<&mut File>,
         file_len: u64,
         head: &[u8],
         eof: bool,
@@ -136,11 +137,14 @@ impl ZipScratch {
             bin_skipped: false,
             uncomp_spent: 0,
         };
-        let extra = if eof {
-            self.scan_slice(head, None, 0, pattern, opts, &mut tally);
-            0
-        } else {
-            self.scan_large_file(file, file_len, head, pattern, opts, &mut tally)
+        let extra = match file {
+            Some(file) if !eof => {
+                self.scan_large_file(file, file_len, head, pattern, opts, &mut tally)
+            }
+            _ => {
+                self.scan_slice(head, None, 0, pattern, opts, &mut tally);
+                0
+            }
         };
         let outcome = if !tally.hits.is_empty() || tally.more {
             Outcome::Found {
