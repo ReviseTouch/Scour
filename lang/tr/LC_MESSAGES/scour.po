@@ -3100,6 +3100,3 @@ msgstr "{date} itibarıyla"
 
 msgid "until {date}"
 msgstr "{date} tarihine kadar"
-
-msgid "last {n} months"
-msgstr "son {n} ay"
