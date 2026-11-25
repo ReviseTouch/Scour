@@ -112,7 +112,9 @@ correct on the day it is written.
   format is added once and both search and preview have it. It asks `surefoot` what each root stands on, as
   the walk does, and reads a spinning disk on one thread (a large set where each
   file lies on the platter, by `FIEMAP`, on Linux; by path elsewhere), a solid one on half the cores up to sixteen, a network one on
-  eight, an unnamed one on four; a FUSE or ZFS volume on four at most.
+  eight, an unnamed one on four; a FUSE or ZFS volume on four at most. A disk that
+  says it spins is asked again, on Linux, before a large read: flash behind a
+  USB bridge says so too, and is read by two.
 - **Documents it cannot stream go to another process.** PDF, `.doc`, `.xls`,
   `.ppt` and `.eml` are handed to `scour_grep::Texts`, which `scourd` answers
   (`src/documents.rs`): their text kept in `scour-textcache` (zstd blocks,

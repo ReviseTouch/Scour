@@ -77,6 +77,14 @@ impl Ground {
             .map_or(self.lanes.len(), |(_, lane)| *lane)
     }
 
+    /// A root on this lane: what a disk is known by.
+    pub(crate) fn root_of(&self, lane: usize) -> Option<&Path> {
+        self.roots
+            .iter()
+            .find(|(_, l)| *l == lane)
+            .map(|(root, _)| root.as_path())
+    }
+
     pub(crate) fn medium(&self, lane: usize) -> Medium {
         self.lanes.get(lane).copied().unwrap_or(Medium::Unknown)
     }
@@ -90,6 +98,14 @@ impl Ground {
             None => wide,
         }
     }
+}
+
+/// Every lane this wide, for measuring: `SCOUR_GREP_READERS`.
+pub(crate) fn forced() -> Option<usize> {
+    std::env::var("SCOUR_GREP_READERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
 }
 
 /// Filesystems that bear fewer readers than their disk: a FUSE driver
@@ -108,12 +124,7 @@ fn cap_of(filesystem: &str) -> Option<usize> {
 /// trips, so wide: the design's eight, until a share is measured; a disk
 /// nobody can name, four and in the order given.
 pub fn readers(medium: Medium, cores: usize) -> usize {
-    // For measuring: every lane this wide.
-    if let Some(n) = std::env::var("SCOUR_GREP_READERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-    {
+    if let Some(n) = forced() {
         return n;
     }
     match medium {

@@ -12,6 +12,7 @@ mod pattern;
 mod quiet;
 mod read;
 mod scan;
+mod settle;
 mod texts;
 mod zip;
 

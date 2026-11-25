@@ -181,10 +181,11 @@ fn limits_are_kept_and_said() {
 #[test]
 fn a_spent_budget_leaves_the_rest_unread() {
     let dir = tempfile::tempdir().unwrap();
-    let files: Vec<File> = (0..64)
+    let files: Vec<File> = (0..32)
         .map(|i| put(dir.path(), &format!("{i:02}"), &vec![b'a'; 64 << 10]))
         .collect();
-    // One lane of one reader, so the order read is the order given.
+    // One lane of one reader, so the order read is the order given: a disk
+    // said to spin, with too few files to be asked again what it is.
     let ground = Ground::of([(dir.path().to_path_buf(), None, Medium::Spinning)]);
     let scanner = Scanner::new(
         Pattern::new(&text("zzz"), false).unwrap(),

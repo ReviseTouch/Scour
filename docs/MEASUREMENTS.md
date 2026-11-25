@@ -1089,6 +1089,36 @@ SCAN_ROOTS=/run/media/$USER/LABEL SCOUR_GREP_ORDER=physical|path|given \
   SCOUR_GREP_READERS=1 scan zzqq < set.txt
 ```
 
+## Flash behind USB, which says it spins (2026-11-25)
+
+A USB stick ("UDisk", 7.5 GB) and a class 4 card in a USB reader (7.4 GB),
+both FAT, both reporting `rotational` 1 — so Scour took both for spinning
+disks: one reader, files in place order. 3,000 small files (30 MiB) on
+each, the volume remounted before every run.
+
+The first 4 KiB of a file just dropped from the cache, median of 200: the
+stick 0.42 ms, the card 0.97 ms; the 5,400 rpm disk above, 11 ms.
+
+| readers, order as given | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|
+| stick, round 1 / 2 | 2.57 / 2.53 s | **2.51 / 1.93 s** | 2.07 / 2.08 s | 2.13 / 2.60 s |
+| card, round 1 / 2 | 4.61 / 4.64 s | **4.05 / 4.05 s** | 5.95 / 5.69 s | 4.21 / 4.22 s |
+
+Path and place order made no difference on either (within 2 %). So a disk
+that says it spins is asked again before a read of 64 files or more: the
+first 4 KiB of up to five of them, each dropped from the cache first, and a
+median under 3 ms is flash — two readers, the order given. Asked once a
+disk for the life of the process. The two binaries alternated, nothing set
+by hand:
+
+| | before | after |
+|---|---:|---:|
+| stick | 2.42 / 2.50 s | 2.20 / 2.06 s |
+| card | 4.63 / 4.71 s | 4.07 / 4.26 s |
+
+The walk asks `surefoot` the same question and still reads these with one
+thread; the same check belongs there, in a release of `surefoot`.
+
 ## Reproducing
 
 ```sh

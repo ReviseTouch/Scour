@@ -6,15 +6,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use surefoot::Medium;
+
 use crate::budget::Budget;
 use crate::class::Class;
 use crate::excerpt::Hit;
-use crate::ground::Ground;
+use crate::ground::{Ground, forced};
 use crate::order::{Order, arrange};
 use crate::pattern::Pattern;
 use crate::read::Reader;
+use crate::settle::{FLASH_READERS, spins};
 use crate::texts::{Doc, DocText, Texts, extension_of, handed_over, unopened};
 use crate::zip::search_whole;
+
+/// Below this, a disk that says it spins is taken at its word: a few
+/// files are read in moments either way.
+const SETTLE_FROM: usize = 64;
 
 /// A file to read. What the caller knows saves opening it: a size says it
 /// is empty or over the limit, a class that it is a picture or a video.
@@ -162,10 +169,10 @@ impl Scanner {
         std::thread::scope(|scope| {
             let mut workers = Vec::new();
             for (lane, list) in lanes.iter_mut().enumerate() {
-                let medium = self.ground.medium(lane);
+                let (medium, readers) = self.settled(lane, files, list);
                 arrange(Order::of(medium, files, list), files, list);
                 let (list, next) = (&*list, Arc::new(AtomicUsize::new(0)));
-                for _ in 0..self.ground.readers(lane, self.cores).min(list.len()) {
+                for _ in 0..readers.min(list.len()) {
                     let next = Arc::clone(&next);
                     workers.push(scope.spawn(move || self.work(files, list, &next, budget)));
                 }
@@ -177,6 +184,24 @@ impl Scanner {
             }
         });
         outcomes
+    }
+
+    /// A lane's medium and readers, a disk that says it spins asked again
+    /// when there is enough to read for it to matter: flash behind a USB
+    /// bridge reads as solid, two at a time, in the order given.
+    fn settled(&self, lane: usize, files: &[File], list: &[usize]) -> (Medium, usize) {
+        let medium = self.ground.medium(lane);
+        let readers = self.ground.readers(lane, self.cores);
+        if medium != Medium::Spinning || list.len() < SETTLE_FROM {
+            return (medium, readers);
+        }
+        let Some(root) = self.ground.root_of(lane) else {
+            return (medium, readers);
+        };
+        if spins(root, list.iter().map(|&i| files[i].path.as_path())) {
+            return (medium, readers);
+        }
+        (Medium::Solid, forced().unwrap_or(FLASH_READERS))
     }
 
     fn work(
