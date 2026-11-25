@@ -180,11 +180,26 @@ pub fn scope(text: &str, home: &str) -> Scope {
     Scope { within, outside }
 }
 
-fn is_place(t: &Term) -> bool {
+/// The query less every run that holds an `under:` or `parent:` term not
+/// written with `!`: what the folder list is weighed by and the tiles are
+/// counted against. A whole run goes, so no `|` is left to join a stranger;
+/// a standalone `!under:` stays. The runs left are joined by one space.
+pub fn without_places(text: &str) -> String {
+    let place = |t: &Term| !t.not && matches!(t.field, Some("under" | "parent"));
+    runs(text)
+        .into_iter()
+        .filter(|r| !r.iter().any(place))
+        .map(|r| &text[r[0].start..r[r.len() - 1].end])
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(super) fn is_place(t: &Term) -> bool {
     t.field == Some("under") && !t.not
 }
 
-fn norm(home: &str, p: &str) -> String {
+/// A place's full path: `~` written out, no trailing `/`.
+pub(super) fn norm(home: &str, p: &str) -> String {
     trim(&full_form(home, p)).to_string()
 }
 

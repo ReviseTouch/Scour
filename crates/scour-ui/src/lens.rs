@@ -6,10 +6,18 @@
 //! Which lens a term opens is a decision about the window, not a reading of
 //! the query: the service still says what every term means.
 
+mod capsule;
+mod folders;
 mod group;
 mod launch;
+#[cfg(test)]
+mod machine;
+mod spots;
+pub use capsule::*;
+pub use folders::*;
 pub use group::*;
 pub use launch::*;
+pub use spots::*;
 
 /// A term of the query, by byte offsets into it.
 #[derive(Debug, Clone, PartialEq, Eq)]
