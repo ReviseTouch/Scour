@@ -174,6 +174,7 @@ pub fn lay(
         end: t.end,
         head: t.clone(),
         field: t.field.unwrap_or("kind"),
+        cap: None,
         head_w,
         width,
         dx,

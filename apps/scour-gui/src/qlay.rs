@@ -59,12 +59,21 @@ fn fold_groups(qb: &mut QueryBar, text: &str, d: &Dress) -> Vec<Drawn> {
     } else {
         80.0 * d.adv
     };
-    let (head_w, _) = head(qb, d, "under", 6, false);
     let tiles = crate::qplace::tiles(&qb.disks, &qb.sources);
-    let mut out: Vec<Drawn> = lens::place_caps(text, &home(), &tiles, d.caret)
+    let caret = d.caret.map(|at| lens::Caret {
+        at,
+        editing: qb.lenses.editing,
+    });
+    let hm = home();
+    let mut caps = lens::place_caps_at(text, &hm, &tiles, caret);
+    caps.extend(lens::exclusion_caps(text, &hm, &tiles, caret));
+    let mut out: Vec<Drawn> = caps
         .iter()
         .filter(|p| p.parts.len() > 1 || p.parts.iter().any(|p| !p.raw))
         .filter_map(|p| {
+            // An exclusion's header holds its `!` too.
+            let not = text[p.start..].starts_with('!');
+            let (head_w, _) = head(qb, d, "under", 6 + usize::from(not), not);
             let mut m = |s: &str, face: i32| width_of(qb, s, face);
             qgroup::fit(text, p, room, head_w, d.adv, &mut m)
         })
@@ -255,6 +264,7 @@ pub fn lay_out(
         }
     }
     let bits = bits(qb, text, &groups, &all);
+    qb.caps = groups.iter().filter_map(|g| g.cap.clone()).collect();
     qb.groups = all
         .into_iter()
         .zip(&groups)

@@ -234,6 +234,8 @@ export component MainWindow inherits Window {
     callback q-delete() -> bool;
     callback q-before-char(string) -> bool;
     callback lens-right() -> bool;
+    // ← or → over a place capsule: true when it stopped inside it.
+    callback q-arrow(bool) -> bool;
     callback lens-toggle();
     callback lens-launch();
     // With nothing found: one filter left out at a time, and what it finds.
@@ -1735,6 +1737,12 @@ export component MainWindow inherits Window {
                         // Tab leaves the term, lens or not: the caret goes outside it.
                         if (e.text == Key.Tab && !e.modifiers.shift && !e.modifiers.control
                                 && !e.modifiers.alt && root.lens-exit()) {
+                            return accept;
+                        }
+                        if ((e.text == Key.LeftArrow || e.text == Key.RightArrow) && !e.modifiers.shift
+                                && !e.modifiers.control && !e.modifiers.alt
+                                && !(root.lens-open && root.lens-kind == "time" && root.lens-time.armed)
+                                && root.q-arrow(e.text == Key.RightArrow)) {
                             return accept;
                         }
                         if (root.lens-open) {

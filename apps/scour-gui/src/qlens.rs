@@ -106,6 +106,10 @@ pub struct Lenses {
     stepped: bool,
     /// The next opening is the lens's own press rewriting the query, not typing.
     pub hold: bool,
+    /// The person is editing at the caret (`lens::Caret`): set by typing or
+    /// a press into a folder part, cleared by a lens's own write, an arrow
+    /// over a capsule, or the caret leaving the term.
+    pub editing: bool,
     /// The time panel's scale and mode, kept while it stays open.
     pub look: qtime::Look,
     /// The time term the calendar last lit, `None` on a fresh opening.
@@ -146,7 +150,14 @@ impl Lenses {
             return Vec::new();
         };
         let keep = self.open.as_ref().is_some_and(|o| o.a == t.start);
-        let by_itself = lens::opens_itself(kind) && caret == t.end;
+        let by_itself = caret == t.end
+            && lens::opens_by_itself(
+                q,
+                lens::Caret {
+                    at: caret,
+                    editing: self.editing,
+                },
+            );
         if !(asked || keep || by_itself) {
             self.close();
             return Vec::new();

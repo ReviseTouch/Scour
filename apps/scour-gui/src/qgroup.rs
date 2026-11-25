@@ -60,6 +60,8 @@ pub struct Drawn {
     /// The term whose header is the capsule's, and its field.
     pub head: Term,
     pub field: &'static str,
+    /// The place group as folded, for the arrow keys; none for a list.
+    pub cap: Option<PlaceCap>,
     /// Its header's width, and the whole capsule's.
     pub head_w: f32,
     pub width: f32,
@@ -166,6 +168,32 @@ fn part_bits(p: &CapPart, x: f32, w: f32, m: &mut dyn FnMut(&str, i32) -> f32) -
     out
 }
 
+/// What a stretch of the capsule stands for: a part drawn, or a block of
+/// hidden parts drawn as its "+N", by its first part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Part(usize),
+    Block(usize),
+}
+
+/// A "+n" chip at `x`; how wide.
+fn plus(bits: &mut Vec<Bit>, x: f32, n: usize, m: &mut dyn FnMut(&str, i32) -> f32) -> f32 {
+    let label = format!("+{n}");
+    let lw = m(&label, PART_BOLD);
+    let bit = |x: f32, w: f32, kind: i32, text: String, bold: bool| Bit {
+        x,
+        w,
+        kind,
+        text,
+        bold,
+        dim: 1,
+        disk: "",
+    };
+    bits.push(bit(x, lw + 2.0 * PAD, 0, String::new(), false));
+    bits.push(bit(x + PAD, lw, 1, label, true));
+    lw + 2.0 * PAD
+}
+
 /// One fold of the group laid out from `head_w`, the header's width.
 pub fn lay(
     text: &str,
@@ -176,7 +204,7 @@ pub fn lay(
 ) -> Drawn {
     let mut x = head_w;
     let mut bits = Vec::new();
-    let mut slots: Vec<(Option<usize>, f32, f32)> = Vec::new();
+    let mut slots: Vec<(Slot, f32, f32)> = Vec::new();
     let sep = |x: f32, bits: &mut Vec<Bit>| {
         bits.push(Bit {
             x: x + SEP / 2.0 - 1.5,
@@ -188,45 +216,39 @@ pub fn lay(
             disk: "",
         })
     };
-    for (k, p) in cap.parts.iter().enumerate().filter(|(_, p)| p.shown) {
+    let blocks = cap.blocks();
+    for (k, p) in cap.parts.iter().enumerate() {
+        let block = blocks.iter().find(|b| b.0 == k);
+        if !p.shown && block.is_none() {
+            continue;
+        }
         if !slots.is_empty() {
             sep(x, &mut bits);
             x += SEP;
         }
+        if let Some(&(first, n)) = block {
+            let w = plus(&mut bits, x, n, m);
+            slots.push((Slot::Block(first), x, x + w));
+            x += w;
+            continue;
+        }
         let w = part_w(text, p, adv, m);
         bits.extend(part_bits(p, x, w, m));
-        slots.push((Some(k), x, x + w));
+        slots.push((Slot::Part(k), x, x + w));
         x += w;
     }
-    if cap.hidden > 0 {
-        sep(x, &mut bits);
-        x += SEP;
-        let label = format!("+{}", cap.hidden);
-        let lw = m(&label, PART_BOLD);
-        bits.push(Bit {
-            x,
-            w: lw + 2.0 * PAD,
-            kind: 0,
-            text: String::new(),
-            bold: false,
-            dim: 0,
-            disk: "",
-        });
-        bits.push(Bit {
-            x: x + PAD,
-            w: lw,
-            kind: 1,
-            text: label,
-            bold: true,
-            dim: 1,
-            disk: "",
-        });
-        slots.push((None, x, x + lw + 2.0 * PAD));
-        x += lw + 2.0 * PAD;
-    }
     let width = x + END;
-    let slot = |k: usize| slots.iter().find(|s| s.0 == Some(k));
-    let plus_end = slots.iter().find(|s| s.0.is_none()).map_or(width, |s| s.2);
+    let slot_of = |k: usize| -> Option<&(Slot, f32, f32)> {
+        let first = blocks
+            .iter()
+            .find(|b| b.0 <= k && k < b.0 + b.1)
+            .map(|b| b.0);
+        slots.iter().find(|s| match (s.0, first) {
+            (Slot::Block(f), Some(b)) => f == b,
+            (Slot::Part(p), None) => p == k,
+            _ => false,
+        })
+    };
     let mut dx = Vec::new();
     for (i, _) in text[cap.start..cap.end]
         .char_indices()
@@ -238,24 +260,25 @@ pub fn lay(
             Some(k) => {
                 let p = &cap.parts[k];
                 let t = &p.spot.terms[0];
-                match slot(k) {
-                    Some(s) if p.raw && t.start < at && at <= t.end => {
+                match slot_of(k) {
+                    Some(s) if p.shown && p.raw && t.start < at && at <= t.end => {
                         let v = value_of(text, t);
                         s.1 + WELL_PAD + text[v..at.max(v)].chars().count() as f32 * adv
                     }
                     Some(s) => s.2,
-                    None => plus_end,
+                    None => width,
                 }
             }
         });
     }
-    let aim = |k: Option<usize>| -> Aim {
-        let k = k
-            .or_else(|| cap.parts.iter().position(|p| !p.shown))
-            .unwrap_or(0);
+    let aim = |s: Slot| -> Aim {
+        let k = match s {
+            Slot::Part(k) => k,
+            Slot::Block(first) => first,
+        };
         let p = &cap.parts[k];
         let t = &p.spot.terms[p.spot.terms.len() - 1];
-        if p.raw {
+        if p.raw && p.shown {
             Aim::Letters(value_of(text, t), t.end)
         } else {
             Aim::At(t.end)
@@ -284,6 +307,7 @@ pub fn lay(
         end: cap.end,
         head,
         field: "under",
+        cap: Some(cap),
         head_w,
         width,
         dx,
@@ -319,25 +343,29 @@ pub fn delete(text: &str, home: &str, caps: &[PlaceCap], c: usize) -> Option<(St
     (!p.raw).then(|| p.spot.remove(text, home))
 }
 
-/// A press of the pill over the whole group: `drop` takes it out, `neg`
-/// excludes every member — not under any of them. None for one term alone.
+/// A press of the pill over the whole group `t` (its bytes): `drop` takes
+/// it out; `neg` turns "in any of them" into "in none of them" — one
+/// `!under:` each — and a block of those back. None for one term alone.
 pub fn whole(text: &str, t: &Term, what: &str) -> Option<(String, usize)> {
-    let members: Vec<Term> = scour_ui::lens::terms(text)
+    let members = scour_ui::lens::terms(text)
         .into_iter()
         .filter(|m| t.start <= m.start && m.end <= t.end)
-        .collect();
-    if members.len() < 2 {
+        .count();
+    if members < 2 {
         return None;
     }
     match what {
-        "drop" => Some(scour_ui::lens::replace(text, t, "")),
-        "neg" => {
-            let not: Vec<String> = members
-                .iter()
-                .map(|m| format!("!{}", &text[m.start..m.end]))
-                .collect();
-            Some(scour_ui::lens::replace(text, t, &not.join(" ")))
+        "drop" => {
+            let (mut a, mut b) = (t.start, t.end);
+            if text[b..].starts_with(' ') {
+                b += 1;
+            } else if text[..a].ends_with(' ') {
+                a -= 1;
+            }
+            Some((format!("{}{}", &text[..a], &text[b..]), a))
         }
+        "neg" if t.not => Some(scour_ui::lens::unnegate_places(text, t.start)),
+        "neg" => Some(scour_ui::lens::negate_places(text, t.start)),
         _ => None,
     }
 }

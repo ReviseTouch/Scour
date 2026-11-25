@@ -54,8 +54,12 @@ pub struct QueryBar {
     /// measure, in the order it was asked.
     pub(crate) widths: std::collections::HashMap<(String, i32), f32>,
     pub(crate) asked: Vec<(String, i32)>,
-    /// The place groups drawn as one capsule: their bytes, and where.
+    /// The place groups drawn as one capsule: their bytes, and where; and
+    /// each as folded, for the arrow keys.
     pub groups: Vec<(usize, usize, qbar::Laid)>,
+    pub caps: Vec<lens::PlaceCap>,
+    /// The text `write` set, so its own `query-changed` is not read as typing.
+    pub(crate) wrote: Option<String>,
     /// The last `volumes` and `sources` answers: the scope chip's disks.
     pub disks: Vec<scour_proto::Disk>,
     pub sources: Vec<scour_core::SourceInfo>,
@@ -334,6 +338,8 @@ pub(crate) fn write(w: &MainWindow, s: &Rc<RefCell<State>>, query: String, caret
         st.qb.anchor = caret;
         st.qb.cursor = caret;
         st.qb.hover = None;
+        st.qb.wrote = Some(query.clone());
+        st.qb.lenses.editing = false;
     }
     w.set_hov_on(false);
     w.set_query(query.as_str().into());
@@ -779,13 +785,7 @@ fn drop_empty(w: &MainWindow, s: &Rc<RefCell<State>>, staying_in: Option<usize>)
         return false;
     };
     let cur = s.borrow().qb.cursor.min(text.len());
-    // The term alone goes: the space in front of it stays, so the caret is
-    // left outside the term before it, and two spaces do not meet.
-    let (head, mut rest) = (&text[..t.start], &text[t.end..]);
-    if (head.is_empty() || head.ends_with(' ')) && rest.starts_with(' ') {
-        rest = &rest[1..];
-    }
-    let query = format!("{head}{rest}");
+    let (query, _) = lens::remove_term(&text, &t);
     let gone = text.len() - query.len();
     let caret = if cur > t.end {
         cur - gone
@@ -880,7 +880,12 @@ fn group_key(w: &MainWindow, s: &Rc<RefCell<State>>, back: bool) -> bool {
             return false;
         }
         let tiles = crate::qplace::tiles(&st.qb.disks, &st.qb.sources);
-        let caps = lens::place_caps(&text, &home(), &tiles, Some(c));
+        let caret = Some(lens::Caret {
+            at: c,
+            editing: st.qb.lenses.editing,
+        });
+        let mut caps = lens::place_caps_at(&text, &home(), &tiles, caret);
+        caps.extend(lens::exclusion_caps(&text, &home(), &tiles, caret));
         if back {
             crate::qgroup::backspace(&text, &home(), &caps, c)
         } else {
@@ -949,6 +954,53 @@ fn drop_launcher(w: &MainWindow, s: &Rc<RefCell<State>>) {
     }
 }
 
+/// A press on a place capsule: into a folder part it edits that folder; on
+/// a disk, or anywhere else, it only rests there.
+fn press_part(state: &Rc<RefCell<State>>, text: &str) {
+    let mut st = state.borrow_mut();
+    let c = st.qb.cursor.min(text.len());
+    let folder = st
+        .qb
+        .caps
+        .iter()
+        .find(|p| p.start <= c && c <= p.end)
+        .is_some_and(|p| {
+            p.part_at(c)
+                .map(|k| &p.parts[k])
+                .is_some_and(|part| part.shown && part.spot.tile.is_none())
+        });
+    st.qb.lenses.editing = folder;
+}
+
+/// An arrow over a place capsule: one stop a part, as drawn; false when the
+/// key leaves the capsule and moves by a letter.
+fn arrow(w: &MainWindow, s: &Rc<RefCell<State>>, forward: bool) -> bool {
+    let text = w.get_query().to_string();
+    let next = {
+        let st = s.borrow();
+        let c = st.qb.cursor.min(text.len());
+        if st.qb.anchor != c {
+            return false;
+        }
+        st.qb
+            .caps
+            .iter()
+            .find(|p| p.start <= c && c <= p.end)
+            .and_then(|p| p.step(&text, c, forward))
+    };
+    let Some(at) = next else { return false };
+    {
+        let mut st = s.borrow_mut();
+        st.qb.anchor = at;
+        st.qb.cursor = at;
+        st.qb.lenses.editing = false;
+    }
+    w.set_anchor_to(-1);
+    w.set_caret_to(at as i32);
+    w.set_caret_ask(w.get_caret_ask() + 1);
+    true
+}
+
 /// Take a term out, exclude it or take the exclusion off, or read a word a
 /// letter off: what a term's buttons do.
 fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
@@ -958,6 +1010,19 @@ fn act(w: &MainWindow, state: &Rc<RefCell<State>>, t: &lens::Term, what: &str) {
     }
     if let Some((query, caret)) = crate::qgroup::whole(&text, t, what) {
         write(w, state, query, caret);
+        // Kept under the pointer, so a second `!` turns it back.
+        if what == "neg" {
+            let not = !t.not;
+            state.borrow_mut().qb.hover = Some(lens::Term {
+                start: t.start,
+                end: caret,
+                not,
+                field: Some("under"),
+                value: String::new(),
+            });
+            w.set_hov_not(not);
+            w.set_hov_on(true);
+        }
         return;
     }
     let raw = &text[t.start..t.end];
@@ -1033,6 +1098,10 @@ pub fn wire(
                     frame::clamp_selection(&text, prev, raw_a, raw_c, |t| known_field(&s.spans, t));
                 s.qb.anchor = sa;
                 s.qb.cursor = sc;
+                let at = |c: usize| lens::term_at(&text, c.min(text.len())).map(|t| t.start);
+                if at(prev) != at(sc) {
+                    s.qb.lenses.editing = false;
+                }
                 (sa, sc)
             };
             if (sa, sc) != (raw_a, raw_c) {
@@ -1086,7 +1155,7 @@ pub fn wire(
                         lens::Term {
                             start: *a,
                             end: *b,
-                            not: false,
+                            not: text[*a..].starts_with('!'),
                             field: Some("under"),
                             value: String::new(),
                         },
@@ -1145,6 +1214,7 @@ pub fn wire(
             if drop_empty(&w, &state, Some(cur)) {
                 return;
             }
+            press_part(&state, &text);
             let t = state.borrow().qb.field.term_at(&text, line, col);
             // A press past the end of the text leaves the term there.
             if t.is_none() && state.borrow().qb.cursor >= text.len() && exit(&w, &state) {
@@ -1239,6 +1309,11 @@ pub fn wire(
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));
         window.on_q_backspace(move || weak.upgrade().is_some_and(|w| frame_backspace(&w, &state)));
+    }
+    {
+        let (weak, state) = (window.as_weak(), Rc::clone(state));
+        window
+            .on_q_arrow(move |forward| weak.upgrade().is_some_and(|w| arrow(&w, &state, forward)));
     }
     {
         let (weak, state) = (window.as_weak(), Rc::clone(state));

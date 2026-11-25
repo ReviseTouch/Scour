@@ -1,6 +1,6 @@
 use super::*;
 use scour_ui::disks::{DiskIn, SourceIn, Tile, tiles};
-use scour_ui::lens::place_caps;
+use scour_ui::lens::{Caret, place_caps};
 
 const HOME: &str = "/home/hasan";
 const SYSTEM: &str = "under:/etc|under:~|under:/opt|under:/usr|under:/var";
@@ -124,4 +124,80 @@ fn backspace_and_delete_at_an_edge_take_the_whole_part() {
         delete(&q, HOME, &c, 6).unwrap().0,
         "rapor under:/mnt/depo x"
     );
+}
+
+/// CACHY · Depo · a folder, the caret resting at its end after a press.
+fn three() -> String {
+    format!("rapor {SYSTEM}|under:/mnt/depo|under:~/Belgeler/rapor ext:pdf")
+}
+
+#[test]
+fn a_caret_resting_at_the_end_leaves_every_part_whole() {
+    let q = three();
+    let end = q.len() - " ext:pdf".len();
+    let caps = scour_ui::lens::place_caps_at(&q, HOME, &machine(), Some(Caret::resting(end)));
+    let names: Vec<(&str, bool)> = caps[0]
+        .parts
+        .iter()
+        .map(|p| (p.spot.name.as_str(), p.raw))
+        .collect();
+    assert_eq!(names[..2], [("CACHY", false), ("Depo", false)]);
+    assert!(!caps[0].parts[2].raw, "the folder too: nobody is typing");
+    let editing = scour_ui::lens::place_caps_at(&q, HOME, &machine(), Some(Caret::editing(end)));
+    assert!(editing[0].parts[2].raw, "typing at its end opens it");
+}
+
+#[test]
+fn the_arrows_stop_once_a_part_and_never_touch_the_text() {
+    let q = three();
+    let before = q.clone();
+    let caps = scour_ui::lens::place_caps_at(&q, HOME, &machine(), None);
+    let cap = &caps[0];
+    let mut at = cap.start;
+    let mut stops = vec![at];
+    while let Some(next) = cap.step(&q, at, true) {
+        at = next;
+        stops.push(at);
+    }
+    // The start, then the trailing edge of CACHY, Depo and the folder.
+    assert_eq!(stops.len(), 4);
+    assert_eq!(*stops.last().unwrap(), cap.end);
+    let back: Vec<usize> =
+        std::iter::successors(Some(cap.end), |&a| cap.step(&q, a, false)).collect();
+    assert_eq!(back.into_iter().rev().collect::<Vec<_>>(), stops);
+    assert_eq!(q, before);
+}
+
+#[test]
+fn each_block_of_hidden_parts_has_its_own_plus() {
+    let q = "under:~/a|under:~/b|under:~/c|under:~/d|under:~/e";
+    let mut cap = caps(q, None).remove(0);
+    // The caret's part shown past the fold: two blocks hidden, either side.
+    cap.parts[3].caret = true;
+    cap.fold(2);
+    let d = lay(q, cap.clone(), HEAD_W, 10.0, &mut m);
+    let plus: Vec<&str> = d
+        .bits
+        .iter()
+        .filter(|b| b.text.starts_with('+'))
+        .map(|b| b.text.as_str())
+        .collect();
+    assert_eq!(cap.blocks().len(), 2);
+    assert_eq!(plus, ["+2", "+1"]);
+}
+
+#[test]
+fn the_pill_s_exclusion_turns_a_group_into_one_block_and_back() {
+    let q = "rapor under:/mnt/depo|under:~/a ext:pdf";
+    let t = |a: usize, b: usize, not: bool| Term {
+        start: a,
+        end: b,
+        not,
+        field: Some("under"),
+        value: String::new(),
+    };
+    let (neg, end) = whole(q, &t(6, 31, false), "neg").unwrap();
+    assert_eq!(neg, "rapor !under:/mnt/depo !under:~/a ext:pdf");
+    let (back, _) = whole(&neg, &t(6, end, true), "neg").unwrap();
+    assert_eq!(back, q);
 }

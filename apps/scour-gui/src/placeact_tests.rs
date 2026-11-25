@@ -13,17 +13,22 @@ fn the_group_is_found_where_it_starts_or_the_lens_is() {
 fn a_press_writes_what_the_model_writes() {
     // The lens's term while typed gives way; a second Add of a held folder leaves it.
     let typed = "rapor under:/mnt/depo|under:~/Bel";
-    let t = lens::term_at(typed, typed.len());
-    let (q, _) = lens::place_add(typed, HOME, "/home/hasan/Belgeler", t.as_ref());
+    let editing = lens::Caret::editing(typed.len());
+    let (q, _) = lens::place_add_at(typed, HOME, "/home/hasan/Belgeler", editing);
     assert_eq!(q, "rapor under:/mnt/depo|under:~/Belgeler");
-    assert_eq!(lens::place_add(&q, HOME, "~/Belgeler", None).0, q);
-    let (q, caret) = lens::place_anchor(&q, HOME, group_at(&q, HOME, 6));
-    assert_eq!(&q[..caret], "rapor under:/mnt/depo");
+    let resting = lens::Caret::resting(q.len());
+    assert_eq!(lens::place_add_at(&q, HOME, "~/Belgeler", resting).0, q);
+    // It rests at the group's end; on an exclusion when the lens was on one.
+    let (q2, caret) = lens::place_settle(&q, group_at(&q, HOME, 6), false);
+    assert_eq!(&q2[..caret], q);
+    let x = "rapor !under:/a ext:pdf";
+    assert_eq!(&x[..lens::place_settle(x, 6, true).1], "rapor !under:/a");
 }
 
 #[test]
-fn a_path_is_quoted_when_a_space_or_a_bar_would_cut_it() {
+fn a_path_is_quoted_when_a_space_a_bar_or_a_semicolon_would_cut_it() {
     assert_eq!(quote("~/a b".into()), "\"~/a b\"");
     assert_eq!(quote("/mnt/x|y".into()), "\"/mnt/x|y\"");
+    assert_eq!(quote("~/a;b".into()), "\"~/a;b\"");
     assert_eq!(quote("~/ab".into()), "~/ab");
 }

@@ -43,6 +43,9 @@ pub(crate) fn wire(wiring: &Wiring) {
             }
             let generation = {
                 let mut s = state.borrow_mut();
+                // Typed, unless it is the text a lens or a button just wrote.
+                let ours = s.qb.wrote.take().is_some_and(|w| w == text.as_str());
+                s.qb.lenses.editing = !ours;
                 s.query = text.to_string();
                 s.advance_query();
                 s.typed_at = Some(std::time::Instant::now());

@@ -16,7 +16,7 @@ use crate::qwire::{self, Lensing, home, write};
 use crate::{MainWindow, State};
 
 /// Where the place group starts in `text`, else the lens's own term: where
-/// [`lens::place_anchor`] writes an empty `under:` once the group is gone.
+/// [`lens::place_settle`] writes an empty `under:` once the group is gone.
 fn group_at(text: &str, home: &str, lens_at: usize) -> usize {
     lens::scope(text, home)
         .within
@@ -47,7 +47,7 @@ pub fn tile_pick(
     let Some((roots, root)) = tile else { return };
     let at = group_at(&text, &hm, lens_at(state));
     let (q, _) = lens::tile_toggle(&text, &hm, &roots, pick);
-    let (q, caret) = lens::place_anchor(&q, &hm, at);
+    let (q, caret) = lens::place_settle(&q, at, lens_not(state));
     rewrite(w, state, q, caret, root, redraw);
 }
 
@@ -73,6 +73,12 @@ fn rewrite(
     redraw(Lensing::Asked);
 }
 
+/// The lens was opened on an exclusion: it stays on one.
+fn lens_not(state: &Rc<RefCell<State>>) -> bool {
+    let st = state.borrow();
+    st.qb.lenses.open.as_ref().is_some_and(|o| o.term.not)
+}
+
 /// Where the open lens's term starts, or the end of nothing.
 fn lens_at(state: &Rc<RefCell<State>>) -> usize {
     let st = state.borrow();
@@ -93,7 +99,7 @@ fn drop_held(w: &MainWindow, state: &Rc<RefCell<State>>, i: usize, redraw: &impl
     let Some(spot) = spot else { return };
     let at = group_at(&text, &hm, lens_at(state));
     let (q, _) = spot.remove(&text, &hm);
-    let (q, caret) = lens::place_anchor(&q, &hm, at);
+    let (q, caret) = lens::place_settle(&q, at, lens_not(state));
     rewrite(w, state, q, caret, None, redraw);
 }
 
@@ -163,14 +169,15 @@ fn answer_disk(
     lenses.forget("sources");
 }
 
-/// The term the lens is on; `typing` is that term while no click pinned the
-/// list to a folder, for [`lens::place_add`] to let it give way.
+/// The term the lens is on, and the caret — editing while no click pinned
+/// the list to a folder — for [`lens::place_add_at`] to let it give way.
 struct On {
     a: usize,
     b: usize,
     field: &'static str,
     neg: &'static str,
-    typing: Option<lens::Term>,
+    not: bool,
+    caret: lens::Caret,
 }
 
 fn on(state: &Rc<RefCell<State>>, text: &str) -> Option<On> {
@@ -184,13 +191,19 @@ fn on(state: &Rc<RefCell<State>>, text: &str) -> Option<On> {
         b: o.b,
         field: t.field.unwrap_or("under"),
         neg: if t.not { "!" } else { "" },
-        typing: (!pinned).then(|| t.clone()),
+        not: t.not,
+        caret: lens::Caret {
+            at: st.qb.cursor.min(text.len()),
+            editing: lenses.editing && !pinned,
+        },
     })
 }
 
-/// A path as a term's value: quoted when a space or a `|` would cut it.
+/// A path as a term's value: quoted when a space, `|` or `;` would cut it.
 pub(crate) fn quote(s: String) -> String {
-    if s.chars().any(|c| c.is_whitespace() || c == '|') {
+    if s.chars()
+        .any(|c| c.is_whitespace() || matches!(c, '|' | ';'))
+    {
         format!("\"{s}\"")
     } else {
         s
@@ -295,11 +308,11 @@ fn act(
         "inc" | "exc" => {
             let at = group_at(&text, &hm, on.a);
             let (q, _) = if what == "inc" {
-                lens::place_add(&text, &hm, target, on.typing.as_ref())
+                lens::place_add_at(&text, &hm, target, on.caret)
             } else {
                 lens::place_exclude(&text, &hm, target)
             };
-            let (q, caret) = lens::place_anchor(&q, &hm, at);
+            let (q, caret) = lens::place_settle(&q, at, on.not);
             rewrite(w, state, q, caret, None, redraw);
         }
         _ => {}
