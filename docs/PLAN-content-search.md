@@ -11,6 +11,18 @@ to build the rest.
 decisions are binding **except** where §2 below lists a conflict with the
 code — those five are the owner's to settle before the phase they touch.
 
+## Where it stands
+
+| phase | state |
+|---|---|
+| 0 | done, PR #1: `scripts/content-bench`, `docs/bench/phase-0.md`. D1 measured and holds |
+| | **Decided 2026-11-24:** RTF is read by `scour-extract`, streamed, no cache (Phase 1). **Xberg is dropped**; e-mail comes from `mail-parser` directly (Phase 3). The design's Xberg row no longer applies |
+| 1–4 | not begun |
+
+Phase 1 also gains, from Phase 0: the streamed XLSX/PPTX reader reads sheet
+names, cell comments and charts (the five files it missed against
+`office_oxide`).
+
 ## 0. What is already true
 
 Content search exists and is used: `crates/scour-grep` (a leaf: paths in,
