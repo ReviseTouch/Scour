@@ -732,16 +732,6 @@ test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos'
   assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
 });
 
-test('sparkline range scrubbing produces valid size and time terms', () => {
-  const c = context();
-  c.LENS = { items: [{ term: 'size:<100kb' }, { term: 'size:100kb..10mb' }, { term: 'size:10mb..1gb' }, { term: 'size:>1gb' }] };
-  vm.runInContext(section('  function sparkRangeTerm(', '\n  let sparkDrag = false;'), c);
-  assert.equal(c.sparkRangeTerm('size', 1, 2, ''), 'size:100kb..1gb');
-  assert.equal(c.sparkRangeTerm('size', 0, 1, ''), 'size:<10mb');
-  assert.equal(c.sparkRangeTerm('size', 2, 3, '!'), '!size:>10mb');
-  assert.equal(c.sparkRangeTerm('time', 1, 3, ''), 'dm:30d');
-});
-
 test('drawGrep renders sortable headers and aligned metadata columns without missing globals', () => {
   const c = vm.createContext({
     Intl, Date, Math, Set, HOME: '/home/u', DAY: 86400, now: 1700000000,
@@ -788,11 +778,16 @@ test('a filter says what it holds in words, and an empty one waits for its value
     LAST_SPANS: [], SYNTAX: new Set(['colon', 'cmp', 'quote', 'not', 'or', 'sep']),
     fitQuery() {}, markHover() {}, render() {}, lensClose() {}, lensSync() {},
     placeCapsDrawn: () => [], placeCapKey: () => null,
-    T: (id) => id, KIND_KEY: { doc: 'Document' }, KIND_VALUES: ['doc'],
-    LENS_TIMES: [['7d', 'last 7 days']], LENS_SIZES: [],
+    T: (id, v) => (v ? id.replace(/\{(\w+)\}/g, (_, k) => v[k]) : id), KIND_KEY: { doc: 'Document', code: 'Code' },
+    Date, Intl, LANG: 'en', DAY: 86400, fmt: String,
   });
   vm.runInContext(section('  const escape_ = (s) =>', '\n  const acts ='), c);
   vm.runInContext(section('  const ENCODER =', '\n  /* The query is laid out by the browser'), c);
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  /* Counting a query'), c);
+  vm.runInContext(section('  const quoteIf = ', '\n  /* A path as a person'), c);
+  for (const name of ['the terms', 'the place model', 'the time in words', 'the time model', 'the type and size model']) {
+    vm.runInContext(section('  /* ---------------- ' + name, '\n  /* ---------------- '), c);
+  }
 
   // Not being written: `7d` is said as "last 7 days", the letters stay in the text.
   c.paint('dm:7d kind:doc');
@@ -811,6 +806,20 @@ test('a filter says what it holds in words, and an empty one waits for its value
   q.selectionStart = q.selectionEnd = 0;
   c.paint('kind:doc dm:');
   assert.match(c.shadow.innerHTML, /class="term cap idle"[^>]*>.*<span class="val" data-hint="when\?"><\/span>/s);
+
+  // A run of bars is said as the days it covers; a size as its preset; `empty:` is a size.
+  c.document.activeElement = null;
+  const said = (text) => { c.paint(text); return [...c.shadow.innerHTML.matchAll(/<span class="art said-art">([^<]*)<\/span>/g)].map((m) => m[1]); };
+  assert.deepEqual(said('dm:3w size:10mb..1gb'), ['last 3 weeks', '10 MB to 1 GB']);
+  assert.match(said('dm:<2025-01-01')[0], /^before 2025$/);
+  assert.deepEqual(said('!empty: bos:'), ['Empty', 'Empty']);
+  assert.match(c.shadow.innerHTML, /class="term cap neg said"[^>]*><span class="cap-head"><span class="art head-art"><span class="bang">!<\/span><svg/);
+  // A list is a chip a value, a quiet dot between; the letters stay in the text.
+  c.paint('kind:doc;code ext:pdf ; odt');
+  assert.match(c.shadow.innerHTML, /<span class="lv">Document<\/span><i class="lsep">·<\/i><span class="lv">Code<\/span>/);
+  assert.match(c.shadow.innerHTML, /<span class="lv">\.pdf<\/span><i class="lsep">·<\/i><span class="lv">\.odt<\/span>/);
+  assert.match(c.shadow.innerHTML, /<span class="val">doc<span class="r-sep">;<\/span>code<\/span>|<span class="val">[^]*doc[^]*code[^]*<\/span>/);
+  assert.equal(c.listChipsHtml(['A', 'B', 'C'], 1), '<span class="lv">A</span><span class="lv more">+2</span>');
 });
 
 test('capsule field headers render as cap-head and block caret or backspace inside ext:', () => {
@@ -880,6 +889,7 @@ function placeModel() {
   vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
   vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
   vm.runInContext(section('  function placeParts(v) {', '\n  function lensClose()'), c);
+  vm.runInContext(section('  /* ---------------- the terms', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
   vm.runInContext(section('  /* ---------------- the place rules', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- where the query looks', '\n  /* ---------------- '), c);
@@ -1383,6 +1393,7 @@ function capContext(value, caret) {
   vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
   vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
   vm.runInContext(section('  const homeForm = (p) =>', '\n  function lensClose()'), c);
+  vm.runInContext(section('  /* ---------------- the terms', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
   vm.runInContext(section('  /* ---------------- the place rules', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- where the query looks', '\n  /* ---------------- '), c);
@@ -1455,4 +1466,366 @@ test('Backspace and Delete at a collapsed part take the whole part; typing there
   assert.deepEqual(J(typed.placeCapType('x')), ['rapor ' + SYSTEM + '|under:/mnt/depo x ext:pdf', run.indexOf(' ext') + 2]);
   assert.equal(capContext(run, depo + 3).placeCapType('x'), null);
   assert.equal(typed.placeNegated('under:/a|under:"/b c"', 0, 21), '!under:/a !under:"/b c"');
+});
+
+// The time, type and size panels' model: `scour_ui::lens` `time.rs`,
+// `time_pick.rs`, `time_said.rs`, `values.rs`, `size.rs`, `rest.rs` and
+// `split.rs` in the page's words. Each case below is a case of the Rust
+// tests named beside it, with the same inputs and the same answers.
+function lensModel() {
+  const c = context();
+  Object.assign(c, {
+    Date, Intl, DAY: 86400, LANG: 'en', fmt: (n) => String(n),
+    T: (s, v) => (v ? s.replace(/\{(\w+)\}/g, (_, k) => v[k]) : s),
+  });
+  vm.runInContext(section('  const FIELDS = [', '\n  /* Two or more letters'), c);
+  vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Where a term is drawn'), c);
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  /* Counting a query'), c);
+  vm.runInContext(section('  const quoteIf = ', '\n  /* A path as a person'), c);
+  for (const name of ['the terms', 'the place model', 'the place rules', 'the time in words', 'the time model', 'the type and size model']) {
+    vm.runInContext(section('  /* ---------------- ' + name, '\n  /* ---------------- '), c);
+  }
+  return c;
+}
+const lensRun = (c, src) => J(vm.runInContext(src, c));
+const DAYS = 86400;
+
+test('the presets and the scales count what their terms find (lens/time_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const band = (edges, age) => {
+    const days = Math.floor(Math.max(age, 0) / DAYS);
+    const i = edges.findIndex((e) => days <= e);
+    return i < 0 ? edges.length : i;
+  };
+  // the_presets_are_the_lens_s_bands_with_their_edges
+  assert.deepEqual(run('TIME_PRESETS.map((p) => [p.value, p.label])'), run('LENS_TIMES'));
+  assert.deepEqual(run('TIME_PRESETS.map((p) => p.edge)'), [0, 1, 6, 29, 364]);
+  // a_preset_counts_what_its_term_finds
+  const edges = run('PRESET_EDGES');
+  for (const p of run('TIME_PRESETS')) {
+    const window = run(`timeRel(${JSON.stringify(p.value)}).secs`);
+    for (let hours = 0; hours < 730 * 24; hours++) {
+      const age = hours * 3600 + 1800;
+      assert.equal(age <= window, band(edges, age) <= edges.indexOf(p.edge), `${p.value} at ${hours} h`);
+    }
+  }
+  // today_is_the_first_band_alone_and_each_preset_holds_the_newer_ones
+  assert.deepEqual(run('presetCounts([["1", 3], ["0", 5], ["older", 100], ["29", 7], ["364", 11]])'), [5, 8, 8, 15, 26]);
+  assert.deepEqual(run('presetCounts([])'), [0, 0, 0, 0, 0]);
+  assert.deepEqual(run('byEdge(PRESET_EDGES, [["6", 2], ["9", 50], ["older", 4]])'), [0, 0, 2, 0, 0, 4]);
+  // each_scale_asks_its_bars_in_the_language_s_units
+  assert.deepEqual(run('scaleEdges("day")'), Array.from({ length: 30 }, (_, i) => i));
+  const at = (s, i) => run(`scaleEdges("${s}")`)[i];
+  assert.deepEqual([run('scaleEdges("week")').length, at('week', 0), at('week', 1), at('week', 25)], [26, 6, 13, 181]);
+  assert.deepEqual([run('scaleEdges("month")').length, at('month', 0), at('month', 23)], [24, 29, 719]);
+  assert.deepEqual([run('scaleEdges("year")').length, at('year', 0), at('year', 9)], [10, 364, 3649]);
+  for (const s of run('TIME_SCALES')) {
+    const e = run(`scaleEdges("${s}")`);
+    assert.equal(e.length, run(`TIME_SCALE.${s}.bars`), s);
+    assert.ok(e.every((x, i) => i === 0 || e[i - 1] < x), `${s} not ascending`);
+  }
+  assert.deepEqual(run('TIME_SCALES.map((s) => TIME_SCALE[s].label)'), ['Day', 'Week', 'Month', 'Year']);
+  assert.deepEqual(run('TIME_MODES.map((m) => MODE_LABEL[m])'), ['Between', 'Before', 'After']);
+  // the_bars_run_oldest_first_and_the_last_ends_now
+  const now = 1800000000;
+  const h = run(`histogram("week", [["6", 9], ["13", 4], ["181", 2], ["older", 70]], ${now})`);
+  assert.equal(h.bars.length, 26);
+  assert.equal(h.bars[25].count, 9, 'the newest week is drawn last');
+  assert.equal(h.bars[24].count, 4);
+  assert.equal(h.bars[0].count, 2, 'the oldest week is drawn first');
+  assert.deepEqual([h.older, h.peak], [70, 9]);
+  assert.deepEqual([h.bars[25].from, h.bars[25].to], [now - 7 * DAYS, now]);
+  assert.equal(h.bars[0].from, now - 26 * 7 * DAYS);
+  assert.deepEqual([h.from, h.to], [now - 26 * 7 * DAYS, now]);
+  assert.ok(h.bars.every((b, i) => i === 0 || h.bars[i - 1].to === b.from));
+  assert.equal(run('TIME_SCALE.month.ends'), 'MonthYear');
+  // a_bar_spans_the_ages_its_facet_band_counts
+  for (const s of run('TIME_SCALES')) {
+    const bars = run(`histogram("${s}", [], ${now}).bars`);
+    bars.forEach((bar, i) => {
+      assert.equal(band(run(`scaleEdges("${s}")`), now - (bar.from + bar.to) / 2), bars.length - 1 - i, `${s} bar ${i}`);
+    });
+  }
+  // the_time_panel_counts_over_the_query_less_its_own_term
+  assert.equal(run('timeAsk("rapor dm:7d ext:pdf")'), 'rapor ext:pdf');
+  assert.equal(run('timeAsk("rapor !modified:7d|dm:1y kind:doc")'), 'rapor kind:doc');
+});
+
+test('a run of bars is written relative and reads back to itself (lens/time_pick_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const sel = (scale, mode, first, last) => ({ scale, mode, first, last });
+  const term = (q, s) => run(`timeTerm(placeTermAt(${JSON.stringify(q)}, ${q.length}), ${JSON.stringify(s)})`);
+  const preset = (q, i) => run(`timePresetTerm(placeTermAt(${JSON.stringify(q)}, ${q.length}), ${i})`);
+  const pick = (v) => run(`timePick(${JSON.stringify(v)})`);
+  // a_run_reaching_now_is_a_window_and_one_before_it_a_band_older_first
+  assert.equal(term('dm:', sel('day', 'between', 29, 29)), 'dm:1d');
+  assert.equal(term('dm:', sel('day', 'between', 23, 29)), 'dm:7d');
+  assert.equal(term('dm:', sel('day', 'between', 0, 22)), 'dm:30d..7d');
+  assert.equal(term('dm:', sel('week', 'between', 24, 22)), 'dm:4w..1w');
+  assert.equal(term('dm:', sel('year', 'between', 8, 8)), 'dm:2y..1y');
+  assert.equal(term('dm:', sel('month', 'before', 0, 20)), 'dm:<3m');
+  assert.equal(term('dm:', sel('week', 'after', 23, 25)), 'dm:>3w');
+  assert.equal(term('dm:', sel('day', 'before', 10, 29)), '');
+  assert.equal(term('dm:', sel('day', 'between', 0, 99)), 'dm:30d');
+  // a_choice_keeps_the_negation_and_writes_the_canonical_field
+  assert.equal(term('!modified:7d', sel('week', 'between', 24, 25)), '!dm:2w');
+  assert.equal(preset('!dm:30d..7d', 2), '!dm:7d');
+  assert.equal(preset('dm:', 0), 'dm:today');
+  // every_run_reads_back_to_itself
+  for (const scale of run('TIME_SCALES')) {
+    const n = run(`TIME_SCALE.${scale}.bars`);
+    for (let first = 0; first < n; first++) {
+      for (let last = first; last < n; last++) {
+        for (const [mode, a, b] of [['between', first, last], ['before', 0, last], ['after', first, n - 1]]) {
+          const s = sel(scale, mode, a, b);
+          const written = term('dm:', s);
+          if (!written) continue;
+          const back = run(`timePick(placeTermAt(${JSON.stringify(written)}, ${written.length}).value)`);
+          assert.ok(back, written);
+          assert.deepEqual(back.selected, s, written);
+        }
+      }
+    }
+  }
+  // a_preset_reads_back_to_itself_and_to_its_bars
+  run('TIME_PRESETS').forEach((p, i) => {
+    const back = pick(p.value);
+    assert.equal(back.preset, i, p.value);
+    assert.ok(back.selected, p.value);
+  });
+  assert.deepEqual(pick('7d').selected, sel('day', 'between', 23, 29));
+  assert.deepEqual(pick('1y').selected, sel('year', 'between', 9, 9));
+  // other_spellings_of_the_same_choice_read_the_same
+  const p = (v) => pick(v)?.preset ?? null;
+  assert.deepEqual(['24h', 'bugün', '48saat', 'dün', '1w', 'hafta', '1m', '365d', '1yıl'].map(p), [0, 0, 1, 1, 2, 2, 3, 4, 4]);
+  assert.equal(p('>7d'), null, 'After is not a preset');
+  const bars = (v) => pick(v)?.selected ?? null;
+  assert.deepEqual(bars('2hafta'), sel('week', 'between', 24, 25));
+  assert.deepEqual(bars('14d'), sel('day', 'between', 16, 29));
+  assert.deepEqual(bars('60d'), sel('month', 'between', 22, 23));
+  assert.deepEqual(bars('30d..'), sel('day', 'between', 0, 29));
+  assert.deepEqual(bars('..7d'), sel('day', 'before', 0, 22));
+  assert.deepEqual(bars('<=7D'), sel('day', 'before', 0, 22));
+  assert.deepEqual(bars('>=3w'), sel('week', 'after', 23, 25));
+  // what_the_panel_cannot_show_is_none
+  for (const v of ['', '2026-11-03', '2026-11-12..2026-11-25', '<2025-01-01', '7d..30d', '=7d', '12h', '31d..7d', '11y', '<10y', '<0d', '..', 'rapor']) {
+    assert.equal(pick(v), null, v);
+  }
+  // a_negated_band_round_trips_through_the_panel
+  for (const q of ['!dm:4w..1w', '!dm:<3m', '!dm:>2y', '!dm:7d']) {
+    const back = run(`timePick(placeTermAt(${JSON.stringify(q)}, ${q.length}).value)`);
+    assert.equal(back.preset !== null ? preset(q, back.preset) : term(q, back.selected), q);
+  }
+  // a_selection_names_the_bars_it_was_drawn_from
+  const h = run('histogram("day", [["0", 1], ["6", 2], ["7", 4]], 0)');
+  const s = pick('7d').selected;
+  assert.equal(h.bars.slice(s.first, s.last + 1).reduce((n, b) => n + b.count, 0), 3, 'today and the seventh day, not the eighth');
+});
+
+test('a dm: value is said in words and dates, as little as is true (lens/time_said_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const OFFSET = 3 * 3600;
+  const day = (y, m, d) => run(`daysFromCivil(${y}, ${m}, ${d})`);
+  const now = day(2026, 11, 25) * DAYS + 12 * 3600;
+  const said = (v) => run(`timeSaid(${JSON.stringify(v)}, ${now}, ${OFFSET})`);
+  const on = (y, m, d, form) => ({ day: day(y, m, d), form });
+  // a_window_is_its_preset_or_a_count_of_its_unit
+  assert.deepEqual(said('7d'), { label: 'last 7 days' });
+  assert.deepEqual(said('24h'), { label: 'today' });
+  assert.deepEqual(said('hafta'), { label: 'last 7 days' });
+  assert.deepEqual(said('>1y'), { label: 'last year' });
+  assert.deepEqual(said('30d..'), { label: 'last 30 days' });
+  assert.deepEqual(said('3w'), { count: 'last {n} weeks', n: 3 });
+  assert.deepEqual(said('2YIL'), { count: 'last {n} years', n: 2 });
+  assert.deepEqual(said('12h'), { count: 'last {n} hours', n: 12 });
+  assert.deepEqual(said('1h'), { count: 'last hour', n: 1 });
+  // a_relative_band_is_said_as_the_days_it_covers_now
+  assert.deepEqual(said('30d..7d'), { from: on(2026, 10, 26, 'DayMonth'), to: on(2026, 11, 18, 'DayMonth') });
+  assert.deepEqual(said('13d..0d'), { from: on(2026, 11, 12, 'Day'), to: on(2026, 11, 25, 'DayMonth') }, '12–25 Nov');
+  assert.deepEqual(said('<30d'), { bound: 'before {date}', date: on(2026, 10, 26, 'DayMonth') });
+  assert.equal(said('7d..30d'), null, 'newer first holds nothing');
+  // dates_say_as_little_as_is_true
+  assert.deepEqual(said('2026-11-12..2026-11-25'), { from: on(2026, 11, 12, 'Day'), to: on(2026, 11, 25, 'DayMonth') });
+  assert.deepEqual(said('2025-12-26..2026-01-03'), { from: on(2025, 12, 26, 'DayMonthYear'), to: on(2026, 1, 3, 'DayMonth') });
+  assert.deepEqual(said('2025-02-03..2025-03-12'), { from: on(2025, 2, 3, 'DayMonth'), to: on(2025, 3, 12, 'DayMonthYear') });
+  const alone = (y, m, d, f) => ({ date: on(y, m, d, f) });
+  assert.deepEqual(said('2026-11-03'), alone(2026, 11, 3, 'DayMonth'));
+  assert.deepEqual(said('=2024-11-03'), alone(2024, 11, 3, 'DayMonthYear'));
+  assert.deepEqual(said('2026-03-01..2026-03-31'), alone(2026, 3, 1, 'MonthYear'));
+  assert.deepEqual(said('2028-02-01..2028-02-29'), alone(2028, 2, 1, 'MonthYear'));
+  assert.deepEqual(said('2025-01-01..2025-12-31'), alone(2025, 1, 1, 'Year'));
+  assert.deepEqual(said('2026-11-03..2026-11-03'), alone(2026, 11, 3, 'DayMonth'));
+  // a_bound_is_said_with_its_year_or_month_when_it_falls_on_one
+  const b = (m, y, mo, d, f) => ({ bound: m, date: on(y, mo, d, f) });
+  assert.deepEqual(said('<2025-01-01'), b('before {date}', 2025, 1, 1, 'Year'));
+  assert.deepEqual(said('>=2026-03-01'), b('since {date}', 2026, 3, 1, 'MonthYear'));
+  assert.deepEqual(said('2026-03-01..'), b('since {date}', 2026, 3, 1, 'MonthYear'));
+  assert.deepEqual(said('>2024-12-31'), b('after {date}', 2024, 12, 31, 'Year'));
+  assert.deepEqual(said('..2026-04-30'), b('until {date}', 2026, 4, 30, 'MonthYear'));
+  assert.deepEqual(said('<=2026-11-03'), b('until {date}', 2026, 11, 3, 'DayMonth'));
+  assert.deepEqual(said('>2025-01-01'), b('after {date}', 2025, 1, 1, 'DayMonthYear'));
+  // what_is_not_a_time_says_nothing
+  for (const v of ['', 'rapor', '2025', '2025-03', '..', '=7d', '2026-13-01', '7x']) assert.equal(said(v), null, v);
+  assert.deepEqual(run(`civil(${day(2026, 11, 25)})`), [2026, 11, 25]);
+  // The face's part: the same days in the page's language.
+  const words = (v, lang) => { M.LANG = lang; return run(`timeWords(timeSaid(${JSON.stringify(v)}, ${now}, ${OFFSET}))`); };
+  assert.equal(words('<2025-01-01', 'en'), 'before 2025');
+  assert.equal(words('3w', 'en'), 'last 3 weeks');
+  assert.match(words('13d..0d', 'tr'), /^12\s*[–-]\s*25 Kas$/);
+  assert.match(words('2025-12-26..2026-01-03', 'tr'), /^26 Ara 2025\s–\s3 Oca$/);
+  assert.equal(words('2026-03-01..2026-03-31', 'tr'), 'Mar 2026');
+});
+
+test('kind and ext values go in, come out and are left out on one side only (lens/values_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const vt = (q, field, v, ex) => run(`valueToggle(${JSON.stringify(q)}, "${field}", ${JSON.stringify(v)}, ${ex})`);
+  const toggle = (q, f, v) => vt(q, f, v, false)[0];
+  const exclude = (q, f, v) => vt(q, f, v, true)[0];
+  const picked = (q, f) => run(`picked(${JSON.stringify(q)}, "${f}")`);
+  // the_tiles_are_the_kinds_in_their_order_with_the_core_s_msgids
+  assert.deepEqual(run('KIND_LABELS.map(([k]) => k)'), run('KIND_VALUES'));
+  assert.deepEqual(['doc', 'build', 'media'].map((k) => run(`kindMsgid("${k}")`)), ['Document', 'Build output', null]);
+  // a_value_is_keyed_as_the_facet_keys_it
+  const key = (f, v) => run(`valueKey("${f}", ${JSON.stringify(v)})`);
+  assert.deepEqual([key('ext', '.PDF'), key('kind', 'belge'), key('kind', 'RESİM'), key('kind', 'çıktı'), key('kind', 'media'), key('kind', 'Code')],
+    ['pdf', 'doc', 'image', 'build', 'media', 'code']);
+  // toggling_a_value_puts_it_in_or_takes_it_out_of_the_one_term
+  let q = toggle('rapor', 'kind', 'doc');
+  assert.equal(q, 'rapor kind:doc');
+  q = toggle(q, 'kind', 'code');
+  assert.equal(q, 'rapor kind:doc;code');
+  assert.equal(toggle(q, 'kind', 'doc'), 'rapor kind:code');
+  assert.equal(toggle('rapor kind:doc', 'kind', 'doc'), 'rapor');
+  assert.equal(toggle('kind:doc rapor', 'kind', 'doc'), 'rapor');
+  assert.equal(toggle('', 'ext', 'pdf'), 'ext:pdf');
+  assert.equal(toggle('rapor kind:', 'kind', 'doc'), 'rapor kind:doc');
+  const [t2, caret] = vt('kind:doc rapor', 'kind', 'code', false);
+  assert.deepEqual([t2.slice(0, caret), t2.slice(caret)], ['kind:doc;code', ' rapor']);
+  // values_the_panel_did_not_offer_are_kept
+  assert.equal(toggle('ext:pdf;xy', 'ext', 'docx'), 'ext:pdf;xy;docx');
+  assert.equal(toggle('ext:pdf;xy', 'ext', 'pdf'), 'ext:xy');
+  const values = [['pdf', '.pdf'], ['docx', '.docx']];
+  const c = run(`listKept(placeTermAt("ext:pdf;xy", 10), ${JSON.stringify(values)})`);
+  assert.deepEqual([c[0].term, c[0].hint], ['ext:xy', '✓']);
+  assert.equal(c[1].term, 'ext:pdf;xy;docx');
+  assert.ok(c.every((x) => x.stays));
+  assert.equal(run(`listKept(placeTermAt("!ext:.PDF", 9), ${JSON.stringify(values)})`)[0].term, '!ext:');
+  // excluding_is_a_term_of_its_own_and_a_value_is_on_one_side_only
+  q = exclude('kind:doc', 'kind', 'build');
+  assert.equal(q, 'kind:doc !kind:build');
+  q = exclude(q, 'kind', 'exec');
+  assert.equal(q, 'kind:doc !kind:build;exec');
+  assert.equal(exclude(q, 'kind', 'build'), 'kind:doc !kind:exec');
+  assert.equal(toggle(q, 'kind', 'build'), 'kind:doc;build !kind:exec');
+  assert.equal(exclude('kind:doc;code', 'kind', 'code'), 'kind:doc !kind:code');
+  assert.equal(exclude('kind:doc !kind:build', 'kind', 'build'), 'kind:doc');
+  assert.equal(exclude('!kind:font|x', 'kind', 'build'), '!kind:font|x !kind:build');
+  // Not in the Rust: a query ending in a space still puts one space before the new term.
+  assert.equal(exclude('kind:doc rapor ', 'kind', 'build'), 'kind:doc rapor !kind:build');
+  // the_query_says_what_is_in_and_what_is_out_whatever_its_spelling
+  const p = picked('tür:belge;resim !tür:derleme ext:pdf', 'kind');
+  assert.deepEqual([p.on, p.off], [['doc', 'image'], ['build']]);
+  assert.deepEqual(picked('ext:.PDF ; odt', 'ext').on, ['pdf', 'odt']);
+  assert.deepEqual(picked('rapor', 'ext'), { on: [], off: [] });
+  assert.equal(toggle('tür:belge', 'kind', 'code'), 'tür:belge;code');
+  assert.equal(toggle('tür:belge;code', 'kind', 'doc'), 'tür:code');
+  assert.equal(toggle('ext:pdf ; odt', 'ext', 'odt'), 'ext:pdf');
+  // a_value_leaving_an_or_run_leaves_no_bar_behind
+  assert.equal(toggle('kind:doc|ext:pdf rapor', 'kind', 'doc'), 'ext:pdf rapor');
+  assert.equal(toggle('kind:doc|ext:pdf', 'kind', 'code'), 'kind:doc;code|ext:pdf');
+  // every_pick_round_trips
+  for (const q0 of ['kind:doc;code !kind:build', '!ext:log;tmp', 'tür:doc ext:pdf;odt']) {
+    for (const field of ['kind', 'ext']) {
+      const pk = picked(q0, field);
+      for (const [vals, ex] of [[pk.on, false], [pk.off, true]]) {
+        let text = q0;
+        for (const v of vals) text = vt(text, field, v, ex)[0];
+        for (const v of vals) text = vt(text, field, v, ex)[0];
+        assert.deepEqual(picked(text, field), pk, `${q0} ${field}`);
+      }
+    }
+  }
+  // the_kinds_are_counted_without_kinds_and_the_extensions_within_them
+  let a = run('typeAsk("rapor kind:doc !kind:build ext:pdf")');
+  assert.deepEqual(a, { kinds: 'rapor ext:pdf', exts: 'rapor kind:doc !kind:build', oneWalk: false });
+  a = run('typeAsk("rapor kind:doc|ext:pdf dm:7d")');
+  assert.deepEqual(a, { kinds: 'rapor dm:7d', exts: 'rapor dm:7d', oneWalk: true });
+  assert.equal(run('typeAsk("tür:doc ; code rapor").kinds'), 'rapor');
+});
+
+test('the size presets, which one a term is, and their counts (lens/size_tests.rs)', () => {
+  const M = lensModel();
+  const run = (src) => lensRun(M, src);
+  const t = (q) => `placeTermAt(${JSON.stringify(q)}, ${q.length})`;
+  // the_presets_are_empty_then_the_lens_s_bands
+  assert.deepEqual(run('SIZE_PRESETS[0]'), { label: 'Empty', term: 'empty:' });
+  assert.deepEqual(run('SIZE_PRESETS.slice(1).map((p) => [p.term.replace("size:", ""), p.label])'), run('LENS_SIZES'));
+  assert.equal(run('NOT_EMPTY'), '!empty:');
+  // every_preset_round_trips_with_and_without_its_negation
+  run('SIZE_PRESETS').forEach((p, i) => {
+    for (const q of [p.term, '!' + p.term]) {
+      assert.equal(run(`sizePresetOf(${JSON.stringify(q)}, ${t(q)})`), i, q);
+      assert.equal(run(`sizePresetTerm(${t(q)}, ${i})`), q);
+    }
+  });
+  assert.equal(run(`sizePresetTerm(${t('!empty:')}, 4)`), '!size:>1gb');
+  assert.equal(run(`sizePresetTerm(${t('size:>1gb')}, 0)`), 'empty:');
+  // other_spellings_read_and_strangers_do_not
+  for (const [q, want] of [['bos:', 0], ['EMPTY:', 0], ['!bos:', 0], ['size:<100KB', 1], ['sizE:10MB..1GB', 3],
+    ['size:>0', null], ['size:0', null], ['size:>2gb', null], ['empty:x', null], ['rapor', null]]) {
+    assert.equal(run(`sizePresetOf(${JSON.stringify(q)}, ${t(q)})`), want, q);
+  }
+  // each_preset_is_counted_over_the_query_less_its_size_terms
+  const c = run('sizeCounts("rapor size:>1gb dm:7d !empty:")');
+  assert.deepEqual([c[0], c[4]], ['rapor dm:7d empty:', 'rapor dm:7d size:>1gb']);
+  assert.equal(run('sizeCounts("")[2]'), 'size:100kb..10mb');
+  assert.equal(run('sizeCounts("size:<1kb|rapor ext:pdf")[1]'), 'ext:pdf size:<100kb');
+});
+
+test('a list goes on across a spaced semicolon, and the drawn terms agree (lens/split_tests.rs)', () => {
+  const M = lensModel();
+  const terms = (q) => run(`placeTerms(${JSON.stringify(q)})`);
+  const run = (src) => lensRun(M, src);
+  const raw = (q) => terms(q).map((x) => q.slice(x.start, x.end));
+  // a_list_goes_on_across_a_spaced_semicolon_as_the_service_reads_it
+  for (const q of ['ext:pdf ; odt', 'ext:pdf ;odt', 'ext:pdf; odt', 'ext:pdf ; ; odt', 'ext:pdf; ;odt']) {
+    const ts = terms(q);
+    assert.equal(ts.length, 1, q);
+    assert.deepEqual([ts[0].start, ts[0].end, ts[0].field], [0, q.length, 'ext'], q);
+    assert.deepEqual(ts[0].value.split(';').filter(Boolean), ['pdf', 'odt'], q);
+  }
+  assert.deepEqual([terms('tür:doc ; code')[0].field, terms('tür:doc ; code')[0].value], ['kind', 'doc;code']);
+  assert.deepEqual([terms('!ext:pdf ; odt')[0].not, terms('!ext:pdf ; odt')[0].value], [true, 'pdf;odt']);
+  const cases = [
+    ['ext:pdf;odt ; rs', ['ext:pdf;odt ; rs']],
+    // a_list_ends_where_its_next_piece_cannot_be_a_value
+    ['ext:pdf odt', ['ext:pdf', 'odt']], ['ext:pdf ; dm:7d', ['ext:pdf ;', 'dm:7d']], ['ext:pdf;dm:7d', ['ext:pdf', 'dm:7d']],
+    ['kind:doc;!code', ['kind:doc', '!code']], ['ext:pdf ; !odt', ['ext:pdf ;', '!odt']], ['ext:pdf ; "odt"', ['ext:pdf ;', '"odt"']],
+    ['ext:pdf ; odt ; dm:7d', ['ext:pdf ; odt ;', 'dm:7d']], ['ext: ; odt', ['ext: ; odt']],
+    // a_bar_still_cuts_and_a_list_after_one_is_the_service_s
+    ['ext:pdf ; odt|rs', ['ext:pdf ; odt', 'rs']], ['x|ext:pdf ; odt', ['x', 'ext:pdf', 'odt']],
+    ['x | ext:pdf ; odt', ['x', 'ext:pdf ; odt']], ['ext:pdf|x ; odt', ['ext:pdf', 'x', 'odt']],
+    // a_lone_semicolon_is_a_separator_and_other_words_are_as_they_were
+    ['rapor ; fatura', ['rapor', 'fatura']], ['under:/a ; under:/b', ['under:/a', 'under:/b']],
+    ['rapor;fatura', ['rapor;fatura']], ['under:/a;b', ['under:/a;b']],
+    ['a|!b "x ; y" under:"/m y"', ['a', '!b', '"x ; y"', 'under:"/m y"']], ['', []], [' ; ', []],
+  ];
+  for (const [q, want] of cases) assert.deepEqual(raw(q), want, q);
+  assert.equal(terms('ext:pdf ; dm:7d')[1].field, 'dm');
+  assert.equal(run('placeRuns("ext:pdf ; odt|rs").length'), 1, 'one run: (pdf or odt) or rs');
+  // the_caret_in_a_spaced_list_is_in_that_list
+  for (const c of [13, 14, 15, 19]) assert.equal(run(`placeTermAt("rapor ext:pdf ; odt", ${c}).field`), 'ext', String(c));
+  // The capsules are cut the same way, but for two things the drawing does
+  // on purpose: a list's trailing `;` stays outside its pill, and outside a
+  // list a `;` reads as the space the service takes it for.
+  const drawn = (q) => run(`terms(${JSON.stringify(q)})`).map(([a, b]) => q.slice(a, b));
+  for (const [q, want] of cases) {
+    if (/^(rapor;fatura|under:\/a;b)$/.test(q)) continue;
+    assert.deepEqual(drawn(q), want.map((w) => w.replace(/[\s;]+$/, (m) => (/^ext:\s*$/.test(w) ? m : ''))), q);
+  }
+  assert.deepEqual(drawn('rapor;fatura'), ['rapor', 'fatura']);
 });

@@ -59,6 +59,8 @@
 
   function lensKindOf(t) {
     if (/^:[^:]*$/.test(t.raw)) return "launch";
+    // `empty:` is a size: the size panel's first preset.
+    if (/^!?(empty|bos):$/i.test(t.raw)) return "size";
     switch (t.field) {
       case "under": case "parent": return "place";
       case "dm": return "time";
@@ -88,6 +90,7 @@
     LENS = null;
     lensGen++;
     if (lensStop) lensStop.abort();
+    PANEL = null;
     lensBox.hidden = true;
     lensBox.innerHTML = "";
     q.setAttribute("aria-expanded", String(!hintBox.hidden));
@@ -105,8 +108,13 @@
     if (!kind || !(asked || keep || (kind !== "word" && caret === t.b))) { lensClose(); return; }
     const sel = keep && LENS.kind === kind ? LENS.sel : 0;
     const opening = kind === "place" && LENS?.kind !== "place";
+    // A panel stays the same opening while its own presses rewrite the text.
+    const panel = PANEL_OF[kind];
+    const fresh = panel && !(PANEL && PANEL.name === panel && (keep || panelHolding));
+    if (!panel) PANEL = null;
     LENS = { kind, a: t.a, b: t.b, term: t, sel, items: LENS?.items || [], title: "", foot: "" };
     if (opening) placeOpen();
+    if (fresh) panelOpen(panel, t);
     hideHints();
     lensFill();
   }
@@ -141,14 +149,6 @@
         return launchRows(q.value, t.raw).map((r) =>
           L(r.label, T(r.about), r.field + ":", { launch: true, field: r.field, icon: r.icon, key: r.key, held: r.held, group: r.heading ? T(r.heading) : "" }));
       }
-      case "time":
-        LENS.title = T("When it last changed");
-        LENS.foot = T("Or type one: 24h, 2w, 2026-03-01, >2026-06-01");
-        return LENS_TIMES.map(([v, l]) => L(l, v, neg(t) + "dm:" + v, { count: true }));
-      case "size":
-        LENS.title = T("Size");
-        LENS.foot = T("Or type one: >10mb, <1kb, 1mb..50mb");
-        return LENS_SIZES.map(([v, l]) => L(l, v, neg(t) + "size:" + v, { count: true }));
       case "word": {
         const v = t.value;
         LENS.title = T("How “{w}” is read", { w: v });
@@ -171,35 +171,9 @@
           L("in names instead", "", neg(t) + quoteIf(v), { count: true }),
         ];
       }
-      case "kind": case "ext": {
-        LENS.title = LENS.kind === "kind" ? T("Type") : T("Extension");
-        LENS.foot = T("→ adds or takes one away and stays open; Enter writes it; Tab leaves the term.");
-        return lensListItems(LENS.facets || []);
-      }
       case "place": return lensPlaceItems();
     }
     return [];
-  }
-
-  /* A list field's values, each pressing in or out of what is written. */
-  function lensListItems(facets) {
-    const t = LENS.term;
-    const field = LENS.kind;
-    const have = t.value.toLowerCase().split(";").filter(Boolean);
-    let values = facets.map((f) => [f.key, f.count]);
-    if (field === "kind" && !values.length) values = KIND_VALUES.map((k) => [k, null]);
-    const known = new Set(values.map(([k]) => k));
-    const typed = have.length && !known.has(have[have.length - 1]) ? have[have.length - 1] : "";
-    return values
-      .filter(([k]) => !typed || k.startsWith(typed))
-      .slice(0, 12)
-      .map(([k, n]) => {
-        const on = have.includes(k);
-        const next = have.filter((h) => known.has(h) && h !== k);
-        if (!on) next.push(k);
-        const label = field === "kind" ? (KIND_KEY[k] || k) : "." + k;
-        return { label: (on ? "✓ " : "") + label, hint: field === "kind" ? k : "", term: neg(t) + field + ":" + next.join(";"), n, stays: true };
-      });
   }
 
   /* Fill the list now, then ask the service for what it lacks: the counts,
@@ -210,6 +184,12 @@
     if (lensStop) lensStop.abort();
     lensStop = new AbortController();
     const signal = lensStop.signal;
+    if (PANEL) {
+      LENS.items = [];
+      lensDraw();
+      panelFill();
+      return;
+    }
     const t = LENS.term;
     const rest = (q.value.slice(0, t.a) + q.value.slice(t.b)).replace(/\s+/g, " ").trim();
     const live = () => LENS && mine === lensGen;
@@ -220,14 +200,6 @@
       return ask().then((r) => { lensSeen.set(key, r); return r; });
     };
     const again = () => { if (live()) { LENS.items = lensItems(); lensDraw(); lensCounts(rest, mine, signal); } };
-    if (LENS.kind === "kind" || LENS.kind === "ext") {
-      if (!READS.test(rest)) {
-        cache("facets " + LENS.kind + " " + rest, () => SERVICE.get("facets", { q: rest, by: LENS.kind }, signal))
-          .then((r) => { if (live()) { LENS.facets = (r.groups[0] || {}).facets || []; again(); } })
-          .catch(() => {});
-      }
-      return;
-    }
     if (LENS.kind === "place") {
       const [activeBase] = placeViewAt(t);
       LENS.placeDir = activeBase;
@@ -294,22 +266,6 @@
     if (keepOpen) lensSync(true); else lensClose();
   }
 
-  function lensSparkHtml(its, peak) {
-    if (LENS.kind !== "time" && LENS.kind !== "size") return "";
-    const lo = LENS.dragA !== undefined ? Math.min(LENS.dragA, LENS.dragB) : LENS.sel;
-    const hi = LENS.dragA !== undefined ? Math.max(LENS.dragA, LENS.dragB) : LENS.sel;
-    return '<div class="lspark-wrap">' +
-      '<div class="lspark" id="lspark">' +
-      its.map((it, i) => {
-        const h = it.n ? Math.max(8, Math.round(100 * Math.abs(it.n) / peak)) : 6;
-        return '<div class="sbar' + (i >= lo && i <= hi ? " in" : "") + '" data-si="' + i + '">' +
-          '<i style="height:' + h + '%"></i></div>';
-      }).join("") +
-      '</div><div class="lspark-lbls">' +
-      its.map((it) => "<span>" + escape_(it.hint || it.label) + "</span>").join("") +
-      '</div><div class="lspark-note">' + escape_(T("Click or drag across bars to pick a range")) + "</div></div>";
-  }
-
   function lensWordGlobalHtml() {
     if (LENS.kind !== "word") return "";
     const typos = (KEPT && KEPT.typos) || "";
@@ -327,10 +283,13 @@
   }
 
   function lensDraw() {
-    if (!LENS || (LENS.kind !== "place" && !LENS.items.length)) { lensBox.hidden = true; return; }
+    if (!LENS || (!PANEL && LENS.kind !== "place" && !LENS.items.length)) { lensBox.hidden = true; return; }
     lensBox.classList.toggle("lens-place", LENS.kind === "place");
-    lensBox.classList.toggle("lens-band", LENS.kind === "time" || LENS.kind === "size");
-    if (LENS.kind === "place") {
+    lensBox.classList.toggle("lens-band", !!PANEL && PANEL.name !== "type");
+    lensBox.classList.toggle("lens-type", !!PANEL && PANEL.name === "type");
+    if (PANEL) {
+      lensBox.innerHTML = panelHtml();
+    } else if (LENS.kind === "place") {
       placeDraw();
     } else if (LENS.kind === "launch") {
       LENS.sel = Math.max(0, Math.min(LENS.sel, LENS.items.length - 1));
@@ -344,7 +303,6 @@
       lensBox.innerHTML =
         '<div class="lhead"><b>' + escape_(LENS.title) + "</b>" +
         (its.some((i) => i.count || i.n !== null && i.n !== undefined) ? "<span>" + escape_(T("results it would leave")) + "</span>" : "") + "</div>" +
-        lensSparkHtml(its, peak) +
         its.map((it, i) =>
           (it.group ? '<div class="lgroup">' + escape_(it.group.trim()) + "</div>" : "") +
           '<div class="lopt' + (i === LENS.sel ? " on" : "") + (it.n === 0 ? " zero" : "") + (it.wait ? " wait" : "") +
@@ -372,8 +330,9 @@
     lensBox.style.left = Math.max(-box.left + 12, Math.min(left, innerWidth - box.left - lensBox.offsetWidth - 14)) + "px";
     lensBox.style.top = top + "px";
     lensBox.style.setProperty("--lens-room", Math.max(160, innerHeight - box.top - top - 12) + "px");
-    const on = lensBox.querySelector(".lopt.on");
+    const on = lensBox.querySelector(".lopt.on, .pp .kb");
     if (on) on.scrollIntoView({ block: "nearest" });
+    if (PANEL) panelMeasure();
   }
 
   /* Write a choice. `stay` (Tab) keeps the lens open: a list takes another
@@ -591,54 +550,10 @@
     return true;
   }
 
-  function sparkRangeTerm(kind, a, b, negPrefix) {
-    const lo = Math.min(a, b), hi = Math.max(a, b);
-    if (lo === hi) return LENS.items[lo].term;
-    if (kind === "time") {
-      // Cumulative age bands: picking up to `hi` covers up to that horizon; if `lo > 0`, bound both sides.
-      const edges = ["1d", "2d", "7d", "30d", "365d"];
-      return negPrefix + "dm:" + edges[hi];
-    }
-    const loEdge = ["", "100kb", "10mb", "1gb"][lo];
-    const hiEdge = ["100kb", "10mb", "1gb", ""][hi];
-    const val = loEdge && hiEdge ? loEdge + ".." + hiEdge : loEdge ? ">" + loEdge : "<" + hiEdge;
-    return negPrefix + "size:" + val;
-  }
-
-  let sparkDrag = false;
-  lensBox.addEventListener("pointerdown", (e) => {
-    const sb = e.target.closest(".sbar");
-    if (!sb || !LENS) return;
-    e.preventDefault();
-    sparkDrag = true;
-    LENS.dragA = LENS.dragB = +sb.dataset.si;
-    lensBox.setPointerCapture(e.pointerId);
-    lensDraw();
-  });
-  lensBox.addEventListener("pointermove", (e) => {
-    if (!sparkDrag || !LENS) return;
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const sb = el && el.closest && el.closest(".sbar");
-    if (sb && +sb.dataset.si !== LENS.dragB) {
-      LENS.dragB = +sb.dataset.si;
-      lensDraw();
-    }
-  });
-  const finishSpark = () => {
-    if (!sparkDrag || !LENS) return;
-    sparkDrag = false;
-    const term = sparkRangeTerm(LENS.kind, LENS.dragA, LENS.dragB, neg(LENS.term));
-    delete LENS.dragA;
-    delete LENS.dragB;
-    lensWriteRaw(term, false);
-  };
-  lensBox.addEventListener("pointerup", finishSpark);
-  lensBox.addEventListener("pointercancel", () => { sparkDrag = false; if (LENS) { delete LENS.dragA; delete LENS.dragB; } });
-
   lensBox.addEventListener("mousedown", (e) => {
-    if (e.target.closest(".sbar")) { e.preventDefault(); return; }
     e.preventDefault();
     if (!LENS) return;
+    if (PANEL && panelMouse(e)) return;
     const wt = e.target.closest("[data-wtypos]");
     if (wt) {
       const next = wt.dataset.wtypos;
@@ -738,6 +653,10 @@
       return;
     }
     if (!LENS || lensBox.hidden) return;
+    if (PANEL) {
+      if (panelKey(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (e.key !== "Escape") return;
+    }
     const n = LENS.items.length;
     const step = (d) => {
       placeSelAuto = false;

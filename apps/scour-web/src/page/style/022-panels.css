@@ -1,0 +1,86 @@
+  /* The time, type and size panels: chips with a count each, the switches,
+     the histogram, the kind tiles, the choice in words. Chosen is the
+     accent's ring, left out red and struck through, the keys' place an
+     outline; none of them changes a size. */
+  .pp-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
+  .pp-chips .pc {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    padding: 4px 10px; cursor: pointer; color: var(--ink);
+    font: 600 12.5px/1.3 var(--sans); white-space: nowrap;
+  }
+  .pp-chips .pc small { font: 500 11px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .pp-chips .pc:hover { background: var(--line-soft); }
+  .pp-chips .pc.zero { color: var(--ink-3); }
+  .pp-chips .pc.on { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); background: var(--cap); }
+  .pp-chips .pc.no {
+    border-color: var(--q-not); box-shadow: inset 0 0 0 1px var(--q-not); background: var(--cap-neg);
+    text-decoration: line-through; text-decoration-color: var(--q-not);
+  }
+  .pp-chips .pc.wait { cursor: default; color: var(--ink-3); border-style: dashed; }
+  .pp .kb { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .pp-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 2px 12px 4px; }
+  .segs { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; padding: 1px; background: var(--panel); }
+  .segs button {
+    border: 0; background: none; padding: 3px 9px; border-radius: 5px; cursor: pointer;
+    font: 600 11.5px/1.3 var(--sans); color: var(--ink-3);
+  }
+  .segs button.on { background: var(--line-soft); color: var(--ink); }
+  .segs button.kb { outline-offset: -1px; }
+  /* The bars of one scale, oldest left; the pointer is the lens's while it drags. */
+  .hist {
+    display: flex; align-items: flex-end; gap: 2px; height: 74px; margin: 6px 12px 0; padding: 0 1px;
+    touch-action: none; user-select: none; cursor: ew-resize; border-radius: 4px;
+  }
+  .hist { position: relative; }
+  .hist .run { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: color-mix(in srgb, var(--focus) 12%, transparent); pointer-events: none; }
+  .hist i { position: relative; flex: 1; min-width: 2px; border-radius: 2px 2px 1px 1px; background: var(--k3); opacity: .55; }
+  .hist i.in { background: var(--focus); opacity: 1; }
+  .hist i.wait { opacity: .25; }
+  .hl { display: flex; justify-content: space-between; padding: 4px 12px 2px; font: 500 10.5px var(--mono); color: var(--ink-3); }
+  .pp-say {
+    margin: 6px 12px 2px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+    font: 600 12.5px/1.3 var(--sans); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pp-say s { color: var(--q-not); text-decoration-color: var(--q-not); }
+  .pp-say.quiet { color: var(--ink-3); font-weight: 500; border-style: dashed; }
+  .pp-keys { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .pp-keys kbd {
+    font: 600 10.5px/1 var(--mono); color: var(--ink-2); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 4px; background: var(--panel);
+  }
+  /* The kinds as tiles: a glyph, the name, the count, the share of the query. */
+  .kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px; padding: 4px 12px 6px; }
+  .kd {
+    display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 2px 8px; align-items: center;
+    padding: 7px 9px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+    cursor: pointer; text-align: left; color: var(--ink);
+  }
+  .kd:hover { background: var(--line-soft); }
+  .kd .ico {
+    grid-row: 1 / 3; width: 20px; height: 20px; background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / 18px 18px no-repeat; mask: var(--g) center / 18px 18px no-repeat;
+  }
+  .kd b { font: 600 12.5px/1.25 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kd small { font: 500 11px/1.2 var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; min-height: 13px; }
+  .kd .sh { grid-column: 1 / 3; height: 3px; margin-top: 3px; border-radius: 2px; background: var(--line-soft); overflow: hidden; }
+  .kd .sh i { display: block; height: 100%; background: var(--k3); }
+  .kd.zero b, .kd.zero .ico { opacity: .55; }
+  .kd.on { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); background: var(--cap); }
+  .kd.on .sh i { background: var(--focus); }
+  .kd.no { border-color: var(--q-not); box-shadow: inset 0 0 0 1px var(--q-not); background: var(--cap-neg); }
+  .kd.no b { text-decoration: line-through; text-decoration-color: var(--q-not); }
+  .pp-type .lgroup { padding-top: 4px; }
+  .pp-chips.exts { padding-top: 2px; }
+
+  /* A list capsule: each value an inner chip, a quiet dot between, "+N"
+     for those the line has no room for. */
+  .qshadow .term.cap .said-art.chips { display: flex; align-items: center; gap: 0; min-width: 0; padding: 0 5px; }
+  .qshadow .term.cap .said-art.chips .lv {
+    flex: none; height: 22px; padding: 0 7px; border-radius: 5px; background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--cap-ring); font: 600 12.5px/22px var(--sans); color: var(--ink);
+  }
+  .qshadow .term.cap .said-art.chips .lv.more { background: none; box-shadow: none; color: var(--ink-3); padding: 0 3px 0 5px; }
+  .qshadow .term.cap .said-art.chips .lsep { flex: none; font-style: normal; padding: 0 4px; font: 500 12px/1 var(--sans); color: var(--ink-3); }
+  .qshadow .term.cap.neg .said-art.chips { text-decoration: none; }
+  .qshadow .term.cap.neg .said-art.chips .lv { color: var(--q-not); text-decoration: line-through; box-shadow: inset 0 0 0 1px var(--cap-neg-ring); }

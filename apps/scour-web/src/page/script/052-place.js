@@ -35,33 +35,6 @@
   /* A path as a term's value: quoted when a space or a `|` would cut it. */
   const quotedPath = (p) => (/[\s|]/.test(p) ? '"' + p + '"' : p);
 
-  /* `lens::terms`: split on whitespace and `|` outside quotes. */
-  function placeTerm(text, start, end) {
-    const raw = text.slice(start, end);
-    const not = raw.startsWith("!");
-    const bare = not ? raw.slice(1) : raw;
-    const sp = bare.startsWith('"') ? null : fieldSplit(bare);
-    const name = sp ? fold(sp[0]) : "";
-    const field = sp && Object.hasOwn(LENS_FIELDS, name) ? LENS_FIELDS[name] : null;
-    const value = (sp ? sp[1] : bare).replace(/^"+|"+$/g, "");
-    return { start, end, not, field, value };
-  }
-  function placeTerms(text) {
-    const out = [];
-    let start = null, quoted = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      const cut = !quoted && (/\s/.test(c) || c === "|");
-      if (c === '"') quoted = !quoted;
-      if (cut) {
-        if (start !== null) out.push(placeTerm(text, start, i));
-        start = null;
-      } else if (start === null) start = i;
-    }
-    if (start !== null) out.push(placeTerm(text, start, text.length));
-    return out;
-  }
-
   /* `lens::replace`: one term for another; for nothing, a space beside it goes too. */
   function placeReplace(text, t, by) {
     if (by) return [text.slice(0, t.start) + by + text.slice(t.end), t.start + by.length];

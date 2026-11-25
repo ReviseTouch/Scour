@@ -429,7 +429,8 @@
     font: 500 12.5px/1.3 var(--sans);
   }
   .lens.lens-place { width: min(680px, calc(100vw - 28px)); overflow: hidden; display: flex; flex-direction: column; padding: 0; }
-  .lens.lens-band { width: min(470px, calc(100vw - 28px)); }
+  .lens.lens-band { width: min(620px, calc(100vw - 28px)); }
+  .lens.lens-type { width: min(620px, calc(100vw - 28px)); max-height: min(620px, var(--lens-room, calc(100vh - 130px))); }
   .lens[hidden] { display: none; }
   .lens .lhead { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px 6px; color: var(--ink-3); font-size: 11.5px; }
   .lens .lhead b { color: var(--ink-2); font-weight: 600; }
@@ -519,22 +520,6 @@
   }
   .lp-dir .da button.inc:hover { border-color: var(--q-key); color: var(--q-key); }
   .lp-dir .da button.exc:hover { border-color: var(--q-not); color: var(--q-not); }
-  /* Sparkline inside Time & Size lenses */
-  .lspark-wrap { padding: 6px 12px 8px; border-bottom: 1px solid var(--line-soft); user-select: none; }
-  .lspark { display: flex; align-items: flex-end; gap: 5px; height: 52px; padding-top: 6px; cursor: crosshair; }
-  .lspark .sbar {
-    flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch;
-    gap: 3px; border-radius: 4px; padding: 2px 2px 0; cursor: pointer;
-  }
-  .lspark .sbar:hover { background: var(--line-soft); }
-  .lspark .sbar i {
-    display: block; width: 100%; min-height: 3px; border-radius: 3px 3px 1px 1px;
-    background: var(--k3); opacity: .65; transition: height .14s, background .12s, opacity .12s;
-  }
-  .lspark .sbar.in i, .lspark .sbar:hover i { background: var(--q-key); opacity: 1; }
-  .lspark-lbls { display: flex; gap: 5px; margin-top: 4px; font: 500 10px/1.1 var(--mono); color: var(--ink-3); text-align: center; }
-  .lspark-lbls span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lspark-note { margin-top: 4px; font-size: 10.5px; color: var(--ink-3); text-align: right; }
   /* Word lens global switches */
   .lw-global {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;

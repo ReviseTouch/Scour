@@ -17,8 +17,9 @@
       let quoted = false;
       while (i < text.length) {
         const c = text[i];
+        // A quote opens only inside a word: one after a space starts the next.
+        if (space ? !/\s/.test(c) : !quoted && /\s/.test(c)) break;
         if (c === '"') quoted = !quoted;
-        else if (!quoted && /\s/.test(c) !== space) break;
         i++;
       }
       out.push(text.slice(start, i));
@@ -47,8 +48,12 @@
       if (list && canJoinList(tok) && (expectValue || tok.startsWith(";"))) {
         let rest = tok;
         if (rest.startsWith(";")) { out.push(["sep", ";"]); rest = rest.slice(1); expectValue = true; }
-        if (rest) expectValue = rest.endsWith(";");
-        valueSpans(out, rest, list);
+        // A `|` closes the list: what follows it is a term of its own.
+        const alts = splitBars(rest);
+        if (alts[0]) expectValue = alts[0].endsWith(";");
+        valueSpans(out, alts[0], list);
+        alts.slice(1).forEach((alt) => { out.push(["or", "|"]); alternative(out, alt); });
+        if (alts.length > 1) { list = null; expectValue = false; }
         return;
       }
       if (tok === "|") { out.push(["or", tok]); list = null; expectValue = false; return; }
@@ -447,6 +452,7 @@
     const body = neg ? raw.slice(1) : raw;
     const sp = body.startsWith('"') ? null : fieldSplit(body);
     const f = sp && field(sp[0]);
+    if (EMPTY_TERM.test(raw)) return "cap" + (neg ? " neg" : "");
     if (sp && !f) return "word";
     /* A value that cannot be read yet keeps its capsule — a filter being
        written — and the wavy line on its value says the rest. */
@@ -502,12 +508,15 @@
     return true;
   }
 
+  /* `empty:`, a size of none: drawn as the Size capsule it is. */
+  const EMPTY_TERM = /^!?(empty|bos):$/i;
+
   function capHeadOf(text, a, b) {
     const raw = text.slice(a, b);
     const neg = raw.startsWith("!");
     const body = neg ? raw.slice(1) : raw;
     const sp = body.startsWith('"') ? null : fieldSplit(body);
-    if (!sp || !field(sp[0])) return -1;
+    if (!sp || !(field(sp[0]) || EMPTY_TERM.test(raw))) return -1;
     return a + (neg ? 1 : 0) + sp[0].length + 1;
   }
 
@@ -530,25 +539,59 @@
   /* The canonical name of the field a capsule is for, or null. */
   function capField(text, a, b) {
     const raw = text.slice(a, b);
+    if (EMPTY_TERM.test(raw)) return "size";
     const sp = fieldSplit(raw.startsWith("!") ? raw.slice(1) : raw);
     const f = sp && field(sp[0]);
     return f ? f.name : null;
   }
 
   /* What a filter holds, in the words its lens offers it in: `7d` is "last 7
-     days", `doc` "Document". Empty when there are none, and the letters show. */
+     days", `30d..7d` "26 Oct – 18 Nov", `doc` "Document". Empty when there
+     are none, and the letters show. */
   function saidValue(text, a, b, fld) {
     const raw = text.slice(a, b);
+    if (EMPTY_TERM.test(raw)) return T("Empty");
     const sp = fieldSplit(raw.startsWith("!") ? raw.slice(1) : raw);
     const v = ((sp && sp[1]) || "").replace(/^"|"$/g, "");
     if (!v) return "";
     try {
-      const band = (list) => { const m = list.find((x) => x[0] === v); return m ? T(m[1]) : ""; };
-      if (fld === "dm") return band(LENS_TIMES);
-      if (fld === "size") return band(LENS_SIZES);
+      const at = Math.floor(Date.now() / 1000);
+      if (fld === "dm") return timeWords(timeSaid(v, at, localOffset(at)));
+      if (fld === "size") {
+        const i = SIZE_PRESETS.findIndex((p) => p.term === "size:" + v.toLowerCase());
+        return i > 0 ? T(SIZE_PRESETS[i].label) : "";
+      }
       if (fld === "kind" && KIND_VALUES.includes(v)) return KIND_KEY[v] || "";
     } catch (_) { /* the lists are not made yet: the letters show */ }
     return "";
+  }
+
+  /* A list of two or more values, each said as its own inner chip: kinds by
+     name, extensions with their dot. Null for one value or none. */
+  function listSaid(text, a, b, fld) {
+    if (fld !== "kind" && fld !== "ext") return null;
+    const raw = text.slice(a, b);
+    const sp = fieldSplit(raw.startsWith("!") ? raw.slice(1) : raw);
+    const vs = ((sp && sp[1]) || "").replace(/\s+/g, "").split(";").filter(Boolean);
+    if (vs.length < 2) return null;
+    return vs.map((v) => (fld === "ext" ? "." + v.replace(/^\.+/, "") : KIND_KEY[valueKey("kind", v)] || v));
+  }
+
+  /* The chips of a list capsule, the first `shown` of them and "+N" for the rest. */
+  function listChipsHtml(labels, shown) {
+    return labels.slice(0, shown).map((l, i) => (i ? '<i class="lsep">·</i>' : "") + '<span class="lv">' + escape_(l) + "</span>").join("") +
+      (shown < labels.length ? '<span class="lv more">+' + (labels.length - shown) + "</span>" : "");
+  }
+
+  /* After the layer is drawn: a list capsule wider than its line folds its
+     last chips into "+N", one at a time; on a line too narrow for one, "+N" alone. */
+  function listFit() {
+    for (const el of shadow.querySelectorAll(".said-art.chips")) {
+      const labels = JSON.parse(el.dataset.v);
+      for (let k = labels.length - 1; k >= 0 && el.scrollWidth > el.clientWidth + 0.5; k--) {
+        el.innerHTML = listChipsHtml(labels, k);
+      }
+    }
   }
 
   /* Every text node of the drawn layer, in order, with where it starts in the
@@ -758,7 +801,10 @@
       if (valOpen) {
         html += "</span>";
         valOpen = false;
-        if (tm.said) html += '<span class="art said-art">' + escape_(tm.said) + "</span>";
+        if (tm.chips) {
+          html += '<span class="art said-art chips" data-v="' + escape_(JSON.stringify(tm.chips)) + '">' +
+            listChipsHtml(tm.chips, tm.chips.length) + "</span>";
+        } else if (tm.said) html += '<span class="art said-art">' + escape_(tm.said) + "</span>";
       }
       html += "</span>";
       open = false;
@@ -795,8 +841,9 @@
               headHtml = '<span class="cap-head"><span class="art head-art">' +
                 (neg ? '<span class="bang">!</span>' : "") + art +
                 (fld === "fuzzy" ? "" : '<span class="nm">' + escape_(fieldLabel(fld)) + "</span>") + "</span>";
-              if (!edit) tm.said = saidValue(text, a, b, fld);
-              if (tm.said) cls += " said";
+              if (!edit) tm.chips = listSaid(text, a, b, fld);
+              if (!edit && !tm.chips) tm.said = saidValue(text, a, b, fld);
+              if (tm.said || tm.chips) cls += " said";
             } else headHtml = '<span class="cap-head letters">';
             if (/\bidle\b/.test(cls)) tm.hint = capHint(text.slice(a, b));
           }
@@ -824,6 +871,7 @@
   /* The query is laid out by the browser, one to three lines of it, and the
      caret and selection are drawn over what it made. */
   function fitQuery() {
+    listFit();
     indexSegments();
     drawDecor();
   }
