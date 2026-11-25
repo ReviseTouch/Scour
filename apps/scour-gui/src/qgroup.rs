@@ -50,10 +50,18 @@ pub enum Aim {
     Letters(usize, usize),
 }
 
-/// The group, laid out.
+/// A capsule drawn as inner chips — a place group, or a `kind:`/`ext:`
+/// list — laid out.
 #[derive(Debug, Clone)]
 pub struct Drawn {
-    pub cap: PlaceCap,
+    /// The bytes it stands for.
+    pub start: usize,
+    pub end: usize,
+    /// The term whose header is the capsule's, and its field.
+    pub head: Term,
+    pub field: &'static str,
+    /// Its header's width, and the whole capsule's.
+    pub head_w: f32,
     pub width: f32,
     /// From the capsule's left: every char boundary of `start..=end`, in order.
     pub dx: Vec<f32>,
@@ -61,6 +69,15 @@ pub struct Drawn {
     pub zones: Vec<(f32, f32, Aim)>,
     /// Byte ranges drawn as letters: the value of a member being edited.
     pub letters: Vec<(usize, usize)>,
+}
+
+/// How many parts the "+N" stands for, as drawn; 0 without one.
+#[cfg(test)]
+pub fn hidden(d: &Drawn) -> usize {
+    d.bits
+        .iter()
+        .find_map(|b| b.text.strip_prefix('+')?.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Where a member's value begins, past `under:` and an opening quote.
@@ -254,6 +271,7 @@ pub fn lay(
         };
         zones.push((x0, x1, aim(s.0)));
     }
+    let head = cap.parts[0].spot.terms[0].clone();
     let mut letters: Vec<(usize, usize)> = cap
         .parts
         .iter()
@@ -262,7 +280,11 @@ pub fn lay(
         .collect();
     letters.sort_unstable();
     Drawn {
-        cap,
+        start: cap.start,
+        end: cap.end,
+        head,
+        field: "under",
+        head_w,
         width,
         dx,
         bits,

@@ -4,16 +4,13 @@
 
 use std::collections::HashMap;
 
-use scour_core::FacetBy;
 use scour_proto::{Disk, Request, Response};
 use scour_ui::disks::Tile;
 use scour_ui::lens::{self, Lens};
 use scour_ui::path::home_form;
 
-use crate::qplace;
-
-/// Counted up to this and no further: a choice that keeps more is "100,000+".
-const COUNT_CAP: u32 = 100_000;
+use crate::qpanel::{COUNT_CAP, Want};
+use crate::{qplace, qsize, qtime, qtype};
 
 /// One line of the open lens.
 #[derive(Debug, Clone, Default)]
@@ -39,6 +36,8 @@ pub struct Item {
     pub icon: &'static str,
     pub key: String,
     pub held: bool,
+    /// A kind or an extension the type panel toggles: its field and value.
+    pub value: Option<(&'static str, String)>,
 }
 
 pub struct Open {
@@ -51,7 +50,6 @@ pub struct Open {
     pub items: Vec<Item>,
     pub title: String,
     pub foot: String,
-    facets: Option<Vec<(String, u64)>>,
     pub usage: Option<scour_core::UsageResponse>,
     pub tree: Option<Vec<scour_core::TreeNode>>,
     pub disks: Option<Vec<Disk>>,
@@ -59,12 +57,13 @@ pub struct Open {
     /// The place lens's disks, once `volumes` and `sources` have answered.
     pub tiles: Vec<Tile>,
     pub place: qplace::View,
+    /// The time, type and size panels' answers.
+    pub got: crate::qpanel::Got,
 }
 
 /// What the window knows that a lens shows: words and places.
 pub struct Env<'a> {
     pub tr: &'a dyn Fn(&str) -> String,
-    pub kind_name: &'a dyn Fn(&str) -> String,
     pub home: &'a str,
     pub places: &'a [(String, String)],
 }
@@ -82,6 +81,12 @@ pub enum Chosen {
     /// What the files hold: not a filter in the query but the line under the
     /// field. The query is this — the `:` that asked taken out — the caret here.
     Inside { query: String, caret: usize },
+    /// A kind or extension of the type panel, toggled; the lens stays open if `keep`.
+    Value {
+        field: &'static str,
+        value: String,
+        keep: bool,
+    },
 }
 
 #[derive(Default)]
@@ -101,6 +106,13 @@ pub struct Lenses {
     stepped: bool,
     /// The next opening is the lens's own press rewriting the query, not typing.
     pub hold: bool,
+    /// The time panel's scale and mode, kept while it stays open.
+    pub look: qtime::Look,
+    /// The time term the calendar last lit, `None` on a fresh opening.
+    pub cal_for: Option<String>,
+    /// What the panels asked, by generation and slot: the key its answer is
+    /// kept under, so an answer outliving its generation still counts.
+    pending: HashMap<(u64, u32), String>,
 }
 
 fn reads(q: &str) -> bool {
@@ -112,6 +124,13 @@ impl Lenses {
         self.open = None;
         self.generation += 1;
         self.asked.clear();
+        self.pending.clear();
+        self.cal_for = None;
+    }
+
+    /// Ask again for what the open lens shows, as it now is.
+    pub fn refill(&mut self, q: &str, env: &Env) -> Vec<(u32, Request)> {
+        self.fill(q, env)
     }
 
     /// Open, follow or close the lens for where the caret is. `asked` is a
@@ -122,7 +141,10 @@ impl Lenses {
             self.close();
             return Vec::new();
         };
-        let Some(kind) = lens::lens_of(q, &t) else {
+        // `empty:` names no field the model knows; it is the size panel's.
+        let Some(kind) =
+            lens::lens_of(q, &t).or_else(|| lens::is_empty_term(q, &t).then_some(Lens::Size))
+        else {
             self.close();
             return Vec::new();
         };
@@ -141,6 +163,7 @@ impl Lenses {
                 .is_none_or(|o| o.raw != q[t.start..t.end]);
         if typed || self.open.is_none() {
             self.stepped = false;
+            self.look.armed = false;
         }
         let sel = match &self.open {
             Some(o) if kind == Lens::Place && o.kind == kind && self.stepped => o.sel,
@@ -149,6 +172,9 @@ impl Lenses {
         };
         if !self.seen.is_empty() && self.open.is_none() {
             self.seen.clear();
+        }
+        if kind == Lens::Time && self.open.as_ref().is_none_or(|o| o.kind != kind) {
+            self.look = qtime::Look::of(&t.value);
         }
         self.open = Some(Open {
             kind,
@@ -160,13 +186,13 @@ impl Lenses {
             items: Vec::new(),
             title: String::new(),
             foot: String::new(),
-            facets: None,
             usage: None,
             tree: None,
             disks: None,
             sources: None,
             tiles: Vec::new(),
             place: qplace::View::default(),
+            got: Default::default(),
         });
         self.generation += 1;
         self.asked.clear();
@@ -185,30 +211,11 @@ impl Lenses {
         };
         let rest = Self::rest(q, o);
         let mut want = Vec::new();
+        let mut panel: Vec<Want> = Vec::new();
         match o.kind {
-            Lens::Kind | Lens::Ext if !reads(&rest) => {
-                let key = format!("facets {:?} {rest}", o.kind);
-                match self.seen.get(&key) {
-                    Some(Response::Facets(f)) => o.facets = Some(facet_pairs(f)),
-                    _ => want.push((
-                        0,
-                        Request::Facets {
-                            query: rest.clone(),
-                            by: vec![
-                                if o.kind == Lens::Kind {
-                                    FacetBy::Kind
-                                } else {
-                                    FacetBy::Ext { top: 24 }
-                                },
-                                // Lifts the sampling cap a lone kind count has.
-                                FacetBy::Age {
-                                    edges: scour_ui::bar_edges(),
-                                },
-                            ],
-                        },
-                    )),
-                }
-            }
+            Lens::Time => panel = qtime::fill(o, &self.seen, q, &self.look),
+            Lens::Size => panel = qsize::fill(o, &self.seen, q),
+            Lens::Kind | Lens::Ext => panel = qtype::fill(o, &self.seen, q),
             Lens::Place => {
                 let pinned = qplace::pinned(&self.browse, q);
                 want = qplace::fill(o, &self.seen, q, pinned, env);
@@ -218,6 +225,27 @@ impl Lenses {
         o.items = items(o, q, env);
         if o.kind == Lens::Place && !self.stepped {
             o.sel = qplace::resting(o);
+        }
+        // A preset panel rests on the preset the term is, else on none:
+        // Enter then keeps what is written.
+        if matches!(o.kind, Lens::Time | Lens::Size) && !self.stepped {
+            let chosen = match o.kind {
+                Lens::Time => scour_ui::lens::time_pick(&o.term.value).and_then(|p| p.preset),
+                _ => qsize::chosen(o, q),
+            };
+            o.sel = chosen.unwrap_or(o.items.len());
+        }
+        // `ext:` opens the type panel on its extensions.
+        if o.kind == Lens::Ext && !self.stepped && o.sel == 0 {
+            o.sel = scour_ui::lens::KIND_LABELS
+                .len()
+                .min(o.items.len().saturating_sub(1));
+        }
+        for (slot, key, request) in panel {
+            if self.asked.insert(key.clone()) {
+                self.pending.insert((self.generation, slot), key);
+                want.push((slot, request));
+            }
         }
         if !reads(&rest) {
             for (i, it) in o.items.iter_mut().enumerate() {
@@ -260,6 +288,14 @@ impl Lenses {
         q: &str,
         env: &Env,
     ) -> Vec<(u32, Request)> {
+        if let Some(key) = self.pending.remove(&(generation, slot)) {
+            self.seen.insert(key, reply);
+            return if self.open.is_some() {
+                self.fill(q, env)
+            } else {
+                Vec::new()
+            };
+        }
         if generation != self.generation {
             return Vec::new();
         }
@@ -287,10 +323,6 @@ impl Lenses {
                 };
                 self.seen.insert(format!("count {whole}"), reply);
             }
-            (Response::Facets(_), _) => {
-                self.seen
-                    .insert(format!("facets {:?} {rest}", o.kind), reply);
-            }
             _ => return Vec::new(),
         }
         self.fill(q, env)
@@ -303,7 +335,12 @@ impl Lenses {
         if n == 0 {
             return;
         }
-        let mut s = o.sel as i32;
+        // From no line, the first step lands on an end.
+        let mut s = if o.sel as i32 >= n {
+            if by > 0 { -1 } else { n }
+        } else {
+            o.sel as i32
+        };
         for _ in 0..n {
             s = (s + by).rem_euclid(n);
             if !o.items[s as usize].wait {
@@ -317,12 +354,34 @@ impl Lenses {
     /// list takes another value, a folder is gone into.
     pub fn choose(&mut self, i: usize, stay: bool, q: &str) -> Option<Chosen> {
         let o = self.open.as_mut()?;
-        let it = o.items.get(i)?.clone();
+        let Some(it) = o.items.get(i).cloned() else {
+            // Enter on a preset panel resting on none: what is written stays.
+            if !matches!(o.kind, Lens::Time | Lens::Size) {
+                return None;
+            }
+            let caret = o.b;
+            self.close();
+            return Some(Chosen::Edit {
+                query: q.to_string(),
+                caret,
+                keep: false,
+            });
+        };
         if it.wait {
             return None;
         }
         if let Some(k) = it.tile {
             return Some(Chosen::Tile(k));
+        }
+        if let Some((field, value)) = it.value {
+            if !stay {
+                self.close();
+            }
+            return Some(Chosen::Value {
+                field,
+                value,
+                keep: stay,
+            });
         }
         // A filter the query already holds is gone into, not written twice.
         if it.launch
@@ -383,47 +442,10 @@ impl Lenses {
     pub fn forget(&mut self, key: &str) {
         self.seen.remove(key);
     }
-
-    /// Term produced by dragging across sparkline bars `[a ..= b]`.
-    pub fn spark_range(&self, a: usize, b: usize) -> Option<String> {
-        let o = self.open.as_ref()?;
-        let (lo, hi) = (a.min(b), a.max(b).min(o.items.len().saturating_sub(1)));
-        if lo == hi {
-            return o.items.get(lo).map(|i| i.term.clone());
-        }
-        let neg = if o.term.not { "!" } else { "" };
-        match o.kind {
-            Lens::Time => {
-                let edges = ["1d", "2d", "7d", "30d", "365d"];
-                Some(format!(
-                    "{neg}dm:{}",
-                    edges.get(hi).copied().unwrap_or("365d")
-                ))
-            }
-            Lens::Size => {
-                let lo_edge = ["", "100kb", "10mb", "1gb"].get(lo).copied().unwrap_or("");
-                let hi_edge = ["100kb", "10mb", "1gb", ""].get(hi).copied().unwrap_or("");
-                let val = match (lo_edge.is_empty(), hi_edge.is_empty()) {
-                    (false, false) => format!("{lo_edge}..{hi_edge}"),
-                    (false, true) => format!(">{lo_edge}"),
-                    _ => format!("<{hi_edge}"),
-                };
-                Some(format!("{neg}size:{val}"))
-            }
-            _ => None,
-        }
-    }
 }
 
 pub fn home_path(home: &str, p: &str) -> String {
     home_form(home, p)
-}
-
-fn facet_pairs(f: &scour_core::FacetResponse) -> Vec<(String, u64)> {
-    f.groups
-        .first()
-        .map(|g| g.facets.iter().map(|x| (x.key.clone(), x.count)).collect())
-        .unwrap_or_default()
 }
 
 fn it(label: String, hint: &str, term: String) -> Item {
@@ -464,26 +486,8 @@ fn items(o: &mut Open, q: &str, env: &Env) -> Vec<Item> {
                 })
                 .collect()
         }
-        Lens::Time | Lens::Size => {
-            let (title, foot, bands) = if o.kind == Lens::Time {
-                (
-                    "When it last changed",
-                    "Or type one: 24h, 2w, 2026-03-01, >2026-06-01",
-                    lens::TIMES,
-                )
-            } else {
-                ("Size", "Or type one: >10mb, <1kb, 1mb..50mb", lens::SIZES)
-            };
-            o.title = tr(title);
-            o.foot = tr(foot);
-            lens::bands(t, bands)
-                .into_iter()
-                .map(|c| Item {
-                    count: true,
-                    ..it(tr(&c.label), &c.hint, c.term)
-                })
-                .collect()
-        }
+        Lens::Time => qtime::items(o, env),
+        Lens::Size => qsize::items(o, env),
         Lens::Word => {
             o.title = tr("How “{w}” is read").replace("{w}", &t.value);
             o.foot = tr("Only this word changes. Every word at once: Settings → Searching.");
@@ -516,49 +520,7 @@ fn items(o: &mut Open, q: &str, env: &Env) -> Vec<Item> {
                 })
                 .collect()
         }
-        Lens::Kind | Lens::Ext => {
-            let kind = o.kind == Lens::Kind;
-            o.title = tr(if kind { "Type" } else { "Extension" });
-            o.foot = tr("Tab adds or takes one away and stays open; Enter writes it and closes.");
-            let mut values: Vec<(String, Option<u64>)> = o
-                .facets
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, n)| (k, Some(n)))
-                .collect();
-            if kind && values.is_empty() {
-                values = scour_ui::lens::KINDS
-                    .iter()
-                    .map(|k| (k.to_string(), None))
-                    .collect();
-            }
-            let pairs: Vec<(String, String)> = values
-                .iter()
-                .map(|(k, _)| {
-                    let label = if kind {
-                        (env.kind_name)(k)
-                    } else {
-                        format!(".{k}")
-                    };
-                    (k.clone(), label)
-                })
-                .collect();
-            let typed = t.value.rsplit(';').next().unwrap_or("").to_lowercase();
-            let known = pairs.iter().any(|(k, _)| *k == typed);
-            lens::list(t, &pairs)
-                .into_iter()
-                .zip(values)
-                .filter(|(_, (k, _))| typed.is_empty() || known || k.starts_with(&typed))
-                .take(12)
-                .map(|(c, (_, n))| Item {
-                    n: n.map(|n| n as i64),
-                    stays: true,
-                    label: format!("{}{}", if c.hint == "✓" { "✓ " } else { "" }, c.label),
-                    ..it(String::new(), "", c.term)
-                })
-                .collect()
-        }
+        Lens::Kind | Lens::Ext => qtype::items(o, q, env),
         Lens::Place => qplace::items(o, env),
     }
 }

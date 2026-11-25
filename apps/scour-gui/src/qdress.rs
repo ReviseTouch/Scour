@@ -43,18 +43,18 @@ fn head_hint(cat: &Catalogue, field: &str) -> String {
     cat.get(id).into_owned()
 }
 
-/// What a filter holds, in words, when it holds one of the values its lens
-/// offers: `7d` is "last 7 days", `doc` is "Document".
+/// What a filter holds, in words, where its panel has words for it: `7d`
+/// is "last 7 days", `2026-11-12..2026-11-25` "12–25 November",
+/// `100kb..10mb` "100 KB to 10 MB", `doc` "Document".
 fn friendly(cat: &Catalogue, field: &str, raw: &str) -> Option<String> {
-    let band = |bands: &[(&str, &str)]| {
-        bands
-            .iter()
-            .find(|(v, _)| *v == raw)
-            .map(|(_, l)| cat.get(l).into_owned())
-    };
     match field {
-        "dm" => band(lens::TIMES),
-        "size" => band(lens::SIZES),
+        "dm" => crate::qtime::words(raw, cat),
+        "size" => {
+            let text = format!("size:{raw}");
+            let t = lens::terms(&text).into_iter().next()?;
+            let i = lens::size_preset_of(&text, &t)?;
+            Some(cat.get(lens::SIZE_PRESETS[i].label).into_owned())
+        }
         "kind" if lens::KINDS.contains(&raw) => scour_core::Kind::from_name(raw)
             .and_then(|k| k.first())
             .map(|k| cat.get(k.msgid()).into_owned()),
@@ -148,7 +148,7 @@ pub(crate) fn dressed(
     caps.retain(|c| {
         !groups
             .iter()
-            .any(|g| g.cap.start <= c.from as usize && c.to as usize <= g.cap.end)
+            .any(|g| g.start <= c.from as usize && c.to as usize <= g.end)
     });
     for c in &mut caps {
         dress(qb, d, c);
@@ -156,16 +156,24 @@ pub(crate) fn dressed(
     caps
 }
 
-/// A group's header: as wide as a Location capsule's, and where each of its
-/// letters is, `under:` drawn small when the settings ask for words.
-pub(crate) fn head(qb: &mut QueryBar, d: &Dress) -> (f32, f32) {
+/// A chip capsule's header: as wide as its filter's capsule's, and where
+/// each of its `chars` letters is, drawn small when the settings ask for
+/// words. Excluded, it holds the `!` too.
+pub(crate) fn head(
+    qb: &mut QueryBar,
+    d: &Dress,
+    field: &str,
+    chars: usize,
+    not: bool,
+) -> (f32, f32) {
     if d.words {
         let each = d.adv * qbar::HEAD_SCALE - qbar::HEAD_TIGHT;
-        return (6.0 * each + qbar::HEAD_GAP, each);
+        return (chars as f32 * each + qbar::HEAD_GAP, each);
     }
     let mut c = Cap {
         head: 1,
-        field: "under".into(),
+        field: field.into(),
+        tone: if not { 2 } else { 0 },
         ..Cap::default()
     };
     dress(

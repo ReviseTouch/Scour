@@ -51,31 +51,41 @@ pub struct Laidout {
     pub bits: Vec<QBit>,
 }
 
-/// The query's place groups, each folded to fit a line, or left out when
-/// one part alone would not.
-fn fold_groups(qb: &mut QueryBar, text: &str, d: &Dress, head_w: f32) -> Vec<Drawn> {
+/// The query's place groups and `kind:`/`ext:` lists, each folded to fit a
+/// line, or left out when one part alone would not.
+fn fold_groups(qb: &mut QueryBar, text: &str, d: &Dress) -> Vec<Drawn> {
     let room = if qb.field.room > 0.0 {
         qb.field.room
     } else {
         80.0 * d.adv
     };
+    let (head_w, _) = head(qb, d, "under", 6, false);
     let tiles = crate::qplace::tiles(&qb.disks, &qb.sources);
-    lens::place_caps(text, &home(), &tiles, d.caret)
+    let mut out: Vec<Drawn> = lens::place_caps(text, &home(), &tiles, d.caret)
         .iter()
         .filter(|p| p.parts.len() > 1 || p.parts.iter().any(|p| !p.raw))
         .filter_map(|p| {
             let mut m = |s: &str, face: i32| width_of(qb, s, face);
             qgroup::fit(text, p, room, head_w, d.adv, &mut m)
         })
-        .collect()
+        .collect();
+    for t in crate::qlist::lists(text, d.caret) {
+        if out.iter().any(|g| g.start <= t.start && t.end <= g.end) {
+            continue;
+        }
+        let chars = scour_ui::frame::head_of(text, &t, |_| true)
+            .map_or(0, |e| chars_before(text, e) - chars_before(text, t.start));
+        let (hw, _) = head(qb, d, t.field.unwrap_or("kind"), chars, t.not);
+        let labels = crate::qlist::labels(text, &t, d.cat);
+        let mut m = |s: &str, face: i32| width_of(qb, s, face);
+        out.extend(crate::qlist::fit(text, &t, &labels, room, hw, &mut m));
+    }
+    out
 }
 
 /// A group's chars in the query.
 fn span_of(text: &str, g: &Drawn) -> (usize, usize) {
-    (
-        chars_before(text, g.cap.start),
-        chars_before(text, g.cap.end),
-    )
+    (chars_before(text, g.start), chars_before(text, g.end))
 }
 
 fn laid(text: &str, line: usize, at: usize, g: &Drawn) -> Laid {
@@ -108,8 +118,8 @@ fn group_cap(qb: &mut QueryBar, d: &Dress, text: &str, g: &Drawn, small: f32) ->
     let (a, b) = span_of(text, g);
     let (line, at) = scour_ui::wrap::place(&qb.field.lines, a);
     let mut l = laid(text, line, at, g);
-    let h = scour_ui::frame::head_of(text, &g.cap.parts[0].spot.terms[0], |_| true)
-        .map_or(0, |e| chars_before(text, e) - a);
+    let h =
+        scour_ui::frame::head_of(text, &g.head, |_| true).map_or(0, |e| chars_before(text, e) - a);
     for k in 1..h.min(l.len) {
         l.dx[k] = k as f32 * small;
     }
@@ -118,9 +128,10 @@ fn group_cap(qb: &mut QueryBar, d: &Dress, text: &str, g: &Drawn, small: f32) ->
         at: at as i32,
         len: (b - a) as i32,
         head: h as i32,
-        field: "under".into(),
-        from: g.cap.start as i32,
-        to: g.cap.end as i32,
+        field: g.field.into(),
+        tone: if g.head.not { 2 } else { 0 },
+        from: g.start as i32,
+        to: g.end as i32,
         whole: true,
         first: true,
         last: true,
@@ -147,7 +158,7 @@ fn carved(
 ) -> Vec<Span> {
     let mut runs = qb.field.place(crate::painted(text, spans));
     for c in caps.iter().filter(|c| c.head > 0) {
-        if let Some(g) = groups.iter().find(|g| g.cap.start == c.from as usize) {
+        if let Some(g) = groups.iter().find(|g| g.start == c.from as usize) {
             runs = carve_group(runs, text, g, c);
             continue;
         }
@@ -213,8 +224,8 @@ pub fn lay_out(
         caret: (qb.anchor == qb.cursor && w.get_q_focused()).then_some(qb.cursor),
     };
     qb.field.unwrapped(text);
-    let (head_w, small) = head(qb, &d);
-    let groups = fold_groups(qb, text, &d, head_w);
+    let (_, small) = head(qb, &d, "under", 6, false);
+    let groups = fold_groups(qb, text, &d);
     wrap(qb, &d, text, spans, &groups);
     let mut caps = dressed(qb, &d, text, spans, &groups);
     let mut all = Vec::new();
@@ -228,13 +239,15 @@ pub fn lay_out(
     let field = &qb.field;
     for c in &mut caps {
         let l = c.line as usize;
-        let group = all.iter().any(|g| g.line == l && g.at == c.at as usize);
+        let group = all
+            .iter()
+            .zip(&groups)
+            .find(|(g, _)| g.line == l && g.at == c.at as usize);
         c.x = field.x(l, c.at);
         c.w = field.x(l, c.at + c.len) - c.x;
-        c.hw = if group {
-            head_w
-        } else {
-            field.x(l, c.at + c.head) - c.x
+        c.hw = match group {
+            Some((_, g)) => g.head_w,
+            None => field.x(l, c.at + c.head) - c.x,
         };
         // An empty filter's room is past its header, not part of it.
         if c.len == c.head {
@@ -245,7 +258,7 @@ pub fn lay_out(
     qb.groups = all
         .into_iter()
         .zip(&groups)
-        .map(|(l, g)| (g.cap.start, g.cap.end, l))
+        .map(|(l, g)| (g.start, g.end, l))
         .collect();
     Laidout { caps, runs, bits }
 }
@@ -253,7 +266,7 @@ pub fn lay_out(
 /// A group's letters taken out of the runs, but for the member being edited;
 /// its header drawn small when it is not a picture.
 fn carve_group(runs: Vec<Span>, text: &str, g: &Drawn, c: &Cap) -> Vec<Span> {
-    let a = chars_before(text, g.cap.start);
+    let a = chars_before(text, g.start);
     let col = |b: usize| (chars_before(text, b) - a) as i32 + c.at;
     let (line, at, h) = (c.line, c.at, c.head);
     let mut runs = carve(runs, line, at, at + h, (!c.icon).then_some(true));
@@ -262,7 +275,7 @@ fn carve_group(runs: Vec<Span>, text: &str, g: &Drawn, c: &Cap) -> Vec<Span> {
         runs = carve(runs, line, from, col(v).max(from), None);
         from = from.max(col(e));
     }
-    carve(runs, line, from, col(g.cap.end), None)
+    carve(runs, line, from, col(g.end), None)
 }
 
 /// Where the caret stands when it is in a place group: the group says.

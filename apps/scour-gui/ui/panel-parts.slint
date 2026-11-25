@@ -1,0 +1,337 @@
+// The pieces the time, type and size panels share: a chip with a count, a
+// switch of a few words, the bars of the time panel, a kind's tile. A press
+// is read on the way down, with Alt: a model replaced between press and
+// release would lose a `clicked`. Hover tints, never moves.
+
+import { Theme, Fonts } from "theme.slint";
+import { KindIcon } from "widgets.slint";
+import { CountChip, HistBar, TypeTile } from "panel-types.slint";
+
+// Words with a red line through them when left out.
+component Struck inherits Rectangle {
+    in property <string> text;
+    in property <brush> ink;
+    in property <length> size;
+    in property <bool> struck;
+    in property <bool> mono;
+    in property <int> weight: 400;
+    out property <length> want: words.preferred-width;
+    height: self.size + 5px;
+    words := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.ink;
+        font-size: root.size;
+        font-weight: root.weight;
+        font-family: root.mono ? Fonts.mono : "";
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.struck: Rectangle {
+        x: 0px;
+        y: parent.height / 2;
+        width: min(words.preferred-width, parent.width);
+        height: 1.2px;
+        background: Theme.q-bad;
+    }
+}
+
+// A preset: its words over its count, as wide as its share of the row.
+export component PresetChip inherits Rectangle {
+    in property <CountChip> c;
+    in property <bool> focused;
+    callback press(bool);
+    height: 40px;
+    border-radius: 7px;
+    border-width: root.c.on || root.c.off ? 1.5px : Theme.hair;
+    border-color: root.c.off ? Theme.q-bad : root.c.on ? Theme.q-key : Theme.line;
+    background: root.c.off ? Theme.cap-neg : root.c.on ? Theme.cap
+        : root.focused || touch.has-hover ? Theme.hover : Theme.panel;
+    VerticalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        alignment: center;
+        Struck {
+            text: root.c.label;
+            ink: root.c.off ? Theme.q-bad : root.c.zero ? Theme.ink-3 : Theme.ink;
+            size: 12px;
+            weight: 600;
+            struck: root.c.off;
+        }
+        Struck {
+            text: root.c.n;
+            ink: Theme.ink-3;
+            size: 10.5px;
+            mono: true;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.press(e.modifiers.alt);
+            }
+        }
+    }
+}
+
+// An extension: `.pdf 4,210` on one line, as wide as its words.
+export component ExtChip inherits Rectangle {
+    in property <CountChip> c;
+    in property <bool> focused;
+    callback press(bool);
+    height: 26px;
+    width: row.preferred-width + 16px;
+    border-radius: 6px;
+    border-width: root.c.on || root.c.off ? 1.5px : Theme.hair;
+    border-color: root.c.off ? Theme.q-bad : root.c.on ? Theme.q-key : Theme.line;
+    background: root.c.off ? Theme.cap-neg : root.c.on ? Theme.cap
+        : root.focused || touch.has-hover ? Theme.hover : Theme.panel;
+    row := HorizontalLayout {
+        x: 8px;
+        height: parent.height;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Struck {
+                width: self.want;
+                text: root.c.label;
+                ink: root.c.off ? Theme.q-bad : Theme.ink;
+                size: 12px;
+                weight: 650;
+                struck: root.c.off;
+            }
+        }
+        Text {
+            text: root.c.n;
+            color: Theme.ink-3;
+            font-family: Fonts.mono;
+            font-size: 10.5px;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.press(e.modifiers.alt);
+            }
+        }
+    }
+}
+
+// A few words, one of them chosen.
+export component Segs inherits Rectangle {
+    in property <[string]> items;
+    in property <int> at;
+    callback pick(int);
+    height: 26px;
+    border-radius: 7px;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    background: Theme.panel;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for s[i] in root.items: Rectangle {
+            width: word.preferred-width + 18px;
+            border-radius: 5px;
+            background: i == root.at ? Theme.cap : hit.has-hover ? Theme.hover : transparent;
+            word := Text {
+                text: s;
+                color: i == root.at ? Theme.q-key : Theme.ink-2;
+                font-size: 11.5px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            hit := TouchArea {
+                mouse-cursor: pointer;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        root.pick(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The bars, oldest at the left, growing from the baseline. One touch area
+// over the whole strip: a press is the first bar, the pointer's bar when
+// let go the last.
+export component Bars inherits Rectangle {
+    in property <[HistBar]> bars;
+    callback range(int, int);
+    height: 72px;
+    property <bool> dragging;
+    property <int> a: -1;
+    property <int> b: -1;
+    property <length> step: self.width / max(1, root.bars.length);
+    for bar[i] in root.bars: Rectangle {
+        property <bool> lit: root.dragging
+            ? (i >= min(root.a, root.b) && i <= max(root.a, root.b)) : bar.lit;
+        x: i * root.step + 1px;
+        width: max(1px, root.step - 2px);
+        height: max(2px, (root.height - 6px) * bar.share);
+        y: root.height - 1px - self.height;
+        border-radius: 2px;
+        background: self.lit ? Theme.q-key : Theme.k3.with-alpha(0.55);
+    }
+    Rectangle {
+        y: root.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        function at(x: length) -> int {
+            return clamp(Math.floor(x / root.step), 0, max(0, root.bars.length - 1));
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left
+                    && root.bars.length > 0) {
+                root.dragging = true;
+                root.a = self.at(self.mouse-x);
+                root.b = root.a;
+            }
+            if (e.kind == PointerEventKind.up && root.dragging) {
+                root.dragging = false;
+                root.range(root.a, root.b);
+            }
+        }
+        moved => {
+            if (root.dragging) {
+                root.b = self.at(self.mouse-x);
+            }
+        }
+    }
+}
+
+// A kind: its picture, its name, its count and its share of the query.
+export component TypeTileCard inherits Rectangle {
+    in property <TypeTile> t;
+    in property <bool> focused;
+    callback press(bool);
+    property <brush> ink: root.t.off ? Theme.q-bad : root.t.on ? Theme.q-key : Theme.ink-2;
+    height: 54px;
+    border-radius: 8px;
+    border-width: root.t.on || root.t.off ? 1.5px : Theme.hair;
+    border-color: root.t.off ? Theme.q-bad : root.t.on ? Theme.q-key : Theme.line;
+    background: root.t.off ? Theme.cap-neg : root.t.on ? Theme.cap
+        : root.focused || touch.has-hover ? Theme.hover : Theme.panel;
+    opacity: root.t.zero && !root.t.on && !root.t.off ? 0.55 : 1;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 5px;
+        padding-bottom: 7px;
+        spacing: 8px;
+        VerticalLayout {
+            padding-top: 2px;
+            alignment: start;
+            KindIcon {
+                width: 16px;
+                height: 16px;
+                ktoken: root.t.token;
+                colorize: root.ink;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            Struck {
+                text: root.t.label;
+                ink: root.t.off ? Theme.q-bad : Theme.ink;
+                size: 12.5px;
+                weight: 650;
+                struck: root.t.off;
+            }
+            Struck {
+                text: root.t.n;
+                ink: Theme.ink-3;
+                size: 10.5px;
+                mono: true;
+            }
+            Rectangle { vertical-stretch: 1; }
+            Rectangle {
+                height: 3px;
+                border-radius: 1.5px;
+                background: Theme.line-soft;
+                Rectangle {
+                    x: 0px;
+                    width: parent.width * min(1, root.t.share);
+                    height: parent.height;
+                    border-radius: 1.5px;
+                    background: root.t.off ? Theme.q-bad : root.t.on ? Theme.q-key : Theme.k3;
+                }
+            }
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.press(e.modifiers.alt);
+            }
+        }
+    }
+}
+
+// The line at a panel's top: its name, and on the right what the query
+// finds without its own field.
+export component PanelHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> total;
+    height: 28px;
+    padding-left: 12px;
+    padding-right: 12px;
+    spacing: 8px;
+    Text {
+        text: root.title;
+        color: Theme.ink-2;
+        font-size: 11.5px;
+        font-weight: 650;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+        overflow: elide;
+    }
+    Text {
+        text: root.total;
+        color: Theme.ink-3;
+        font-family: Fonts.mono;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+// The line at a panel's foot: a rule, then what the keys and the pointer do.
+export component PanelFoot inherits VerticalLayout {
+    in property <string> text;
+    in property <string> keys;
+    Rectangle {
+        height: 1px;
+        background: Theme.line;
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 12px;
+        Text {
+            text: root.text;
+            color: Theme.ink-3;
+            font-size: 11px;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+        if root.keys != "": Text {
+            text: root.keys;
+            color: Theme.ink-3;
+            font-size: 11px;
+            horizontal-alignment: right;
+        }
+    }
+}

@@ -16,6 +16,9 @@ import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
 import { PlaceLens } from "place.slint";
+import { TimePanel, TypePanel, SizePanel } from "panels.slint";
+import { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook } from "panel-types.slint";
+export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk } from "place-parts.slint";
 import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
@@ -140,6 +143,17 @@ export component MainWindow inherits Window {
     callback cal-opened();
     callback cal-shift(int);
     callback lens-cal-range(int, int);
+    // The time, type and size panels: what they show; a chip or tile
+    // pressed (its line, Alt down); a run of bars; a scale or mode chosen;
+    // an arrow on the bars, true when it moved them.
+    in property <TimeLook> lens-time;
+    in property <TypeLook> lens-type;
+    in property <SizeLook> lens-size;
+    callback lens-press(int, bool);
+    callback lens-bars(int, int);
+    callback lens-scale(int);
+    callback lens-mode(int);
+    callback lens-bar-key(int, bool) -> bool;
     changed lens-open => {
         if (!self.lens-open) {
             self.cal-open = false;
@@ -197,7 +211,6 @@ export component MainWindow inherits Window {
     callback lens-close();
     callback lens-field(string);
     callback lens-fuzzy();
-    callback lens-spark-range(int, int);
     callback lens-place-act(string, string);
     // A disk tile pressed, Ctrl down or not; an entry of the place lens's
     // "Searching in" line taken out; the scope chip pressed.
@@ -1725,6 +1738,12 @@ export component MainWindow inherits Window {
                             return accept;
                         }
                         if (root.lens-open) {
+                            // ← → move the time panel's bars once a press gave them the keys.
+                            if ((e.text == Key.LeftArrow || e.text == Key.RightArrow) && !e.modifiers.control
+                                    && root.lens-kind == "time" && root.lens-time.armed
+                                    && root.lens-bar-key(e.text == Key.LeftArrow ? -1 : 1, e.modifiers.shift)) {
+                                return accept;
+                            }
                             if (e.text == Key.DownArrow && !e.modifiers.alt) { root.lens-step(1); return accept; }
                             if (e.text == Key.UpArrow && !e.modifiers.alt) { root.lens-step(-1); return accept; }
                             // → goes into a folder, or adds one more value to a list.
@@ -4471,10 +4490,15 @@ export component MainWindow inherits Window {
             // are; each row of them is 98 px.
             property <int> tile-cols: max(1, min(root.lens-tiles.length, Math.floor((self.width - 16px) / 218px)));
             property <int> tile-rows: Math.ceil(root.lens-tiles.length / self.tile-cols);
+            property <bool> panel: root.lens-kind == "time" || root.lens-kind == "type" || root.lens-kind == "size";
             width: root.lens-kind == "place" ? min(720px, root.width - 20px)
-                : (root.lens-kind == "time" || root.lens-kind == "size") ? min(470px, root.width - 20px)
+                : (root.lens-kind == "time" || root.lens-kind == "type") ? min(580px, root.width - 20px)
+                : root.lens-kind == "size" ? min(540px, root.width - 20px)
                 : min(430px, root.width - 20px);
             height: root.lens-kind == "place" ? min(300px + self.tile-rows * 98px, root.height - self.y - 16px)
+                : root.lens-kind == "time" ? min(time-panel.want, root.height - self.y - 12px)
+                : root.lens-kind == "type" ? min(type-panel.want, root.height - self.y - 12px)
+                : root.lens-kind == "size" ? min(size-panel.want, root.height - self.y - 12px)
                 : min(lens-body.preferred-height, 410px);
             background: Theme.panel-2;
             border-width: Theme.hair;
@@ -4515,8 +4539,53 @@ export component MainWindow inherits Window {
                 drop(i) => { root.lens-held-drop(i); }
             }
 
+            time-panel := TimePanel {
+                visible: root.lens-kind == "time";
+                width: parent.width;
+                height: parent.height;
+                look: root.lens-time;
+                title: root.lens-title;
+                foot: root.lens-foot;
+                sel: root.lens-sel;
+                calendar: root.word-calendar;
+                months: root.cal-months;
+                week: root.cal-week;
+                cal-hint: root.cal-hint;
+                cal-open <=> root.cal-open;
+                cal-from <=> root.cal-from;
+                cal-to <=> root.cal-to;
+                cal-hover <=> root.cal-hover;
+                press(i, alt) => { root.lens-press(i, alt); }
+                bars(a, b) => { root.lens-bars(a, b); }
+                scale(i) => { root.lens-scale(i); }
+                mode(i) => { root.lens-mode(i); }
+                cal-opened => { root.cal-opened(); }
+                cal-shift(by) => { root.cal-shift(by); }
+                cal-range(a, b) => { root.lens-cal-range(a, b); }
+            }
+            type-panel := TypePanel {
+                visible: root.lens-kind == "type";
+                width: parent.width;
+                height: parent.height;
+                look: root.lens-type;
+                title: root.lens-title;
+                foot: root.lens-foot;
+                sel: root.lens-sel;
+                press(i, alt) => { root.lens-press(i, alt); }
+            }
+            size-panel := SizePanel {
+                visible: root.lens-kind == "size";
+                width: parent.width;
+                height: parent.height;
+                look: root.lens-size;
+                title: root.lens-title;
+                foot: root.lens-foot;
+                sel: root.lens-sel;
+                press(i, alt) => { root.lens-press(i, alt); }
+            }
+
             lens-flick := Flickable {
-                visible: root.lens-kind != "place";
+                visible: root.lens-kind != "place" && !parent.panel;
                 viewport-height: lens-body.preferred-height;
                 property <int> sel: root.lens-sel;
                 changed sel => {
@@ -4544,217 +4613,15 @@ export component MainWindow inherits Window {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
-                        if !root.cal-open: Text {
+                        Text {
                             text: root.lens-said;
                             color: Theme.ink-3;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
-                        if root.lens-kind == "time": HorizontalLayout {
-                            padding-left: 8px;
-                            VerticalLayout {
-                                alignment: center;
-                                // Said plainly: a picture and the accent, so a
-                                // calendar is seen to be there.
-                                cal-button := Rectangle {
-                                    height: 26px;
-                                    width: cal-row.preferred-width + 20px;
-                                    border-radius: 7px;
-                                    border-width: 1px;
-                                    border-color: Theme.cap-ring;
-                                    background: root.cal-open ? Theme.cap-ring : cal-touch.has-hover ? Theme.hover : Theme.cap;
-                                    cal-row := HorizontalLayout {
-                                        alignment: center;
-                                        spacing: 6px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            Image {
-                                                width: 14px;
-                                                height: 14px;
-                                                source: @image-url("icons/tools/lens-time.svg");
-                                                colorize: Theme.q-key;
-                                            }
-                                        }
-                                        Text {
-                                            text: root.word-calendar;
-                                            color: Theme.q-key;
-                                            font-size: 12.5px;
-                                            font-weight: 600;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                    cal-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.cal-open = !root.cal-open;
-                                            root.cal-from = -1;
-                                            root.cal-to = -1;
-                                            if (root.cal-open) {
-                                                root.cal-opened();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
 
-                    // Two months side by side: a press picks the first day, a
-                    // second the last, the days between lit as the pointer moves.
-                    if root.cal-open && root.lens-kind == "time": VerticalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        padding-top: 2px;
-                        padding-bottom: 8px;
-                        spacing: 6px;
-                        HorizontalLayout {
-                            spacing: 20px;
-                            alignment: center;
-                            for mo[mi] in root.cal-months: VerticalLayout {
-                                spacing: 2px;
-                                HorizontalLayout {
-                                    height: 26px;
-                                    if mi == 0: CalArrow {
-                                        label: "‹";
-                                        clicked => { root.cal-shift(-1); }
-                                    }
-                                    if mi != 0: Rectangle { width: 24px; }
-                                    Text {
-                                        horizontal-stretch: 1;
-                                        text: mo.title;
-                                        color: Theme.ink;
-                                        font-size: 12.5px;
-                                        font-weight: 600;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    if mi == root.cal-months.length - 1: CalArrow {
-                                        label: "›";
-                                        clicked => { root.cal-shift(1); }
-                                    }
-                                    if mi != root.cal-months.length - 1: Rectangle { width: 24px; }
-                                }
-                                HorizontalLayout {
-                                    for wd in root.cal-week: Text {
-                                        width: 28px;
-                                        height: 18px;
-                                        text: wd;
-                                        color: Theme.ink-3;
-                                        font-size: 10.5px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                for wk in [0, 1, 2, 3, 4, 5]: HorizontalLayout {
-                                    for dd in [0, 1, 2, 3, 4, 5, 6]: CalCell {
-                                        day: mo.days[wk * 7 + dd];
-                                        from: root.cal-from;
-                                        to: root.cal-to;
-                                        hover: root.cal-hover;
-                                        entered(n) => { root.cal-hover = n; }
-                                        left(n) => {
-                                            if (root.cal-hover == n) {
-                                                root.cal-hover = -1;
-                                            }
-                                        }
-                                        picked(n) => {
-                                            if (root.cal-from < 0 || root.cal-to >= 0) {
-                                                root.cal-from = n;
-                                                root.cal-to = -1;
-                                            } else {
-                                                root.cal-to = n;
-                                                root.lens-cal-range(root.cal-from, n);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Text {
-                            text: root.cal-hint;
-                            color: Theme.ink-3;
-                            font-size: 10.5px;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
-
-                    // Interactive Sparkline Scrubber for Time & Size lenses
-                    if !root.cal-open && (root.lens-kind == "time" || root.lens-kind == "size") && root.lens-rows.length > 0: VerticalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        padding-bottom: 6px;
-                        spacing: 3px;
-                        spark-box := Rectangle {
-                            height: 48px;
-                            property <bool> dragging: false;
-                            property <int> drag-a: root.lens-sel;
-                            property <int> drag-b: root.lens-sel;
-                            HorizontalLayout {
-                                spacing: 5px;
-                                for srow[si] in root.lens-rows: Rectangle {
-                                    horizontal-stretch: 1;
-                                    property <bool> lit: spark-box.dragging
-                                        ? (si >= min(spark-box.drag-a, spark-box.drag-b) && si <= max(spark-box.drag-a, spark-box.drag-b))
-                                        : si == root.lens-sel;
-                                    Rectangle {
-                                        width: parent.width;
-                                        height: max(4px, (parent.height - 6px) * max(0.08, srow.bar));
-                                        y: parent.height - self.height;
-                                        border-radius: 3px;
-                                        background: parent.lit ? Theme.q-key : Theme.k3.with-alpha(0.65);
-                                    }
-                                }
-                            }
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                function idx-at(x: length) -> int {
-                                    return clamp(
-                                        Math.floor(x * root.lens-rows.length / max(1px, spark-box.width)),
-                                        0,
-                                        max(0, root.lens-rows.length - 1));
-                                }
-                                pointer-event(e) => {
-                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                        let idx = self.idx-at(self.mouse-x);
-                                        spark-box.dragging = true;
-                                        spark-box.drag-a = idx;
-                                        spark-box.drag-b = idx;
-                                    }
-                                    if (e.kind == PointerEventKind.up && spark-box.dragging) {
-                                        spark-box.dragging = false;
-                                        root.lens-spark-range(spark-box.drag-a, spark-box.drag-b);
-                                    }
-                                }
-                                moved => {
-                                    if (spark-box.dragging) {
-                                        spark-box.drag-b = self.idx-at(self.mouse-x);
-                                    }
-                                }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 5px;
-                            for srow in root.lens-rows: Text {
-                                horizontal-stretch: 1;
-                                text: srow.hint != "" ? srow.hint : srow.label;
-                                color: Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10px;
-                                horizontal-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-                        Text {
-                            text: root.word-spark-hint;
-                            color: Theme.ink-3;
-                            font-size: 10.5px;
-                            horizontal-alignment: right;
-                        }
-                        Rectangle { height: 1px; background: Theme.line-soft; }
-                    }
-
-                    if !(root.cal-open && root.lens-kind == "time"): VerticalLayout {
+                    VerticalLayout {
                         for row[i] in root.lens-rows: VerticalLayout {
                             if row.group != "": Rectangle {
                                 height: row.group == " " ? 7px : 20px;

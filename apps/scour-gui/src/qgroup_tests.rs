@@ -79,15 +79,10 @@ fn a_narrow_room_folds_the_rest_into_a_count() {
     let q = "under:~/a|under:~/b|under:~/c|under:~/d";
     let cap = &caps(q, None)[0];
     let all = fit(q, cap, 1000.0, HEAD_W, 10.0, &mut m).unwrap();
-    assert_eq!(all.cap.hidden, 0);
+    assert_eq!(hidden(&all), 0);
     let d = fit(q, cap, all.width - 1.0, HEAD_W, 10.0, &mut m).unwrap();
     assert!(d.width < all.width);
-    assert!(d.cap.hidden > 0);
-    assert!(
-        d.bits
-            .iter()
-            .any(|b| b.text == format!("+{}", d.cap.hidden))
-    );
+    assert!(hidden(&d) > 0);
     // Too narrow for even one part: drawn as its terms.
     assert!(fit(q, cap, HEAD_W, HEAD_W, 10.0, &mut m).is_none());
 }

@@ -1,6 +1,6 @@
-//! `SCOUR_GUI_CLICKS="x,y;ctrl+x,y"`: presses one after another, 1.2 s apart
-//! from `SCOUR_GUI_CLICK_MS`, each with the modifiers it names held — how a
-//! test reaches a Ctrl+click, which no key or single press can.
+//! `SCOUR_GUI_CLICKS="x,y;ctrl+x,y;alt+x,y"`: presses one after another, 1.2 s
+//! apart from `SCOUR_GUI_CLICK_MS`, each with the modifiers it names held — how
+//! a test reaches a Ctrl+ or Alt+click, which no key or single press can.
 
 use super::*;
 
@@ -21,6 +21,7 @@ pub(crate) fn wire(window: &MainWindow) {
             .filter_map(|m| match m {
                 "ctrl" => Some(slint::platform::Key::Control.into()),
                 "shift" => Some(slint::platform::Key::Shift.into()),
+                "alt" => Some(slint::platform::Key::Alt.into()),
                 _ => None,
             })
             .collect();

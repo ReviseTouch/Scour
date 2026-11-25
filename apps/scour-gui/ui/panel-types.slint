@@ -1,0 +1,66 @@
+// What the time, type and size panels show, every word and number Rust's.
+
+// A preset or an extension: its words, its count said, and how the query
+// holds it.
+export struct CountChip {
+    label: string,
+    n: string,
+    // Counted, and nothing: drawn quieter, still a choice.
+    zero: bool,
+    // The query holds it; holds it left out (`!`).
+    on: bool,
+    off: bool,
+}
+
+// One bar of the time panel, oldest first.
+export struct HistBar {
+    // Its count against the tallest bar's.
+    share: float,
+    // In the run the term is.
+    lit: bool,
+}
+
+// One kind of the type panel.
+export struct TypeTile {
+    token: string,
+    label: string,
+    n: string,
+    // Its count against everything the query finds.
+    share: float,
+    zero: bool,
+    on: bool,
+    off: bool,
+}
+
+export struct TimeLook {
+    presets: [CountChip],
+    scales: [string],
+    scale: int,
+    modes: [string],
+    mode: int,
+    bars: [HistBar],
+    // The axis's ends.
+    from: string,
+    to: string,
+    // The choice in words, and what it keeps; what the query finds without it.
+    said: string,
+    total: string,
+    hint: string,
+    // A press on the bars gave them the arrows.
+    armed: bool,
+}
+
+export struct TypeLook {
+    tiles: [TypeTile],
+    // The extensions, on two lines when one does not hold them.
+    exts: [CountChip],
+    exts-2: [CountChip],
+    ext-title: string,
+    total: string,
+}
+
+export struct SizeLook {
+    presets: [CountChip],
+    said: string,
+    total: string,
+}

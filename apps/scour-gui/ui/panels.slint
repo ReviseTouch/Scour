@@ -1,0 +1,353 @@
+// The time, type and size panels: chips with counts, the time panel's bars
+// and calendar, the type panel's tiles and extensions, and a line saying
+// the choice. Every word and number is Rust's; this only lays them out.
+// A press says which line of the lens it is, and whether Alt was down.
+
+import { Theme, Fonts } from "theme.slint";
+import { CalDay, CalMonth } from "types.slint";
+import { CalArrow, CalCell } from "widgets.slint";
+import { CountChip, TimeLook, TypeLook, SizeLook } from "panel-types.slint";
+import { PresetChip, ExtChip, Segs, Bars, TypeTileCard, PanelHead, PanelFoot } from "panel-parts.slint";
+
+// The choice in words, with what it keeps.
+component Said inherits HorizontalLayout {
+    in property <string> text;
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 6px;
+    padding-bottom: 8px;
+    Text {
+        text: root.text;
+        color: Theme.ink;
+        font-size: 12.5px;
+        font-weight: 600;
+        overflow: elide;
+    }
+}
+
+// Two months side by side: a press picks the first day, a second the last,
+// the days between lit as the pointer moves.
+component Calendar inherits VerticalLayout {
+    in property <[CalMonth]> months;
+    in property <[string]> week;
+    in property <string> hint;
+    in-out property <int> from;
+    in-out property <int> to;
+    in-out property <int> hover;
+    callback shift(int);
+    callback range(int, int);
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 4px;
+    padding-bottom: 8px;
+    spacing: 6px;
+    Rectangle {
+        height: 1px;
+        background: Theme.line-soft;
+    }
+    HorizontalLayout {
+        spacing: 20px;
+        alignment: center;
+        for mo[mi] in root.months: VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                height: 26px;
+                if mi == 0: CalArrow {
+                    label: "‹";
+                    clicked => { root.shift(-1); }
+                }
+                if mi != 0: Rectangle { width: 24px; }
+                Text {
+                    horizontal-stretch: 1;
+                    text: mo.title;
+                    color: Theme.ink;
+                    font-size: 12.5px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if mi == root.months.length - 1: CalArrow {
+                    label: "›";
+                    clicked => { root.shift(1); }
+                }
+                if mi != root.months.length - 1: Rectangle { width: 24px; }
+            }
+            HorizontalLayout {
+                for wd in root.week: Text {
+                    width: 28px;
+                    height: 18px;
+                    text: wd;
+                    color: Theme.ink-3;
+                    font-size: 10.5px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            for wk in [0, 1, 2, 3, 4, 5]: HorizontalLayout {
+                for dd in [0, 1, 2, 3, 4, 5, 6]: CalCell {
+                    day: mo.days[wk * 7 + dd];
+                    from: root.from;
+                    to: root.to;
+                    hover: root.hover;
+                    entered(n) => { root.hover = n; }
+                    left(n) => {
+                        if (root.hover == n) {
+                            root.hover = -1;
+                        }
+                    }
+                    picked(n) => {
+                        if (root.from < 0 || root.to >= 0) {
+                            root.from = n;
+                            root.to = -1;
+                        } else {
+                            root.to = n;
+                            root.range(root.from, n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Text {
+        text: root.hint;
+        color: Theme.ink-3;
+        font-size: 10.5px;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+export component TimePanel inherits Rectangle {
+    in property <TimeLook> look;
+    in property <string> title;
+    in property <string> foot;
+    in property <int> sel;
+    in property <string> calendar;
+    in property <[CalMonth]> months;
+    in property <[string]> week;
+    in property <string> cal-hint;
+    in-out property <bool> cal-open;
+    in-out property <int> cal-from;
+    in-out property <int> cal-to;
+    in-out property <int> cal-hover;
+    callback press(int, bool);
+    callback bars(int, int);
+    callback scale(int);
+    callback mode(int);
+    callback cal-opened();
+    callback cal-shift(int);
+    callback cal-range(int, int);
+    out property <length> want: body.preferred-height;
+
+    body := VerticalLayout {
+        PanelHead {
+            title: root.title;
+            total: root.look.total;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 22px;
+                    width: cal-row.preferred-width + 16px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.cap-ring;
+                    background: root.cal-open ? Theme.cap-ring : cal-touch.has-hover ? Theme.hover : Theme.cap;
+                    cal-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 5px;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                width: 13px;
+                                height: 13px;
+                                source: @image-url("icons/tools/lens-time.svg");
+                                colorize: Theme.q-key;
+                            }
+                        }
+                        Text {
+                            text: root.calendar;
+                            color: Theme.q-key;
+                            font-size: 11.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                    cal-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.cal-open = !root.cal-open;
+                            if (root.cal-open) {
+                                root.cal-opened();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            for c[i] in root.look.presets: PresetChip {
+                horizontal-stretch: 1;
+                c: c;
+                focused: i == root.sel;
+                press(alt) => { root.press(i, alt); }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            spacing: 8px;
+            Segs {
+                items: root.look.scales;
+                at: root.look.scale;
+                pick(i) => { root.scale(i); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Segs {
+                items: root.look.modes;
+                at: root.look.mode;
+                pick(i) => { root.mode(i); }
+            }
+        }
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            spacing: 3px;
+            Bars {
+                bars: root.look.bars;
+                range(a, b) => { root.bars(a, b); }
+            }
+            HorizontalLayout {
+                Text {
+                    text: root.look.from;
+                    color: Theme.ink-3;
+                    font-size: 10.5px;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.look.to;
+                    color: Theme.ink-3;
+                    font-size: 10.5px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+        Said { text: root.look.said; }
+        if root.cal-open: Calendar {
+            months: root.months;
+            week: root.week;
+            hint: root.cal-hint;
+            from <=> root.cal-from;
+            to <=> root.cal-to;
+            hover <=> root.cal-hover;
+            shift(by) => { root.cal-shift(by); }
+            range(a, b) => { root.cal-range(a, b); }
+        }
+        PanelFoot {
+            text: root.foot;
+            keys: root.look.hint;
+        }
+    }
+}
+
+export component TypePanel inherits Rectangle {
+    in property <TypeLook> look;
+    in property <string> title;
+    in property <string> foot;
+    in property <int> sel;
+    callback press(int, bool);
+    out property <length> want: body.preferred-height;
+    property <int> cols: 3;
+    property <length> gap: 6px;
+    property <length> tile-w: (self.width - 24px - (self.cols - 1) * self.gap) / self.cols;
+    property <int> rows: Math.ceil(root.look.tiles.length / root.cols);
+    property <int> first-ext: root.look.tiles.length;
+
+    body := VerticalLayout {
+        PanelHead {
+            title: root.title;
+            total: root.look.total;
+        }
+        Rectangle {
+            height: max(0px, root.rows * (54px + root.gap) - root.gap);
+            for t[i] in root.look.tiles: TypeTileCard {
+                x: 12px + Math.mod(i, root.cols) * (root.tile-w + root.gap);
+                y: Math.floor(i / root.cols) * (54px + root.gap);
+                width: root.tile-w;
+                t: t;
+                focused: i == root.sel;
+                press(alt) => { root.press(i, alt); }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-top: 10px;
+            height: 30px;
+            Text {
+                text: root.look.ext-title;
+                color: Theme.ink-3;
+                font-size: 11px;
+                font-weight: 650;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for c[i] in root.look.exts: ExtChip {
+                    c: c;
+                    focused: root.sel == root.first-ext + i;
+                    press(alt) => { root.press(root.first-ext + i, alt); }
+                }
+            }
+            if root.look.exts-2.length > 0: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for c[i] in root.look.exts-2: ExtChip {
+                    c: c;
+                    focused: root.sel == root.first-ext + root.look.exts.length + i;
+                    press(alt) => { root.press(root.first-ext + root.look.exts.length + i, alt); }
+                }
+            }
+        }
+        PanelFoot { text: root.foot; }
+    }
+}
+
+export component SizePanel inherits Rectangle {
+    in property <SizeLook> look;
+    in property <string> title;
+    in property <string> foot;
+    in property <int> sel;
+    callback press(int, bool);
+    out property <length> want: body.preferred-height;
+
+    body := VerticalLayout {
+        PanelHead {
+            title: root.title;
+            total: root.look.total;
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 6px;
+            for c[i] in root.look.presets: PresetChip {
+                horizontal-stretch: 1;
+                c: c;
+                focused: i == root.sel;
+                press(alt) => { root.press(i, alt); }
+            }
+        }
+        Said { text: root.look.said; }
+        PanelFoot { text: root.foot; }
+    }
+}

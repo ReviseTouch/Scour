@@ -39,11 +39,9 @@ fn count(n: u64) -> Response {
 
 fn with_env<R>(f: impl FnOnce(&Env) -> R) -> R {
     let tr = |m: &str| m.to_string();
-    let kind_name = |k: &str| k.to_string();
     let places = vec![("Documents".to_string(), format!("{HOME}/Documents"))];
     f(&Env {
         tr: &tr,
-        kind_name: &kind_name,
         home: HOME,
         places: &places,
     })

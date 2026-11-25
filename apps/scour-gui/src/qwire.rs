@@ -48,7 +48,7 @@ pub struct QueryBar {
     /// How many files each size band would leave, as asked.
     narrow_sizes: [Option<u64>; 4],
     /// How many months the time lens's calendar is moved back from today's.
-    cal_back: i64,
+    pub(crate) cal_back: i64,
     /// How wide the window draws each word a capsule shows in its own face —
     /// a header's name, a value said in words — and the words it was asked to
     /// measure, in the order it was asked.
@@ -103,15 +103,9 @@ pub fn place_term(path: &str) -> String {
 
 fn with_env<R>(cat: &Catalogue, places: &[(String, String)], f: impl FnOnce(&Env) -> R) -> R {
     let tr = |m: &str| cat.get(m).into_owned();
-    let kind_name = |token: &str| {
-        scour_core::Kind::from_name(token)
-            .and_then(|k| k.first())
-            .map_or_else(|| token.to_string(), |k| cat.get(k.msgid()).into_owned())
-    };
     let home = home();
     f(&Env {
         tr: &tr,
-        kind_name: &kind_name,
         home: &home,
         places,
     })
@@ -262,12 +256,19 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
         lens::Lens::Time => "time",
         lens::Lens::Size => "size",
         lens::Lens::Word => "word",
+        lens::Lens::Kind | lens::Lens::Ext => "type",
         _ => "",
     };
     w.set_lens_kind(kind_tag.into());
     if o.kind == lens::Lens::Place {
         crate::placewire::show(w, o, cat, &text);
     }
+    if !kind_tag.is_empty() && kind_tag != "word" && kind_tag != "place" {
+        crate::panelwire::show(w, qb, cat, &text);
+    }
+    let Some(o) = qb.lenses.open.as_ref() else {
+        return;
+    };
     let peak = o
         .items
         .iter()
@@ -366,6 +367,15 @@ pub fn answered(
     let wants = with_env(cat, &qb.places, |env| {
         qb.lenses.answer(generation, slot, reply, &text, env)
     });
+    send(link, qb.lenses.generation, wants);
+    show_lens(w, &mut s.qb, cat);
+}
+
+/// The open lens asks again for what it shows: a panel changed its scale.
+pub fn refilled(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue) {
+    let text = w.get_query().to_string();
+    let qb = &mut s.qb;
+    let wants = with_env(cat, &qb.places, |env| qb.lenses.refill(&text, env));
     send(link, qb.lenses.generation, wants);
     show_lens(w, &mut s.qb, cat);
 }
@@ -1215,6 +1225,9 @@ pub fn wire(
                 Some(Chosen::Tile(k)) => {
                     crate::placeact::tile_pick(&w, &state, k, lens::Pick::Only, &redraw);
                 }
+                Some(Chosen::Value { field, value, keep }) => {
+                    crate::panelact::value(&w, &state, field, &value, keep, &redraw);
+                }
                 None => {}
             }
         });
@@ -1477,37 +1490,6 @@ pub fn picked_folder(
     write(w, state, q, caret);
 }
 
-/// The calendar's two months: the one `back` months before today's, and the
-/// one before that, in the language of the window.
-fn show_calendar(w: &MainWindow, back: i64, cat: &Catalogue) {
-    use scour_ui::calendar;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    let (today, y, m) = calendar::today(now);
-    let months: Vec<crate::CalMonth> = [-1 - back, -back]
-        .into_iter()
-        .map(|delta| {
-            let (y, m) = calendar::shift(y, m, delta);
-            let days: Vec<crate::CalDay> = calendar::month(y, m)
-                .into_iter()
-                .map(|d| crate::CalDay {
-                    n: d.n as i32,
-                    label: d.day.to_string().into(),
-                    here: d.here,
-                    today: d.n == today,
-                    future: d.n > today,
-                })
-                .collect();
-            crate::CalMonth {
-                title: format!("{} {y}", cat.get(calendar::MONTHS[m as usize - 1])).into(),
-                days: ModelRc::new(VecModel::from(days)),
-            }
-        })
-        .collect();
-    w.set_cal_months(ModelRc::new(VecModel::from(months)));
-}
-
 fn wire_v2(
     window: &MainWindow,
     state: &Rc<RefCell<State>>,
@@ -1515,55 +1497,6 @@ fn wire_v2(
     cat: &Rc<RefCell<Rc<Catalogue>>>,
     redraw: impl Fn(Lensing) + Clone + 'static,
 ) {
-    {
-        let (weak, state, cat) = (window.as_weak(), Rc::clone(state), Rc::clone(cat));
-        window.on_cal_opened(move || {
-            let Some(w) = weak.upgrade() else { return };
-            state.borrow_mut().qb.cal_back = 0;
-            show_calendar(&w, 0, &cat.borrow());
-        });
-    }
-    {
-        let (weak, state, cat) = (window.as_weak(), Rc::clone(state), Rc::clone(cat));
-        window.on_cal_shift(move |by| {
-            let Some(w) = weak.upgrade() else { return };
-            // Back into the past only: the newest month shown is today's.
-            let back = (state.borrow().qb.cal_back - i64::from(by)).max(0);
-            state.borrow_mut().qb.cal_back = back;
-            show_calendar(&w, back, &cat.borrow());
-        });
-    }
-    {
-        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
-        window.on_lens_cal_range(move |a, b| {
-            let Some(w) = weak.upgrade() else { return };
-            let text = w.get_query().to_string();
-            let edit = state.borrow().qb.lenses.open.as_ref().map(|o| {
-                let term = scour_ui::calendar::range_term(
-                    o.term.field.unwrap_or("dm"),
-                    o.term.not,
-                    i64::from(a),
-                    i64::from(b),
-                );
-                (o.a, o.b, term)
-            });
-            let Some((la, lb, term)) = edit else { return };
-            if lb > text.len() {
-                return;
-            }
-            let tail = if !text[lb..].starts_with(char::is_whitespace) {
-                " "
-            } else {
-                ""
-            };
-            let q = format!("{}{term}{tail}{}", &text[..la], &text[lb..]);
-            let caret = la + term.len() + tail.len();
-            state.borrow_mut().qb.lenses.close();
-            w.set_lens_open(false);
-            write(&w, &state, q, caret);
-            redraw(Lensing::Keep);
-        });
-    }
     {
         let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
         window.on_lens_field(move |name| {
@@ -1599,35 +1532,7 @@ fn wire_v2(
             }
         });
     }
-    {
-        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
-        window.on_lens_spark_range(move |a, b| {
-            let Some(w) = weak.upgrade() else { return };
-            let text = w.get_query().to_string();
-            let edit = {
-                let st = state.borrow();
-                let Some(o) = st.qb.lenses.open.as_ref() else {
-                    return;
-                };
-                st.qb
-                    .lenses
-                    .spark_range(a.max(0) as usize, b.max(0) as usize)
-                    .map(|term| (o.a, o.b, term))
-            };
-            let Some((la, lb, term)) = edit else { return };
-            let tail = if !text[lb..].starts_with(char::is_whitespace) {
-                " "
-            } else {
-                ""
-            };
-            let q = format!("{}{term}{tail}{}", &text[..la], &text[lb..]);
-            let caret = la + term.len() + tail.len();
-            state.borrow_mut().qb.lenses.close();
-            w.set_lens_open(false);
-            write(&w, &state, q, caret);
-            redraw(Lensing::Keep);
-        });
-    }
+    crate::panelact::wire(window, state, link, cat, redraw.clone());
     crate::placeact::wire(window, state, link, cat, redraw.clone());
     {
         let (weak, state, link, cat) = (
