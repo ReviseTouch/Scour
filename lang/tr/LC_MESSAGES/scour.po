@@ -3100,3 +3100,9 @@ msgstr "{date} itibarıyla"
 
 msgid "until {date}"
 msgstr "{date} tarihine kadar"
+
+msgid "in the time panel: ← → move the newer end, Shift the older"
+msgstr "zaman panelinde: ← → yeni ucu, Shift eski ucu oynatır"
+
+msgid "in the type panel: Tab goes between kinds and extensions"
+msgstr "tür panelinde: Tab türlerle uzantılar arasında geçer"

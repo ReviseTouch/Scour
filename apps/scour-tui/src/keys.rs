@@ -29,6 +29,14 @@ pub const MAP: &[(&str, &str)] = &[
     ("Tab", "the rail, and back"),
     ("Ctrl+P · Ctrl+F", "folder explorer · filter & fuzzy lens"),
     ("!", "Exclude this term"),
+    (
+        "← →",
+        "in the time panel: ← → move the newer end, Shift the older",
+    ),
+    (
+        "Tab",
+        "in the type panel: Tab goes between kinds and extensions",
+    ),
     ("Ctrl+G", "search inside matching files (grep)"),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
