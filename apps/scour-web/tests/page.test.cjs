@@ -865,3 +865,231 @@ test('no top-level function of the page is declared twice', () => {
   const twice = [...seen].filter(([, n]) => n > 1).map(([name]) => name);
   assert.deepEqual(twice, []);
 });
+
+// The place lens's model: `scour_ui::lens` (the place group) and
+// `scour_ui::disks` (tiles, strip) in the page's words. Each case below is a
+// case of `lens/group_tests.rs` or `disks/tiles_tests.rs`, with the same
+// inputs and the same answers, so the two cannot drift apart.
+const J = (x) => JSON.parse(JSON.stringify(x));
+const PLACE_HOME = '/home/hasan';
+function placeModel() {
+  const c = context();
+  vm.runInContext(section('  const fold = ', '\n  const field = '), c);
+  vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
+  vm.runInContext(section('  /* ---------------- the place model', '\n  /* ---------------- the '), c);
+  return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeRuns, placeRunOf,
+    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, STRIP_FLOOR, DISK_KINDS })`, c);
+}
+
+test('the place group: a disk in, a second beside it, one out, none left (lens/group_tests.rs)', () => {
+  const M = placeModel();
+  const pt = (q, root, pick) => J(M.placeToggle(q, PLACE_HOME, root, pick));
+  const also = (q, root) => pt(q, root, 'also')[0];
+  const only = (q, root) => pt(q, root, 'only')[0];
+  // the_first_disk_is_one_term
+  assert.deepEqual(pt('rapor', '/mnt/depo', 'only'), ['rapor under:/mnt/depo', 21]);
+  assert.equal(also('', '/mnt/depo'), 'under:/mnt/depo');
+  assert.equal(also('rapor ', '/'), 'rapor under:/');
+  // an_empty_place_term_is_where_the_disk_goes
+  assert.deepEqual(pt('rapor under: ext:pdf', '/mnt/depo', 'also'), ['rapor under:/mnt/depo ext:pdf', 21]);
+  assert.equal(only('rapor under: ext:pdf', '/mnt/depo'), 'rapor under:/mnt/depo ext:pdf');
+  // a_second_disk_joins_the_group_without_spaces
+  assert.deepEqual(pt('rapor under:/mnt/depo ext:pdf', '/', 'also'), ['rapor under:/mnt/depo|under:/ ext:pdf', 29]);
+  assert.equal(also('rapor under:/a|under:/b', '/c'), 'rapor under:/a|under:/b|under:/c');
+  // taking_one_out_leaves_no_bar_behind
+  const q = 'rapor under:/a|under:/b ext:pdf';
+  assert.deepEqual(pt(q, '/a', 'also'), ['rapor under:/b ext:pdf', 6]);
+  assert.equal(also(q, '/b'), 'rapor under:/a ext:pdf');
+  assert.equal(also('under:/a | under:/b rapor', '/b'), 'under:/a rapor');
+  assert.equal(also('rapor under:/a|under:/b|under:/c', '/b'), 'rapor under:/a|under:/c');
+  // the_last_one_out_takes_the_term_and_a_space
+  assert.deepEqual(pt('rapor under:/a ext:pdf', '/a/', 'also'), ['rapor ext:pdf', 6]);
+  assert.equal(only('rapor under:/a', '/a'), 'rapor');
+  assert.equal(only('under:/a/|under:/a', '/a'), '');
+  // only_leaves_one_disk
+  const three = 'rapor under:/a|under:/b|under:/c ext:pdf';
+  assert.deepEqual(pt(three, '/b', 'only'), ['rapor under:/b ext:pdf', 14]);
+  assert.equal(only(three, '/d'), 'rapor under:/d ext:pdf');
+  assert.equal(only('under:/a', '/d'), 'under:/d');
+});
+
+test('the place group quotes, writes home with a tilde and leaves the rest alone (lens/group_tests.rs)', () => {
+  const M = placeModel();
+  const also = (q, root) => M.placeToggle(q, PLACE_HOME, root, 'also')[0];
+  const only = (q, root) => M.placeToggle(q, PLACE_HOME, root, 'only')[0];
+  // a_path_with_a_space_or_a_bar_is_quoted
+  let q = also('rapor', '/mnt/depo/My Docs');
+  assert.equal(q, 'rapor under:"/mnt/depo/My Docs"');
+  q = also(q, '/srv/a|b');
+  assert.equal(q, 'rapor under:"/mnt/depo/My Docs"|under:"/srv/a|b"');
+  assert.equal(also(q, '/mnt/depo/My Docs'), 'rapor under:"/srv/a|b"');
+  // home_is_written_and_read_with_a_tilde
+  assert.equal(also('rapor', '/home/hasan/Belgeler'), 'rapor under:~/Belgeler');
+  assert.equal(also('rapor under:~/Belgeler', '/mnt/depo'), 'rapor under:~/Belgeler|under:/mnt/depo');
+  assert.equal(also('rapor under:~/Belgeler/|under:/mnt/depo', '/home/hasan/Belgeler'), 'rapor under:/mnt/depo');
+  // an_exclusion_elsewhere_is_left_alone
+  assert.equal(also('rapor !under:/mnt/depo/tmp', '/mnt/depo'), 'rapor !under:/mnt/depo/tmp under:/mnt/depo');
+  const x = '!under:/x rapor under:/a|under:/b';
+  assert.equal(also(x, '/a'), '!under:/x rapor under:/b');
+  assert.equal(only(x, '/b'), '!under:/x rapor under:/b');
+  assert.equal(also('rapor !under:/a', '/a'), 'rapor !under:/a under:/a');
+  // a_second_run_is_not_the_group
+  const two = 'under:/a|under:/b rapor under:/c';
+  assert.equal(also(two, '/c'), 'under:/a|under:/b|under:/c rapor under:/c');
+  assert.equal(also(two, '/a'), 'under:/b rapor under:/c');
+});
+
+test('runs, a member taken out, and the scope read from the text (lens/group_tests.rs)', () => {
+  const M = placeModel();
+  // removing_a_member_keeps_the_rest_of_its_run
+  const q = 'rapor|fatura ext:pdf';
+  const ts = M.placeTerms(q);
+  assert.deepEqual(J(M.placeRemove(q, ts[1])), ['rapor ext:pdf', 5]);
+  assert.deepEqual(J(M.placeRemove(q, ts[0])), ['fatura ext:pdf', 0]);
+  assert.deepEqual(J(M.placeRemove(q, ts[2])), ['rapor|fatura', 12]);
+  // runs_join_on_a_bar_with_or_without_spaces
+  const r = 'a|b c | d e';
+  assert.deepEqual(J(M.placeRuns(r).map((x) => x.length)), [2, 2, 1]);
+  assert.equal(M.placeRunOf(r, M.placeTerms(r)[3]).length, 2);
+  // the_scope_is_read_from_the_text
+  const s = 'rapor under:~/Belgeler/|under:"/mnt/depo/My Docs" !under:/mnt/depo/tmp under:';
+  const sc = M.placeScope(s, PLACE_HOME);
+  assert.deepEqual(J(sc.within.map((h) => h.path)), ['/home/hasan/Belgeler', '/mnt/depo/My Docs']);
+  assert.deepEqual(J(sc.outside.map((h) => h.path)), ['/mnt/depo/tmp']);
+  assert.ok(M.scopeHolds(sc, '/mnt/depo/My Docs/'));
+  assert.ok(!M.scopeHolds(sc, '/mnt/depo'));
+  const [out] = M.placeRemove(s, sc.outside[0].term);
+  assert.deepEqual(J(M.placeScope(out, PLACE_HOME).outside), []);
+  // a_negated_member_is_neither_inside_nor_outside
+  const neg = M.placeScope('!under:/a|under:/b', PLACE_HOME);
+  assert.equal(neg.within.length, 1);
+  assert.equal(neg.within[0].path, '/b');
+  assert.equal(neg.outside.length, 0);
+  assert.deepEqual(J(M.placeScope('rapor', PLACE_HOME)), { within: [], outside: [] });
+  assert.ok(M.scopeHolds(M.placeScope('under:/', PLACE_HOME), '/'));
+});
+
+test('a tile goes into and out of the place group whole (lens/group_tests.rs)', () => {
+  const M = placeModel();
+  const tile = (q, roots, pick) => M.tileToggle(q, PLACE_HOME, roots, pick)[0];
+  // a_tile_of_several_roots_goes_in_and_out_as_one
+  const sys = ['/home/hasan', '/usr', '/etc'];
+  const q = tile('rapor', sys, 'only');
+  assert.equal(q, 'rapor under:~|under:/usr|under:/etc');
+  assert.equal(tile(q, sys, 'only'), 'rapor');
+  assert.equal(tile(q, sys, 'also'), 'rapor');
+  const both = tile(q, ['/mnt/depo'], 'also');
+  assert.equal(both, 'rapor under:~|under:/usr|under:/etc|under:/mnt/depo');
+  assert.equal(tile(both, ['/mnt/depo'], 'only'), 'rapor under:/mnt/depo');
+  assert.equal(tile(both, sys, 'also'), 'rapor under:/mnt/depo');
+  // a_tile_half_held_is_completed_not_dropped
+  const half = 'rapor under:/usr ext:pdf';
+  assert.equal(tile(half, ['/usr', '/etc'], 'also'), 'rapor under:/usr|under:/etc ext:pdf');
+  assert.equal(tile(half, ['/usr', '/etc'], 'only'), 'rapor under:/usr|under:/etc ext:pdf');
+  assert.equal(tile(half, [], 'only'), 'rapor ext:pdf');
+});
+
+/* `tiles_tests.rs`'s fixtures: a disk as `DiskIn` borrows it. */
+const fixDisk = (id, root, kind, state) =>
+  ({ id, label: '', kind, fs: 'ext4', roots: [root], size: 1 << 30, state, live: false, walking: false });
+function fixMachine() {
+  const cachy = { ...fixDisk('uuid:cachy', '/', 'system', 'manual'), label: 'CACHY', fs: 'btrfs' };
+  const depo = { ...fixDisk('uuid:depo', '/mnt/depo', 'fixed', 'configured'), label: 'Depo', fs: 'ntfs3', live: true };
+  const stick = fixDisk('uuid:AB12', '/run/media/hasan/STICK', 'removable', 'asking');
+  const share = { ...fixDisk('net:nas', '/mnt/nas', 'network', 'chosen'), size: 0 };
+  const sources = [
+    { name: 'home', roots: ['/home/hasan'] }, { name: 'depo', roots: ['/mnt/depo'] },
+    { name: 'sistem', roots: ['/usr', '/etc', '/opt', '/var'] }, { name: 'net:nas', roots: ['/mnt/nas'] },
+  ];
+  return [[cachy, depo, stick, share], sources];
+}
+const FIX_FILES = { 'uuid:cachy': 4803676, 'uuid:depo': 1755949, 'uuid:AB12': 5, 'net:nas': 1000 };
+const fixTiles = (M, disks, sources) => J(M.diskTiles(disks, sources, (id) => FIX_FILES[id] ?? null));
+
+test('a tile says what a disk is and what is indexed on it (disks/tiles_tests.rs)', () => {
+  const M = placeModel();
+  const [disks, sources] = fixMachine();
+  // the_owners_machine
+  const t = fixTiles(M, disks, sources);
+  assert.deepEqual(t.map((x) => x.shown), ['partly', 'live', 'asking', 'polled']);
+  assert.equal(t[0].name, 'CACHY');
+  assert.equal(t[0].kind, 'system');
+  assert.equal(t[0].root, '/');
+  assert.deepEqual(t[0].roots, ['/etc', '/home/hasan', '/opt', '/usr', '/var']);
+  assert.ok(!t[0].whole);
+  assert.ok(t[1].whole);
+  assert.deepEqual(t[1].roots, ['/mnt/depo']);
+  assert.equal(t[2].name, '/run/media/hasan/STICK', 'no label, the root');
+  // a_disk_is_counted_over_the_sources_on_it
+  assert.equal(t[0].count, 'file: under:/etc|under:/home/hasan|under:/opt|under:/usr|under:/var');
+  assert.equal(t[1].count, 'file: under:/mnt/depo');
+  assert.equal(t[2].count, null, 'nothing on the stick is indexed');
+  assert.equal(t[2].files, null, 'nor counted');
+  assert.equal(t[0].files, 4803676);
+  // only_a_disk_with_nothing_indexed_may_be_indexed
+  assert.deepEqual(t.map((x) => x.index_it), [false, false, true, false], 'never the partly one');
+  const manual = J(M.diskTiles([fixDisk('uuid:m', '/', 'system', 'manual')], [], () => null))[0];
+  assert.equal(manual.shown, 'off');
+  assert.ok(manual.index_it && manual.count === null);
+  const later = J(M.diskTiles([fixDisk('uuid:l', '/run/media/u/L', 'removable', 'later')], [], () => null))[0];
+  assert.equal(later.shown, 'asking');
+  // walking_wins_over_live_and_partly
+  const walking = disks.map((d, i) => (i < 2 ? { ...d, walking: true } : d));
+  const w = fixTiles(M, walking, sources);
+  assert.equal(w[0].shown, 'walking');
+  assert.equal(w[1].shown, 'walking');
+  assert.equal(w[0].roots.length, 5, 'its tags stay');
+});
+
+test('a tile is counted over its own roots, less the disks inside them (disks/tiles_tests.rs)', () => {
+  const M = placeModel();
+  // a_disk_holding_the_root_leaves_the_disks_inside_it_out
+  const cachy = { ...fixDisk('uuid:cachy', '/', 'system', 'auto'), roots: ['/', '/home'] };
+  const disks = [cachy, fixDisk('uuid:depo', '/mnt/depo/', 'fixed', 'auto')];
+  const sources = [{ name: 'uuid:cachy', roots: ['/'] }, { name: 'uuid:depo', roots: ['/mnt/depo'] }];
+  const t = fixTiles(M, disks, sources);
+  assert.equal(t[0].count, 'file: under:/ !under:/mnt/depo', 'its own second root is not another disk');
+  assert.ok(t[0].whole);
+  assert.equal(t[1].root, '/mnt/depo');
+  // an_indexed_disk_is_counted_before_its_source_is_known
+  const x = J(M.diskTiles([fixDisk('uuid:x', '/mnt/x', 'fixed', 'chosen')], [], () => null))[0];
+  assert.equal(x.count, 'file: under:/mnt/x');
+  assert.equal(x.shown, 'polled');
+  const y = J(M.diskTiles([fixDisk('uuid:y', '/run/media/u/MY STICK', 'removable', 'chosen')], [], () => null))[0];
+  assert.equal(y.count, 'file: under:"/run/media/u/MY STICK"');
+  // every_kind_is_known_and_a_strange_one_is_fixed
+  for (const k of M.DISK_KINDS) {
+    assert.equal(M.diskTiles([fixDisk('i', '/x', k, 'auto')], [], () => null)[0].kind, k);
+  }
+  assert.equal(M.diskTiles([fixDisk('i', '/x', 'tape', 'auto')], [], () => null)[0].kind, 'fixed');
+  // a_path_is_on_the_disk_with_the_longest_root_above_it
+  const [machine] = fixMachine();
+  assert.equal(M.diskOf('/mnt/depo/x', machine), 'uuid:depo');
+  assert.equal(M.diskOf('/mnt/depot', machine), 'uuid:cachy');
+  assert.equal(M.diskOf('/mnt/depo', machine), 'uuid:depo');
+  assert.equal(M.diskOf('relative', machine), null);
+});
+
+test('the strip shares by files with a floor, and evenly before a count (disks/tiles_tests.rs)', () => {
+  const M = placeModel();
+  const [disks, sources] = fixMachine();
+  // the_strip_shares_by_files_with_a_floor
+  const s = J(M.diskStrip(M.diskTiles(disks, sources, (id) => FIX_FILES[id] ?? null)));
+  assert.deepEqual(s.map((x) => x.at), [0, 1, 3], 'the stick is not on the strip');
+  const sum = s.reduce((n, x) => n + x.share, 0);
+  assert.ok(Math.abs(sum - 1) < 1e-9, String(sum));
+  assert.equal(s[2].share, M.STRIP_FLOOR, 'a thousand files still show');
+  const cachy = 4803676 / (4803676 + 1755949) * (1 - M.STRIP_FLOOR);
+  assert.ok(Math.abs(s[0].share - cachy) < 1e-9);
+  // an_uncounted_strip_is_even
+  const even = J(M.diskStrip(M.diskTiles(disks, sources, () => null)));
+  assert.ok(even.every((x) => Math.abs(x.share - 1 / 3) < 1e-9));
+  assert.deepEqual(J(M.diskStrip([])), []);
+  // many_small_disks_all_reach_the_floor
+  const ten = 'abcdefghij'.split('').map((id) => fixDisk(id, '/x', 'fixed', 'auto'));
+  const many = J(M.diskStrip(M.diskTiles(ten, [], (id) => (id === 'a' ? 1000000 : 1))));
+  assert.ok(many.slice(1).every((x) => x.share === M.STRIP_FLOOR));
+  assert.ok(Math.abs(many[0].share - (1 - 9 * M.STRIP_FLOOR)) < 1e-9);
+});
+
