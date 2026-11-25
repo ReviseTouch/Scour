@@ -717,22 +717,9 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     }
     if app.panel != Panel::None {
         let area = ratatui::layout::Rect::new(0, 0, width, height);
-        let lines = app.panel_lines();
-        let box_area = crate::draw::panel_rect(area, lines);
-        let inside = col >= box_area.x
-            && col < box_area.x + box_area.width
-            && row >= box_area.y
-            && row < box_area.y + box_area.height;
-        if !inside || row < box_area.y + 2 {
-            return Spot::Nothing;
-        }
-        let room = box_area.height.saturating_sub(3) as usize;
-        let from = app.panel_at.saturating_sub(room.saturating_sub(1));
-        let at = from + (row - (box_area.y + 2)) as usize;
-        return if at < lines {
-            Spot::Panel(at)
-        } else {
-            Spot::Nothing
+        return match crate::draw::panel_line_at(app, area, col, row) {
+            Some(at) => Spot::Panel(at),
+            None => Spot::Nothing,
         };
     }
 

@@ -24,6 +24,8 @@ pub struct V2 {
     pub place_dir: String,
     pub tree_dirs: Vec<String>,
     pub lens_items: Vec<(String, String, String, Option<String>)>,
+    /// A heading over each item, empty for none: the launcher's groups.
+    pub lens_heads: Vec<String>,
 }
 
 fn home() -> String {
@@ -80,6 +82,7 @@ impl App {
     }
 
     pub fn rebuild_lens(&mut self) {
+        self.v2.lens_heads.clear();
         let mut out = Vec::new();
         if self.v2.place_mode {
             let cur = self.v2.place_dir.clone();
@@ -147,17 +150,58 @@ impl App {
                 }
             }
             _ => {
-                for f in lens::LAUNCH {
+                let typed = match &t {
+                    Some(t) if lens::lens_of(&self.query, t) == Some(Lens::Launch) => {
+                        self.query[t.start..t.end].to_string()
+                    }
+                    _ => String::new(),
+                };
+                let mut group = None;
+                for s in lens::launch(&self.query, &typed, |m| self.say(m).into_owned()) {
+                    let head = if group == Some(s.group) {
+                        String::new()
+                    } else {
+                        self.say(s.group.heading()).into_owned()
+                    };
+                    group = Some(s.group);
+                    self.v2.lens_heads.push(head);
+                    let held = if s.held {
+                        format!("  · {}", self.say("in the query"))
+                    } else {
+                        String::new()
+                    };
                     out.push((
-                        format!("{} ({}:)", self.say(f.label), f.field),
-                        self.say(f.about).into_owned(),
-                        format!("{}:", f.field),
+                        format!("{} ({}){held}", self.say(&s.choice.label), s.choice.term),
+                        self.say(&s.choice.hint).into_owned(),
+                        s.choice.term,
                         None,
                     ));
                 }
             }
         }
         self.v2.lens_items = out;
+    }
+
+    /// A launcher line whose filter the query already holds: the caret goes to
+    /// the end of that term, and a `:` being typed goes. False for any other.
+    fn into_held(&mut self, term: &str) -> bool {
+        let Some(f) = lens::LAUNCH
+            .iter()
+            .find(|f| term.strip_suffix(':') == Some(f.field))
+        else {
+            return false;
+        };
+        let Some(there) = lens::held(&self.query, f.field) else {
+            return false;
+        };
+        let c = self.caret.min(self.query.len());
+        let (q, caret) = lens::term_at(&self.query, c)
+            .filter(|t| lens::lens_of(&self.query, t) == Some(Lens::Launch))
+            .and_then(|t| lens::into_held(&self.query, &t, f.field))
+            .unwrap_or_else(|| (self.query.clone(), there.end));
+        self.query = q;
+        self.caret = caret;
+        true
     }
 
     pub fn lens_press(&mut self, drill: bool) -> Want {
@@ -186,6 +230,10 @@ impl App {
                 return self.typed();
             }
             return Want::Nothing;
+        }
+        if !self.v2.place_mode && self.into_held(&term) {
+            self.rebuild_lens();
+            return self.typed();
         }
         let c = self.caret.min(self.query.len());
         if !self.v2.place_mode
@@ -241,12 +289,17 @@ impl App {
             .v2
             .lens_items
             .iter()
-            .map(|(lbl, key, _, _)| PanelLine {
-                text: lbl.clone(),
-                key: key.clone(),
-                dimmed: false,
-                careful: lbl.starts_with('!'),
-                rule: false,
+            .enumerate()
+            .map(|(at, (lbl, key, _, _))| {
+                let head = self.v2.lens_heads.get(at).cloned().unwrap_or_default();
+                PanelLine {
+                    text: lbl.clone(),
+                    key: key.clone(),
+                    dimmed: false,
+                    careful: lbl.starts_with('!'),
+                    rule: !head.is_empty(),
+                    head,
+                }
             })
             .collect();
         (title, lines)
@@ -441,6 +494,38 @@ mod tests {
 
         let _ = crate::keys::press(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.v2.grep_open);
+    }
+
+    #[test]
+    fn the_launcher_says_its_groups_and_goes_into_a_held_filter() {
+        let mut app = App {
+            query: "rapor !ext:pdf :".into(),
+            caret: 16,
+            ..Default::default()
+        };
+        app.open_context_lens();
+        let (_, lines) = app.lens_panel_lines();
+        let heads: Vec<&str> = lines.iter().map(|l| l.head.as_str()).collect();
+        assert_eq!(heads, ["Narrow", "", "", "", "", "How it searches", ""]);
+        assert!(
+            lines[3].text.ends_with("· in the query"),
+            "{}",
+            lines[3].text
+        );
+        assert!(!lines[0].text.contains("in the query"));
+
+        // A press lands on the line drawn there, not on the heading above it.
+        let area = ratatui::layout::Rect::new(0, 0, 100, 40);
+        let top = crate::draw::panel_rect(area, lines.len() + 2).y + 2;
+        assert_eq!(crate::draw::panel_line_at(&app, area, 50, top), None);
+        assert_eq!(crate::draw::panel_line_at(&app, area, 50, top + 1), Some(0));
+        assert_eq!(crate::draw::panel_line_at(&app, area, 50, top + 6), None);
+        assert_eq!(crate::draw::panel_line_at(&app, area, 50, top + 7), Some(5));
+
+        app.panel_at = 3;
+        app.lens_press(false);
+        assert_eq!(app.query, "rapor !ext:pdf");
+        assert_eq!(app.caret, 14);
     }
 
     #[test]

@@ -17,6 +17,8 @@ pub struct PanelLine {
     pub dimmed: bool,
     pub careful: bool,
     pub rule: bool,
+    /// Said on the rule's row in place of the rule: a group's heading.
+    pub head: String,
 }
 
 impl From<(String, bool)> for PanelLine {
@@ -27,6 +29,7 @@ impl From<(String, bool)> for PanelLine {
             dimmed,
             careful: false,
             rule: false,
+            head: String::new(),
         }
     }
 }
@@ -120,6 +123,7 @@ pub(super) fn panel_content(
                         dimmed,
                         careful: false,
                         rule,
+                        head: String::new(),
                     })
                     .collect(),
             )
@@ -148,6 +152,7 @@ pub(super) fn panel_content(
                         dimmed: false,
                         careful: false,
                         rule: false,
+                        head: String::new(),
                     },
                     PanelLine {
                         text: app.say("Remove").into_owned(),
@@ -155,6 +160,7 @@ pub(super) fn panel_content(
                         dimmed: false,
                         careful: true,
                         rule: false,
+                        head: String::new(),
                     },
                 ];
                 let below = if app.key_note.is_empty() {
@@ -212,6 +218,7 @@ pub(super) fn panel_content(
                     dimmed: m.heavy,
                     careful: m.careful,
                     rule: m.rule,
+                    head: String::new(),
                 })
                 .collect(),
         ),
@@ -229,6 +236,7 @@ pub(super) fn panel_content(
                         dimmed: !on,
                         careful: false,
                         rule: false,
+                        head: String::new(),
                     }
                 })
                 .chain(std::iter::once(PanelLine {
@@ -237,6 +245,7 @@ pub(super) fn panel_content(
                     dimmed: false,
                     careful: false,
                     rule: true,
+                    head: String::new(),
                 }))
                 .collect(),
         ),
@@ -271,6 +280,7 @@ pub(super) fn panel_content(
                     dimmed: false,
                     careful: false,
                     rule: false,
+                    head: String::new(),
                 },
                 (app.say("Cancel").into_owned(), false).into(),
                 PanelLine {
@@ -279,6 +289,7 @@ pub(super) fn panel_content(
                     dimmed: false,
                     careful: true,
                     rule: false,
+                    head: String::new(),
                 },
             ],
         ),
@@ -293,6 +304,7 @@ pub(super) fn panel_content(
                     dimmed: false,
                     careful: false,
                     rule: at == 3,
+                    head: String::new(),
                 })
                 .collect(),
         ),
@@ -309,6 +321,7 @@ pub(super) fn panel_content(
                         dimmed: false,
                         careful: false,
                         rule: at == 2 || (folders == 0 && at == 2),
+                        head: String::new(),
                     })
                     .collect(),
             )
@@ -324,6 +337,7 @@ pub(super) fn panel_content(
                     dimmed: false,
                     careful: false,
                     rule: false,
+                    head: String::new(),
                 })
                 .chain([(String::new(), true).into()])
                 .chain(wrapped(
@@ -362,6 +376,42 @@ pub(super) fn panel_content(
     })
 }
 
+/// Where a panel's box is, the first line shown and how many fit. The rules
+/// take rows too: sized by the item count alone the box comes up short and
+/// the last items fall off with no sign there were more. Only what fits is
+/// shown, scrolled to keep the cursor on it: the skip list is long.
+fn panel_frame(app: &App, area: Rect, lines: &[PanelLine]) -> (Rect, usize, usize) {
+    let rules = lines.iter().filter(|l| l.rule).count();
+    let box_area = panel_rect(area, lines.len() + rules);
+    let room = (box_area.height.saturating_sub(3) as usize).saturating_sub(rules);
+    let from = app.panel_at.saturating_sub(room.saturating_sub(1));
+    (box_area, from, room)
+}
+
+/// The line of the open panel drawn at this cell, if it can be pressed: the
+/// drawing's own arithmetic, so a rule or a heading answers to nothing.
+pub fn panel_line_at(app: &App, area: Rect, col: u16, row: u16) -> Option<usize> {
+    let wrap = panel_width(area).saturating_sub(6) as usize;
+    let (_, lines) = panel_content(app, wrap)?;
+    let (box_area, from, room) = panel_frame(app, area, &lines);
+    let inside = col >= box_area.x
+        && col < box_area.x + box_area.width
+        && row >= box_area.y
+        && row < box_area.y + box_area.height;
+    if !inside {
+        return None;
+    }
+    let mut y = box_area.y + 2;
+    for (at, line) in lines.iter().enumerate().skip(from).take(room) {
+        y += u16::from(line.rule);
+        if row == y {
+            return (at < app.panel_lines()).then_some(at);
+        }
+        y += 1;
+    }
+    None
+}
+
 /// Whatever panel is open, over the middle of the screen. One drawing for all
 /// of them: a title, a list, and a cursor on one line of it.
 pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -375,14 +425,8 @@ pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     };
 
-    // The rules take rows too: sized by the item count alone the box comes up
-    // short and the last items fall off with no sign there were more.
-    let rules = lines.iter().filter(|l| l.rule).count();
-    let box_area = panel_rect(area, lines.len() + rules);
+    let (box_area, from, room) = panel_frame(app, area, &lines);
     f.render_widget(Clear, box_area);
-    // Only what fits, scrolled to keep the cursor on it: the skip list is long.
-    let room = (box_area.height.saturating_sub(3) as usize).saturating_sub(rules);
-    let from = app.panel_at.saturating_sub(room.saturating_sub(1));
     let mut drawn = vec![Line::from(Span::styled(
         format!(" {title}"),
         Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
@@ -402,7 +446,12 @@ pub(super) fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         };
         // A rule where the group changes, not counted as a line: a separator
         // the cursor can land on is a press that does nothing.
-        if line.rule {
+        if line.rule && !line.head.is_empty() {
+            drawn.push(Line::from(Span::styled(
+                format!("   {}", line.head),
+                Style::new().fg(theme.ink_3()).add_modifier(Modifier::BOLD),
+            )));
+        } else if line.rule {
             drawn.push(Line::from(Span::styled(
                 format!(
                     "   {}",
