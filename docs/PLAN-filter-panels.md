@@ -6,8 +6,39 @@ also https://claude.ai/artifact/Soegr5rVfVPh22fej544M6). The mock is the
 picture; this file is the scope. Where they disagree, this file wins — the
 mock's numbers are invented and three of its details turned out wrong (§7).
 
-Nothing here is started. Each phase is one branch-sized piece that ships on
-its own; stop after any of them and the product is whole.
+## Where it stands (2026-11-25)
+
+Carried out the same day on `feat/filter-panels`; the record is
+`git log main..feat/filter-panels`. `scripts/check` passes whole: format,
+lint, every test, 34 crates on three more targets.
+
+| phase | done | left, and why |
+|---|---|---|
+| A launcher | groups, pictures, shortcuts, "in the query", in three faces | — |
+| B place panel | strip, tiles with state and count, Add / Exclude, "Searching in:", in three faces; `seen` filled for config sources; `/` browsable | a disk being asked about was drawn from fixtures only: nobody plugged a stick in |
+| C scope chip | page and window, fixed width; dots only under 700 px on the page | the terminal keeps its status line |
+| D time, type, size | presets with counts, four scales, Between / Before / After, kind and extension in one panel, in three faces | no size histogram (no size facet) |
+| E capsules | one Location capsule for a group, labelled inner chips, `+N`, one red capsule for exclusions, the pill's effect, the mark on a capsule that emptied the list, a frame round an OR run | the `|` stays a `|` inside its frame; the terminal has no pill |
+| G | — | none started; each is its own question (§7) |
+
+**Fixed on the way, in the language and the service:** a closed date range
+lost its last day; a negated range and `!empty:` found nothing; `tree /` and
+`usage /` answered nothing; the page had two functions named `spans`, the
+later replacing the query bar's.
+
+**Not verified by anyone:** Alt+click through a real compositor; hover with a
+real pointer in the window; touch on the page; a stick plugged in.
+
+**Known, left:** `qwire.rs` is 1,608 lines; a spaceless `|` run longer than a
+line is cut inside a capsule by the window's wrapping; the calendar's days
+are UTC days and nothing on screen says so; "not empty" reads `!Boş` in the
+size panel's sentence. Found and not touched: `!<a|b>` is not read as a
+group, and a range inside an OR (`x|size:1mb..2mb`) is read as text.
+
+---
+
+The plan as it was written, for the record. Each phase is one branch-sized
+piece that ships on its own.
 
 ## 0. What is already true
 
@@ -336,4 +367,4 @@ this section and §3–§6 disagree, this section wins.
 
 The terminal's size rail offers `size:0`, which matches everything. The
 window's `rescue_answer` checks no generation, so a late answer can land in a
-newer list. `SourceInfo.caps` says `WATCH` for a source with `watch = false`.
+newer list.

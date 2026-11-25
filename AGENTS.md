@@ -159,7 +159,7 @@ term a choice writes in its place — never what any term means).
 
 The query bar is the same in both: filters drawn as capsules over the text
 itself, up to three lines, the lens under the term with each choice's count
-(`count`, `facets`, `usage`, `volumes`), `:` or Ctrl+Space for the filters a
+(`count`, `facets`, `usage`, `volumes`, `sources`), `:` or Ctrl+Space for the filters a
 query can take, and, when nothing is found, each filter left out on its own.
 The window draws its own lines (`scour_ui::wrap`) over an invisible one-line
 `TextInput`; the page wraps a text area and colours a layer under it.
