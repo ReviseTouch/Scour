@@ -6,7 +6,9 @@
 //! Which lens a term opens is a decision about the window, not a reading of
 //! the query: the service still says what every term means.
 
+mod group;
 mod launch;
+pub use group::*;
 pub use launch::*;
 
 /// A term of the query, by byte offsets into it.

@@ -66,6 +66,16 @@ pub fn full_form(home: &str, p: &str) -> String {
     }
 }
 
+/// A path without its trailing `/`; the root stays `/`.
+pub fn untrailed(p: &str) -> &str {
+    let t = p.trim_end_matches('/');
+    if t.is_empty() && p.starts_with('/') {
+        "/"
+    } else {
+        t
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
