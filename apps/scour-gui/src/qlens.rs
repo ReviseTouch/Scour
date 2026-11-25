@@ -6,8 +6,11 @@ use std::collections::HashMap;
 
 use scour_core::FacetBy;
 use scour_proto::{Disk, Request, Response};
+use scour_ui::disks::Tile;
 use scour_ui::lens::{self, Lens};
-use scour_ui::path::{full_form, home_form};
+use scour_ui::path::home_form;
+
+use crate::qplace;
 
 /// Counted up to this and no further: a choice that keeps more is "100,000+".
 const COUNT_CAP: u32 = 100_000;
@@ -28,8 +31,8 @@ pub struct Item {
     pub group: String,
     pub wait: bool,
     pub launch: bool,
-    /// A disk not indexed: choosing it asks to index it.
-    pub disk: Option<String>,
+    /// A disk tile of the place lens, by its index in `Open::tiles`.
+    pub tile: Option<usize>,
     /// A launcher line: its field, its capsule's picture, the letters that
     /// pick it, and whether the query already holds one.
     pub field: &'static str,
@@ -52,6 +55,10 @@ pub struct Open {
     pub usage: Option<scour_core::UsageResponse>,
     pub tree: Option<Vec<scour_core::TreeNode>>,
     pub disks: Option<Vec<Disk>>,
+    pub sources: Option<Vec<scour_core::SourceInfo>>,
+    /// The place lens's disks, once `volumes` and `sources` have answered.
+    pub tiles: Vec<Tile>,
+    pub place: qplace::View,
 }
 
 /// What the window knows that a lens shows: words and places.
@@ -60,8 +67,6 @@ pub struct Env<'a> {
     pub kind_name: &'a dyn Fn(&str) -> String,
     pub home: &'a str,
     pub places: &'a [(String, String)],
-    pub grouped: &'a dyn Fn(u64) -> String,
-    pub bytes: &'a dyn Fn(u64) -> String,
 }
 
 /// What choosing did.
@@ -72,8 +77,8 @@ pub enum Chosen {
         caret: usize,
         keep: bool,
     },
-    /// Index this disk.
-    Disk(String),
+    /// A disk tile, by its index in `Open::tiles`: Enter on it is a plain click.
+    Tile(usize),
     /// What the files hold: not a filter in the query but the line under the
     /// field. The query is this — the `:` that asked taken out — the caret here.
     Inside { query: String, caret: usize },
@@ -84,6 +89,18 @@ pub struct Lenses {
     pub open: Option<Open>,
     pub generation: u64,
     seen: HashMap<String, Response>,
+    /// What this generation has asked and not yet heard: an answer refills
+    /// the lens, which must not ask a second time for what is on its way.
+    asked: std::collections::HashSet<String>,
+    /// The folder the place lens shows while the query is still this text:
+    /// set by a click that wrote the query, so the list stays where it was.
+    pub browse: Option<(String, String)>,
+    /// The keys have moved the place lens's line since anything was typed:
+    /// it stays where they put it. Until then it rests on the line Enter
+    /// would most likely mean.
+    stepped: bool,
+    /// The next opening is the lens's own press rewriting the query, not typing.
+    pub hold: bool,
 }
 
 fn reads(q: &str) -> bool {
@@ -94,6 +111,7 @@ impl Lenses {
     pub fn close(&mut self) {
         self.open = None;
         self.generation += 1;
+        self.asked.clear();
     }
 
     /// Open, follow or close the lens for where the caret is. `asked` is a
@@ -114,7 +132,18 @@ impl Lenses {
             self.close();
             return Vec::new();
         }
+        // The place lens keeps the line the keys chose across the terms its
+        // own presses write; typing puts it back on its resting line.
+        let typed = !std::mem::take(&mut self.hold)
+            && self
+                .open
+                .as_ref()
+                .is_none_or(|o| o.raw != q[t.start..t.end]);
+        if typed || self.open.is_none() {
+            self.stepped = false;
+        }
         let sel = match &self.open {
+            Some(o) if kind == Lens::Place && o.kind == kind && self.stepped => o.sel,
             Some(o) if keep && o.kind == kind => o.sel,
             _ => 0,
         };
@@ -135,8 +164,12 @@ impl Lenses {
             usage: None,
             tree: None,
             disks: None,
+            sources: None,
+            tiles: Vec::new(),
+            place: qplace::View::default(),
         });
         self.generation += 1;
+        self.asked.clear();
         self.fill(q, env)
     }
 
@@ -177,53 +210,15 @@ impl Lenses {
                 }
             }
             Lens::Place => {
-                let (base, _) = lens::place_parts(&o.term.value);
-                let active = if base.is_empty() {
-                    if env.home.is_empty() {
-                        "/".to_string()
-                    } else {
-                        env.home.to_string()
-                    }
-                } else {
-                    full_form(env.home, &base)
-                };
-                match self.seen.get("volumes") {
-                    Some(Response::Volumes { disks, .. }) => o.disks = Some(disks.clone()),
-                    _ => want.push((0, Request::Volumes {})),
-                }
-                let scoped = if reads(&rest) {
-                    String::new()
-                } else {
-                    rest.clone()
-                };
-                let ukey = format!("usage {active} {scoped}");
-                match self.seen.get(&ukey) {
-                    Some(Response::Usage(u)) => o.usage = Some(u.clone()),
-                    _ => want.push((
-                        1,
-                        Request::Usage {
-                            path: active.clone(),
-                            top: 60,
-                            query: scoped,
-                        },
-                    )),
-                }
-                let tkey = format!("tree {active}");
-                match self.seen.get(&tkey) {
-                    Some(Response::Tree { root, .. }) => o.tree = Some(root.nodes.clone()),
-                    _ => want.push((
-                        2,
-                        Request::Tree {
-                            path: active,
-                            depth: 1,
-                            limit: 120,
-                        },
-                    )),
-                }
+                let pinned = qplace::pinned(&self.browse, q);
+                want = qplace::fill(o, &self.seen, q, pinned, env);
             }
             _ => {}
         }
         o.items = items(o, q, env);
+        if o.kind == Lens::Place && !self.stepped {
+            o.sel = qplace::resting(o);
+        }
         if !reads(&rest) {
             for (i, it) in o.items.iter_mut().enumerate() {
                 if !it.count {
@@ -252,6 +247,7 @@ impl Lenses {
                 }
             }
         }
+        want.retain(|(slot, r)| self.asked.insert(format!("{slot} {r:?}")));
         want
     }
 
@@ -271,6 +267,14 @@ impl Lenses {
             return Vec::new();
         };
         let rest = Self::rest(q, o);
+        if o.kind == Lens::Place {
+            let pinned = qplace::pinned(&self.browse, q);
+            let Some(key) = qplace::key(o, slot, &reply, q, pinned, env) else {
+                return Vec::new();
+            };
+            self.seen.insert(key, reply);
+            return self.fill(q, env);
+        }
         match (&reply, slot) {
             (Response::Count { .. }, n) if n >= 100 => {
                 let Some(it) = o.items.get((n - 100) as usize) else {
@@ -287,42 +291,6 @@ impl Lenses {
                 self.seen
                     .insert(format!("facets {:?} {rest}", o.kind), reply);
             }
-            (Response::Volumes { .. }, _) => {
-                self.seen.insert("volumes".into(), reply);
-            }
-            (Response::Usage(_), _) => {
-                // Keyed as `fill` looks it up, never by the path the reply
-                // spells: a key that differs would ask again forever.
-                let (base, _) = lens::place_parts(&o.term.value);
-                let active = if base.is_empty() {
-                    if env.home.is_empty() {
-                        "/".to_string()
-                    } else {
-                        env.home.to_string()
-                    }
-                } else {
-                    full_form(env.home, &base)
-                };
-                let scoped = if reads(&rest) {
-                    String::new()
-                } else {
-                    rest.clone()
-                };
-                self.seen.insert(format!("usage {active} {scoped}"), reply);
-            }
-            (Response::Tree { .. }, _) => {
-                let (base, _) = lens::place_parts(&o.term.value);
-                let active = if base.is_empty() {
-                    if env.home.is_empty() {
-                        "/".to_string()
-                    } else {
-                        env.home.to_string()
-                    }
-                } else {
-                    full_form(env.home, &base)
-                };
-                self.seen.insert(format!("tree {active}"), reply);
-            }
             _ => return Vec::new(),
         }
         self.fill(q, env)
@@ -330,6 +298,7 @@ impl Lenses {
 
     pub fn step(&mut self, by: i32) {
         let Some(o) = self.open.as_mut() else { return };
+        self.stepped = true;
         let n = o.items.len() as i32;
         if n == 0 {
             return;
@@ -352,8 +321,8 @@ impl Lenses {
         if it.wait {
             return None;
         }
-        if let Some(id) = it.disk {
-            return Some(Chosen::Disk(id));
+        if let Some(k) = it.tile {
+            return Some(Chosen::Tile(k));
         }
         // A filter the query already holds is gone into, not written twice.
         if it.launch
@@ -448,10 +417,6 @@ impl Lenses {
 
 pub fn home_path(home: &str, p: &str) -> String {
     home_form(home, p)
-}
-
-pub fn full_path(home: &str, p: &str) -> String {
-    full_form(home, p)
 }
 
 fn facet_pairs(f: &scour_core::FacetResponse) -> Vec<(String, u64)> {
@@ -594,148 +559,6 @@ fn items(o: &mut Open, q: &str, env: &Env) -> Vec<Item> {
                 })
                 .collect()
         }
-        Lens::Place => place_items(o, env),
+        Lens::Place => qplace::items(o, env),
     }
-}
-
-fn place_items(o: &mut Open, env: &Env) -> Vec<Item> {
-    let tr = env.tr;
-    let t = &o.term;
-    let (base, part) = lens::place_parts(&t.value);
-    let want = part.to_lowercase();
-    o.foot = tr("Tab goes into a folder; Enter chooses it. Backspace climbs back out.");
-    let mut out = Vec::new();
-    if base.is_empty() {
-        o.title = tr("Where");
-        for d in o.disks.iter().flatten() {
-            let root = d.volume.roots.first().cloned().unwrap_or_default();
-            let name = if d.volume.label.is_empty() {
-                root.clone()
-            } else {
-                d.volume.label.clone()
-            };
-            if !want.is_empty()
-                && !name.to_lowercase().starts_with(&want)
-                && !root.to_lowercase().contains(&want)
-            {
-                continue;
-            }
-            let group = if out.is_empty() {
-                tr("Disks")
-            } else {
-                String::new()
-            };
-            let on = matches!(
-                d.state,
-                scour_proto::DiskState::Auto
-                    | scour_proto::DiskState::Chosen
-                    | scour_proto::DiskState::Configured
-            );
-            out.push(if on {
-                Item {
-                    dir: Some(root.clone()),
-                    stays: true,
-                    group,
-                    ..it(
-                        name,
-                        &home_form(env.home, &root),
-                        lens::place(t, &home_form(env.home, &root)),
-                    )
-                }
-            } else {
-                Item {
-                    disk: Some(d.volume.id.clone()),
-                    group,
-                    ..it(name, &tr("not indexed — choose to index it"), String::new())
-                }
-            });
-        }
-        let mut first = true;
-        for (label, path) in env.places {
-            let shown = home_form(env.home, path);
-            if !want.is_empty()
-                && !label.to_lowercase().starts_with(&want)
-                && !shown.to_lowercase().contains(&want)
-            {
-                continue;
-            }
-            out.push(Item {
-                dir: Some(path.clone()),
-                stays: true,
-                group: if first { tr("Places") } else { String::new() },
-                ..it(label.clone(), &shown, lens::place(t, &shown))
-            });
-            first = false;
-        }
-        return out;
-    }
-    let u = o.usage.as_ref();
-    o.title = home_form(env.home, &full_form(env.home, &base));
-    if let Some(u) = u.filter(|u| u.child_count as usize > u.children.len()) {
-        o.title.push_str(" · ");
-        o.title.push_str(
-            &tr("the {n} heaviest of {all}")
-                .replace("{n}", &(env.grouped)(u.children.len() as u64))
-                .replace("{all}", &(env.grouped)(u64::from(u.child_count))),
-        );
-    }
-    if part.is_empty() {
-        out.push(Item {
-            n: u.map(|u| u.root.files as i64),
-            ..it(
-                tr("this folder"),
-                &u.filter(|u| u.root.bytes > 0)
-                    .map(|u| (env.bytes)(u.root.bytes))
-                    .unwrap_or_default(),
-                lens::place(t, &base),
-            )
-        });
-    }
-    let mut kids: Vec<_> = u.map(|u| u.children.clone()).unwrap_or_default();
-    kids.sort_by(|x, y| {
-        y.files
-            .cmp(&x.files)
-            .then(y.bytes.cmp(&x.bytes))
-            .then(x.path.cmp(&y.path))
-    });
-    for c in kids {
-        let name = c.path.rsplit('/').next().unwrap_or(&c.path).to_string();
-        if !want.is_empty() && !name.to_lowercase().contains(&want) {
-            continue;
-        }
-        out.push(Item {
-            n: Some(c.files as i64),
-            dir: Some(c.path.clone()),
-            stays: true,
-            ..it(
-                format!("{name}/"),
-                &if c.bytes > 0 {
-                    (env.bytes)(c.bytes)
-                } else {
-                    String::new()
-                },
-                lens::place(t, &home_form(env.home, &c.path)),
-            )
-        });
-    }
-    if u.is_some() && part.is_empty() {
-        let mut flip = lens::place_flipped(t);
-        flip.term = flip.term.replace(&t.value, &base);
-        out.push(Item {
-            group: " ".into(),
-            ..it(tr(&flip.label), &flip.hint, flip.term)
-        });
-    }
-    if u.is_none() {
-        out.push(Item {
-            wait: true,
-            ..it(tr("reading the folder…"), "", String::new())
-        });
-    } else if out.is_empty() {
-        out.push(Item {
-            wait: true,
-            ..it(tr("no folder here by that name"), "", String::new())
-        });
-    }
-    out
 }

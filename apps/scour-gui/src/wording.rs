@@ -231,6 +231,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_word_regex(t(cat, "Regex"));
     w.set_word_hex(t(cat, "Hex"));
     w.set_word_read_more(t(cat, "Read more"));
+    crate::placewire::words(w, cat);
     w.set_word_choose_folder(t(cat, "Choose folder…"));
     w.set_word_this_folder(t(cat, "this folder"));
     w.set_word_subfolders(t(cat, "Subfolders"));

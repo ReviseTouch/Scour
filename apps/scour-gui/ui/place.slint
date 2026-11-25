@@ -1,0 +1,468 @@
+// The place lens: the disks first, as a strip and tiles, then the folders,
+// then what the query searches. Every word and number is Rust's; this only
+// lays them out.
+
+import { Theme, Fonts } from "theme.slint";
+import { PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, PlaceWords } from "types.slint";
+import { DiskInk, WordButton, TileCard, DirLine } from "place-parts.slint";
+
+export component PlaceLens inherits Rectangle {
+    in property <PlaceWords> words;
+    in property <[DiskTile]> tiles;
+    in property <[StripSeg]> strip;
+    in property <[PlaceHeld]> held;
+    in property <[PlaceLeft]> places;
+    in property <[PlaceCrumb]> crumbs;
+    in property <[PlaceDir]> dirs;
+    in property <string> cur;
+    in property <string> shown;
+    in property <string> up;
+    in property <bool> direct;
+    // The line the keys are on, and where this folder's line is among them.
+    in property <int> sel;
+    in property <int> here-at;
+    // How many disks, how many files, over the tiles; the files under the
+    // strip; what the footer says with nothing chosen; the keys' hint.
+    in property <string> sum;
+    in property <string> total;
+    in property <string> none;
+    in property <string> foot;
+    in property <int> cols;
+    callback act(string, string);
+    callback tile(int, bool);
+    callback drop(int);
+    property <int> rows: Math.ceil(root.tiles.length / root.cols);
+
+    VerticalLayout {
+        HorizontalLayout {
+            height: 28px;
+            padding-left: 12px;
+            padding-right: 12px;
+            Text {
+                text: root.words.title;
+                color: Theme.ink-2;
+                font-size: 11.5px;
+                font-weight: 650;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.sum;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            height: 8px;
+            Rectangle {
+                border-radius: 4px;
+                background: Theme.line-soft;
+                clip: true;
+                for s in root.strip: Rectangle {
+                    x: parent.width * s.from;
+                    y: 0px;
+                    // A hairline between slices; the last one runs to the end.
+                    width: max(1px, parent.width * s.share - (s.from + s.share < 0.999 ? 2px : 0px));
+                    height: parent.height;
+                    background: DiskInk.of(s.kind);
+                    opacity: s.lit ? 1 : 0.3;
+                }
+            }
+        }
+        HorizontalLayout {
+            height: 20px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 8px;
+            Text {
+                text: root.words.strip;
+                color: Theme.ink-3;
+                font-size: 10.5px;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.total;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 10.5px;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 2px;
+            height: root.rows * 98px + 2px;
+            Rectangle {
+                property <length> tw: (self.width - (root.cols - 1) * 8px) / max(1, root.cols);
+                for t[i] in root.tiles: TileCard {
+                    x: Math.mod(i, root.cols) * (parent.tw + 8px);
+                    y: Math.floor(i / root.cols) * 98px;
+                    width: parent.tw;
+                    height: 90px;
+                    t: t;
+                    focused: root.sel == i;
+                    words: root.words;
+                    pick(also) => { root.tile(i, also); }
+                    act(what) => { root.act(what, t.id); }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.line; }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            // The desktop's places, and the system's own folder picker.
+            Rectangle {
+                width: 180px;
+                background: Theme.ground;
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    height: parent.height;
+                    background: Theme.line;
+                }
+                VerticalLayout {
+                    padding-top: 4px;
+                    padding-bottom: 6px;
+                    spacing: 2px;
+                    Rectangle {
+                        height: 20px;
+                        Text {
+                            x: 12px;
+                            text: root.words.places;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                        }
+                    }
+                    // Wrapped, and sized by hand: a Flickable in a layout is no
+                    // taller than what it holds, which squeezed the whole body.
+                    Rectangle {
+                        vertical-stretch: 1;
+                    Flickable {
+                        width: parent.width;
+                        height: parent.height;
+                        viewport-height: left-col.preferred-height;
+                        left-col := VerticalLayout {
+                            for pl in root.places: Rectangle {
+                                height: 26px;
+                                background: pl.at == root.sel ? Theme.selection
+                                    : pl.active ? Theme.hover : place-hit.has-hover ? Theme.hover : transparent;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 10px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: pl.label;
+                                        color: Theme.ink;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Text {
+                                        text: pl.sub;
+                                        color: Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 10.5px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                                place-hit := TouchArea {
+                                    mouse-cursor: pointer;
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                            root.act("dir", pl.target);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 6px;
+                            border-width: Theme.hair;
+                            border-color: pick-hit.has-hover ? Theme.ink-3 : Theme.line;
+                            background: pick-hit.has-hover ? Theme.hover : Theme.panel;
+                            Text {
+                                text: root.words.choose-folder;
+                                color: Theme.ink-2;
+                                font-size: 12px;
+                                font-weight: 500;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            pick-hit := TouchArea {
+                                mouse-cursor: pointer;
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        root.act("pick", root.cur);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Where the list is, this folder itself, and its own folders.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Rectangle {
+                    height: 30px;
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.line-soft;
+                    }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 3px;
+                        if root.up != "": Rectangle {
+                            width: 20px;
+                            border-radius: 4px;
+                            background: up-hit.has-hover ? Theme.hover : transparent;
+                            Text {
+                                text: "‹";
+                                color: Theme.ink-2;
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            up-hit := TouchArea {
+                                mouse-cursor: pointer;
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        root.act("dir", root.up);
+                                    }
+                                }
+                            }
+                        }
+                        Flickable {
+                            horizontal-stretch: 1;
+                            interactive: false;
+                            viewport-width: crumb-row.preferred-width;
+                            crumb-row := HorizontalLayout {
+                                spacing: 2px;
+                                alignment: start;
+                                for cr[ci] in root.crumbs: HorizontalLayout {
+                                    spacing: 2px;
+                                    if ci > 0: Text {
+                                        text: "/";
+                                        color: Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle {
+                                        width: crumb-word.preferred-width + 8px;
+                                        border-radius: 4px;
+                                        background: crumb-hit.has-hover ? Theme.hover : transparent;
+                                        crumb-word := Text {
+                                            text: cr.label;
+                                            color: ci == root.crumbs.length - 1 ? Theme.ink : Theme.ink-2;
+                                            font-family: Fonts.mono;
+                                            font-size: 11.5px;
+                                            font-weight: ci == root.crumbs.length - 1 ? 650 : 500;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        crumb-hit := TouchArea {
+                                            mouse-cursor: pointer;
+                                            pointer-event(e) => {
+                                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                    root.act("dir", cr.path);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                height: 20px;
+                                width: direct-word.preferred-width + 12px;
+                                border-radius: 5px;
+                                border-width: Theme.hair;
+                                border-color: root.direct ? Theme.cap-ring : Theme.line;
+                                background: root.direct ? Theme.cap : direct-hit.has-hover ? Theme.hover : transparent;
+                                direct-word := Text {
+                                    text: root.words.direct-only;
+                                    color: root.direct ? Theme.q-key : Theme.ink-3;
+                                    font-size: 10.5px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                direct-hit := TouchArea {
+                                    mouse-cursor: pointer;
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                            root.act("flip", root.cur);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 28px;
+                    background: root.sel == root.here-at ? Theme.selection
+                        : here-hit.has-hover ? Theme.hover : transparent;
+                    here-hit := TouchArea {
+                        mouse-cursor: pointer;
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                root.act("choose", root.cur);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 8px;
+                        spacing: 5px;
+                        Text {
+                            text: "✓ " + root.words.this-folder + " (" + root.shown + ")";
+                            color: Theme.q-key;
+                            font-family: Fonts.mono;
+                            font-size: 12px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        WordButton {
+                            label: root.words.add;
+                            pressed => { root.act("inc", root.cur); }
+                        }
+                        WordButton {
+                            label: root.words.exclude;
+                            pressed => { root.act("exc", root.cur); }
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                dir-list := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-height: dir-col.preferred-height;
+                    // The line the keys are on is scrolled into sight.
+                    property <int> at: root.sel - root.here-at - 1;
+                    changed at => {
+                        if (self.at >= 0) {
+                            if ((self.at + 1) * 26px + self.viewport-y > self.height) {
+                                self.viewport-y = self.height - (self.at + 1) * 26px;
+                            }
+                            if (self.at * 26px + self.viewport-y < 0px) {
+                                self.viewport-y = 0px - self.at * 26px;
+                            }
+                        }
+                    }
+                    dir-col := VerticalLayout {
+                        for d in root.dirs: DirLine {
+                            d: d;
+                            focused: d.at == root.sel;
+                            words: root.words;
+                            act(what, path) => { root.act(what, path); }
+                        }
+                    }
+                }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.line; }
+        // What the query's place terms hold, read from the text each time.
+        Rectangle {
+            height: 30px;
+            clip: true;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 6px;
+                Text {
+                    text: root.words.searching-in;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+                if root.held.length == 0: Text {
+                    text: root.none;
+                    color: Theme.ink-2;
+                    font-size: 11.5px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                for h[i] in root.held: Rectangle {
+                    height: 20px;
+                    width: held-word.preferred-width + 30px;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: h.not ? Theme.cap-neg-ring : Theme.cap-ring;
+                    background: h.not ? Theme.cap-neg : Theme.cap;
+                    held-word := Text {
+                        x: 7px;
+                        width: self.preferred-width;
+                        text: (h.not ? "!" : "") + h.label;
+                        color: h.not ? Theme.q-not : Theme.ink;
+                        font-family: Fonts.mono;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        x: parent.width - 19px;
+                        y: 2px;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: drop-hit.has-hover ? Theme.hover : transparent;
+                        Text {
+                            text: "×";
+                            color: drop-hit.has-hover ? Theme.ink : Theme.ink-3;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        drop-hit := TouchArea {
+                            mouse-cursor: pointer;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                    root.drop(i);
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+        HorizontalLayout {
+            height: 24px;
+            padding-left: 12px;
+            padding-right: 12px;
+            Text {
+                text: root.foot;
+                color: Theme.ink-3;
+                font-size: 11px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}

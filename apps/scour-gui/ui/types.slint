@@ -48,13 +48,14 @@ export struct Found {
     post: string,
 }
 
+// A place of the desktop in the place lens's left column. `at` is its line
+// among the lens's items, which the keys move over.
 export struct PlaceLeft {
-    group: string,
     label: string,
     sub: string,
     target: string,
-    ask-disk: bool,
     active: bool,
+    at: int,
 }
 
 export struct PlaceCrumb {
@@ -67,6 +68,61 @@ export struct PlaceDir {
     path: string,
     meta: string,
     bar: float,
+    at: int,
+}
+
+// A disk of the place lens, as `scour_ui::disks::tiles` says it. `kind` and
+// `shown` are the wire's tokens: they pick the colour, the icon and the dot.
+export struct DiskTile {
+    id: string,
+    name: string,
+    kind: string,
+    // `fs · root · size`.
+    meta: string,
+    // The source roots on a disk indexed only in part.
+    tags: [string],
+    shown: string,
+    state: string,
+    files: string,
+    choosable: bool,
+    // The query's place group holds all of it.
+    selected: bool,
+    // Drawn full: the query searches somewhere on it, or nowhere in particular.
+    lit: bool,
+    index-it: bool,
+}
+
+// One slice of the strip over the tiles: where it starts and how wide it
+// is, as shares of the strip.
+export struct StripSeg {
+    from: float,
+    share: float,
+    kind: string,
+    lit: bool,
+}
+
+// What the query's place terms hold, each removable: a folder searched in,
+// or one left out.
+export struct PlaceHeld {
+    label: string,
+    not: bool,
+}
+
+// The place lens's words, in the window's language.
+export struct PlaceWords {
+    title: string,
+    add: string,
+    exclude: string,
+    searching-in: string,
+    index-it: string,
+    not-now: string,
+    never: string,
+    new-disk: string,
+    strip: string,
+    choose-folder: string,
+    this-folder: string,
+    direct-only: string,
+    places: string,
 }
 
 export struct GrepItem {

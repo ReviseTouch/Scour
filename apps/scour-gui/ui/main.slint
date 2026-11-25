@@ -9,12 +9,13 @@ export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
+import { PlaceLens } from "place.slint";
 import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
@@ -110,6 +111,16 @@ export component MainWindow inherits Window {
     in property <string> lens-place-shown;
     in property <string> lens-place-up;
     in property <bool> lens-place-direct;
+    // The place lens's disks, its strip, what the query's place terms hold,
+    // its words, and the numbers over and under the tiles.
+    in property <[DiskTile]> lens-tiles;
+    in property <[StripSeg]> lens-strip;
+    in property <[PlaceHeld]> lens-holds;
+    in property <PlaceWords> place-words;
+    in property <int> lens-here-at;
+    in property <string> lens-sum;
+    in property <string> lens-total;
+    in property <string> lens-none;
     in property <int> lens-sel;
     in property <string> lens-title;
     // The time lens's calendar: two months, a range picked with two presses.
@@ -183,6 +194,10 @@ export component MainWindow inherits Window {
     callback lens-fuzzy();
     callback lens-spark-range(int, int);
     callback lens-place-act(string, string);
+    // A disk tile pressed, Ctrl down or not; an entry of the place lens's
+    // "Searching in" line taken out.
+    callback lens-tile(int, bool);
+    callback lens-held-drop(int);
     callback narrow-toggled();
     callback grep-toggled();
     callback grep-edited(string);
@@ -4391,10 +4406,14 @@ export component MainWindow inherits Window {
             x: clamp(field.absolute-position.x + field.pad + root.lens-x - 12px,
                 8px, root.width - self.width - 8px);
             y: field.absolute-position.y + field.top + (root.lens-line + 1) * root.q-pitch + 4px;
-            width: root.lens-kind == "place" ? min(680px, root.width - 20px)
+            // Tiles a row, as many as fit at 210 px and no more than there
+            // are; each row of them is 98 px.
+            property <int> tile-cols: max(1, min(root.lens-tiles.length, Math.floor((self.width - 16px) / 218px)));
+            property <int> tile-rows: Math.ceil(root.lens-tiles.length / self.tile-cols);
+            width: root.lens-kind == "place" ? min(720px, root.width - 20px)
                 : (root.lens-kind == "time" || root.lens-kind == "size") ? min(470px, root.width - 20px)
                 : min(430px, root.width - 20px);
-            height: root.lens-kind == "place" ? min(370px, root.height - self.y - 16px)
+            height: root.lens-kind == "place" ? min(300px + self.tile-rows * 98px, root.height - self.y - 16px)
                 : min(lens-body.preferred-height, 410px);
             background: Theme.panel-2;
             border-width: Theme.hair;
@@ -4407,320 +4426,32 @@ export component MainWindow inherits Window {
 
             TouchArea {}
 
-            if root.lens-kind == "place": VerticalLayout {
-                HorizontalLayout {
-                    vertical-stretch: 1;
-                    // Left column: Disks + Places + OS Folder Picker
-                    Rectangle {
-                        width: 215px;
-                        background: Theme.ground;
-                        Rectangle {
-                            x: parent.width - 1px;
-                            width: 1px;
-                            height: parent.height;
-                            background: Theme.line;
-                        }
-                        VerticalLayout {
-                            padding-top: 6px;
-                            padding-bottom: 6px;
-                            spacing: 2px;
-                            Flickable {
-                                vertical-stretch: 1;
-                                viewport-height: pleft-col.preferred-height;
-                                pleft-col := VerticalLayout {
-                                    for pl in root.lens-places: VerticalLayout {
-                                        if pl.group != "": Rectangle {
-                                            height: 20px;
-                                            Text {
-                                                x: 12px;
-                                                text: pl.group;
-                                                color: Theme.ink-3;
-                                                font-size: 10.5px;
-                                                font-weight: 650;
-                                                vertical-alignment: bottom;
-                                            }
-                                        }
-                                        Rectangle {
-                                            height: 26px;
-                                            background: pl.active ? Theme.selection : plhit.has-hover ? Theme.hover : transparent;
-                                            HorizontalLayout {
-                                                padding-left: 12px;
-                                                padding-right: 10px;
-                                                spacing: 6px;
-                                                Text {
-                                                    text: pl.label;
-                                                    color: Theme.ink;
-                                                    font-size: 12px;
-                                                    vertical-alignment: center;
-                                                    overflow: elide;
-                                                    horizontal-stretch: 1;
-                                                }
-                                                Text {
-                                                    text: pl.sub;
-                                                    color: pl.ask-disk ? Theme.q-key : Theme.ink-3;
-                                                    font-family: Fonts.mono;
-                                                    font-size: 10.5px;
-                                                    font-weight: pl.ask-disk ? 600 : 400;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-                                            plhit := TouchArea {
-                                                mouse-cursor: pointer;
-                                                pointer-event(e) => {
-                                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                        root.lens-place-act(pl.ask-disk ? "disk" : "dir", pl.target);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                Rectangle {
-                                    height: 28px;
-                                    border-radius: 6px;
-                                    border-width: Theme.hair;
-                                    border-color: pickhit.has-hover ? Theme.ink-3 : Theme.line;
-                                    background: pickhit.has-hover ? Theme.hover : Theme.panel;
-                                    Text {
-                                        text: "📁 " + root.word-choose-folder;
-                                        color: Theme.ink-2;
-                                        font-size: 12px;
-                                        font-weight: 500;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    pickhit := TouchArea {
-                                        mouse-cursor: pointer;
-                                        pointer-event(e) => {
-                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                root.lens-place-act("pick", root.lens-place-cur);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Right column: Breadcrumb + Direct switch + Weighted subfolders
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        Rectangle {
-                            height: 30px;
-                            Rectangle {
-                                y: parent.height - 1px;
-                                height: 1px;
-                                background: Theme.line-soft;
-                            }
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                spacing: 3px;
-                                if root.lens-place-up != "": Rectangle {
-                                    width: 20px;
-                                    border-radius: 4px;
-                                    background: uphit.has-hover ? Theme.hover : transparent;
-                                    Text {
-                                        text: "‹";
-                                        color: Theme.ink-2;
-                                        font-size: 14px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                    uphit := TouchArea {
-                                        mouse-cursor: pointer;
-                                        pointer-event(e) => {
-                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                root.lens-place-act("dir", root.lens-place-up);
-                                            }
-                                        }
-                                    }
-                                }
-                                Flickable {
-                                    horizontal-stretch: 1;
-                                    interactive: false;
-                                    viewport-width: crumb-row.preferred-width;
-                                    crumb-row := HorizontalLayout {
-                                        spacing: 2px;
-                                        alignment: start;
-                                        for cr[ci] in root.lens-crumbs: HorizontalLayout {
-                                            spacing: 2px;
-                                            if ci > 0: Text {
-                                                text: "/";
-                                                color: Theme.ink-3;
-                                                font-family: Fonts.mono;
-                                                font-size: 11px;
-                                                vertical-alignment: center;
-                                            }
-                                            Rectangle {
-                                                width: crtxt.preferred-width + 8px;
-                                                border-radius: 4px;
-                                                background: crhit.has-hover ? Theme.hover : transparent;
-                                                crtxt := Text {
-                                                    text: cr.label;
-                                                    color: ci == root.lens-crumbs.length - 1 ? Theme.ink : Theme.ink-2;
-                                                    font-family: Fonts.mono;
-                                                    font-size: 11.5px;
-                                                    font-weight: ci == root.lens-crumbs.length - 1 ? 650 : 500;
-                                                    horizontal-alignment: center;
-                                                    vertical-alignment: center;
-                                                }
-                                                crhit := TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    pointer-event(e) => {
-                                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                            root.lens-place-act("dir", cr.path);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                VerticalLayout {
-                                    alignment: center;
-                                    Rectangle {
-                                        height: 20px;
-                                        width: dirtxt.preferred-width + 12px;
-                                        border-radius: 5px;
-                                        border-width: Theme.hair;
-                                        border-color: root.lens-place-direct ? Theme.cap-ring : Theme.line;
-                                        background: root.lens-place-direct ? Theme.cap : dirhit.has-hover ? Theme.hover : transparent;
-                                        dirtxt := Text {
-                                            text: root.word-direct-only;
-                                            color: root.lens-place-direct ? Theme.q-key : Theme.ink-3;
-                                            font-size: 10.5px;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                        dirhit := TouchArea {
-                                            mouse-cursor: pointer;
-                                            pointer-event(e) => {
-                                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                    root.lens-place-act("flip", root.lens-place-cur);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Apply current folder row
-                        Rectangle {
-                            height: 28px;
-                            background: curhit.has-hover ? Theme.selection : transparent;
-                            curhit := TouchArea {
-                                mouse-cursor: pointer;
-                                pointer-event(e) => {
-                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                        root.lens-place-act("choose", root.lens-place-cur);
-                                    }
-                                }
-                            }
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 6px;
-                                Text {
-                                    text: "✓ " + root.word-this-folder + " (" + root.lens-place-shown + ")";
-                                    color: Theme.q-key;
-                                    font-family: Fonts.mono;
-                                    font-size: 12px;
-                                    font-weight: 600;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
-                                }
-                                PairButton {
-                                    y: 6px;
-                                    label: "+";
-                                    pressed => { root.lens-place-act("inc", root.lens-place-cur); }
-                                }
-                                PairButton {
-                                    y: 6px;
-                                    label: "!";
-                                    pressed => { root.lens-place-act("exc", root.lens-place-cur); }
-                                }
-                            }
-                        }
-
-                        Flickable {
-                            vertical-stretch: 1;
-                            viewport-height: pdir-col.preferred-height;
-                            pdir-col := VerticalLayout {
-                                for d in root.lens-dirs: Rectangle {
-                                    height: 26px;
-                                    background: dhit.has-hover ? Theme.hover : transparent;
-                                    if d.bar > 0: Rectangle {
-                                        x: 8px;
-                                        y: 3px;
-                                        height: 20px;
-                                        width: (parent.width - 16px) * d.bar * 0.88;
-                                        border-radius: 3px;
-                                        background: Theme.line-soft;
-                                    }
-                                    dhit := TouchArea {
-                                        mouse-cursor: pointer;
-                                        pointer-event(e) => {
-                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                                root.lens-place-act("dir", d.path);
-                                            }
-                                        }
-                                    }
-                                    HorizontalLayout {
-                                        padding-left: 12px;
-                                        padding-right: 10px;
-                                        spacing: 6px;
-                                        Text {
-                                            text: d.name;
-                                            color: Theme.ink;
-                                            font-family: Fonts.mono;
-                                            font-size: 12px;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
-                                        }
-                                        Text {
-                                            text: d.meta;
-                                            color: Theme.ink-3;
-                                            font-family: Fonts.mono;
-                                            font-size: 11px;
-                                            vertical-alignment: center;
-                                        }
-                                        PairButton {
-                                            y: 5px;
-                                            label: "+";
-                                            pressed => { root.lens-place-act("inc", d.path); }
-                                        }
-                                        PairButton {
-                                            y: 5px;
-                                            label: "!";
-                                            pressed => { root.lens-place-act("exc", d.path); }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Rectangle { height: 1px; background: Theme.line; }
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    height: 26px;
-                    Text {
-                        text: root.lens-foot;
-                        color: Theme.ink-3;
-                        font-size: 11px;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                }
+            if root.lens-kind == "place": PlaceLens {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                words: root.place-words;
+                tiles: root.lens-tiles;
+                strip: root.lens-strip;
+                held: root.lens-holds;
+                places: root.lens-places;
+                crumbs: root.lens-crumbs;
+                dirs: root.lens-dirs;
+                cur: root.lens-place-cur;
+                shown: root.lens-place-shown;
+                up: root.lens-place-up;
+                direct: root.lens-place-direct;
+                sel: root.lens-sel;
+                here-at: root.lens-here-at;
+                sum: root.lens-sum;
+                total: root.lens-total;
+                none: root.lens-none;
+                foot: root.lens-foot;
+                cols: parent.tile-cols;
+                act(what, target) => { root.lens-place-act(what, target); }
+                tile(i, also) => { root.lens-tile(i, also); }
+                drop(i) => { root.lens-held-drop(i); }
             }
 
             lens-flick := Flickable {

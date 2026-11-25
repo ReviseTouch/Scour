@@ -11,10 +11,9 @@ use scour_proto::Response;
 use scour_ui::{frame, lens};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use crate::link::{Ask, Got, Link};
+use crate::link::{Ask, Link};
 use crate::qbar::{self, Field};
 use crate::qlens::{self, Chosen, Env, Lenses};
-use crate::ui::{PlaceCrumb, PlaceDir, PlaceLeft};
 use crate::{LensRow, MainWindow, Reach, State};
 
 /// Everything the bar keeps between presses.
@@ -78,7 +77,7 @@ pub enum Lensing {
 /// Slots above this are the rescue's counts, not the lens's.
 const RESCUE: u32 = 1000;
 
-fn home() -> String {
+pub(crate) fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
@@ -102,16 +101,12 @@ fn with_env<R>(cat: &Catalogue, places: &[(String, String)], f: impl FnOnce(&Env
             .and_then(|k| k.first())
             .map_or_else(|| token.to_string(), |k| cat.get(k.msgid()).into_owned())
     };
-    let grouped = |n: u64| scour_ui::format::grouped(n, crate::marks().0);
-    let bytes = |n: u64| scour_ui::format::compact_bytes(n, crate::marks().1);
     let home = home();
     f(&Env {
         tr: &tr,
         kind_name: &kind_name,
         home: &home,
         places,
-        grouped: &grouped,
-        bytes: &bytes,
     })
 }
 
@@ -438,7 +433,7 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     };
     w.set_lens_kind(kind_tag.into());
     if o.kind == lens::Lens::Place {
-        show_place_lens(w, o, &qb.places, cat);
+        crate::placewire::show(w, o, cat, &text);
     }
     let peak = o
         .items
@@ -492,169 +487,8 @@ fn show_lens(w: &MainWindow, qb: &mut QueryBar, cat: &Catalogue) {
     w.set_lens_open(true);
 }
 
-fn show_place_lens(w: &MainWindow, o: &qlens::Open, places: &[(String, String)], cat: &Catalogue) {
-    let hm = home();
-    let (base, part) = lens::place_parts(&o.term.value);
-    let active = if base.is_empty() {
-        if hm.is_empty() {
-            "/".to_owned()
-        } else {
-            hm.clone()
-        }
-    } else {
-        qlens::full_path(&hm, &base)
-    };
-    let want = part.to_lowercase();
-    let mut left: Vec<PlaceLeft> = Vec::new();
-    let mut first_disk = true;
-    for d in o.disks.iter().flatten() {
-        let root = d.volume.roots.first().cloned().unwrap_or_default();
-        let name = if d.volume.label.is_empty() {
-            root.clone()
-        } else {
-            d.volume.label.clone()
-        };
-        let on = d.state.indexed();
-        let act = on
-            && (active == root
-                || active.starts_with(&if root == "/" {
-                    "/".into()
-                } else {
-                    format!("{root}/")
-                }));
-        left.push(PlaceLeft {
-            group: if first_disk {
-                cat.get("Disks").as_ref().into()
-            } else {
-                slint::SharedString::new()
-            },
-            label: format!("⛁ {name}").into(),
-            sub: if on {
-                qlens::home_path(&hm, &root).into()
-            } else {
-                cat.get("Index it").as_ref().into()
-            },
-            target: if on {
-                root.into()
-            } else {
-                d.volume.id.as_str().into()
-            },
-            ask_disk: !on,
-            active: act,
-        });
-        first_disk = false;
-    }
-    let mut all_places: Vec<(String, String)> = Vec::new();
-    if !hm.is_empty() {
-        all_places.push(("~".into(), hm.clone()));
-    }
-    all_places.extend_from_slice(places);
-    for (idx, (label, path)) in all_places.into_iter().enumerate() {
-        left.push(PlaceLeft {
-            group: if idx == 0 {
-                cat.get("Places").as_ref().into()
-            } else {
-                slint::SharedString::new()
-            },
-            label: label.into(),
-            sub: qlens::home_path(&hm, &path).into(),
-            target: path.as_str().into(),
-            ask_disk: false,
-            active: active == path,
-        });
-    }
-    w.set_lens_places(ModelRc::new(VecModel::from(left)));
-    w.set_lens_place_cur(active.as_str().into());
-    w.set_lens_place_shown(qlens::home_path(&hm, &active).into());
-    w.set_lens_place_direct(o.term.field == Some("parent"));
-    w.set_lens_place_up(if active == "/" {
-        slint::SharedString::new()
-    } else {
-        match active.rfind('/') {
-            Some(0) | None => "/".into(),
-            Some(i) => active[..i].into(),
-        }
-    });
-
-    let shown = qlens::home_path(&hm, &active);
-    let mut crumbs = Vec::new();
-    if shown.starts_with('~') && !hm.is_empty() {
-        let mut cur = hm.clone();
-        crumbs.push(PlaceCrumb {
-            label: "~".into(),
-            path: cur.as_str().into(),
-        });
-        for seg in shown[1..].split('/').filter(|s| !s.is_empty()) {
-            cur = format!("{cur}/{seg}");
-            crumbs.push(PlaceCrumb {
-                label: seg.into(),
-                path: cur.as_str().into(),
-            });
-        }
-    } else {
-        crumbs.push(PlaceCrumb {
-            label: "/".into(),
-            path: "/".into(),
-        });
-        let mut cur = String::new();
-        for seg in active.split('/').filter(|s| !s.is_empty()) {
-            cur = format!("{cur}/{seg}");
-            crumbs.push(PlaceCrumb {
-                label: seg.into(),
-                path: cur.as_str().into(),
-            });
-        }
-    }
-    w.set_lens_crumbs(ModelRc::new(VecModel::from(crumbs)));
-
-    let mut by_path: std::collections::BTreeMap<String, (String, u64, u64)> =
-        std::collections::BTreeMap::new();
-    if let Some(u) = &o.usage {
-        for c in &u.children {
-            let nm = c.path.rsplit('/').next().unwrap_or(&c.path).to_owned();
-            by_path.insert(c.path.clone(), (nm, c.bytes, c.files));
-        }
-    }
-    if let Some(nodes) = &o.tree {
-        for n in nodes.iter().filter(|n| n.is_dir) {
-            by_path
-                .entry(n.path.clone())
-                .or_insert_with(|| (n.name.clone(), 0, n.children));
-        }
-    }
-    let mut dirs: Vec<(String, String, u64, u64)> = by_path
-        .into_iter()
-        .filter(|(_, (nm, _, _))| want.is_empty() || nm.to_lowercase().contains(&want))
-        .map(|(p, (nm, b, f))| (p, nm, b, f))
-        .collect();
-    dirs.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then(a.1.cmp(&b.1)));
-    dirs.truncate(60);
-    let max_b = dirs.iter().map(|d| d.2).max().unwrap_or(0).max(1);
-    let mark = crate::marks();
-    let dir_rows: Vec<PlaceDir> = dirs
-        .into_iter()
-        .map(|(path, nm, b, f)| PlaceDir {
-            name: format!("{nm}/").into(),
-            path: path.into(),
-            meta: if b > 0 {
-                scour_ui::format::compact_bytes(b, mark.1).into()
-            } else if f > 0 {
-                scour_ui::format::grouped(f, mark.0).into()
-            } else {
-                slint::SharedString::new()
-            },
-            bar: if b > 0 {
-                (b as f32 / max_b as f32).clamp(0.04, 1.0)
-            } else {
-                0.0
-            },
-        })
-        .collect();
-    w.set_lens_dirs(ModelRc::new(VecModel::from(dir_rows)));
-}
-
 /// Put a new query in the field, search it, and put the caret at `caret`.
-fn write(w: &MainWindow, s: &Rc<RefCell<State>>, query: String, caret: usize) {
+pub(crate) fn write(w: &MainWindow, s: &Rc<RefCell<State>>, query: String, caret: usize) {
     {
         let mut st = s.borrow_mut();
         st.qb.anchor = caret;
@@ -1454,13 +1288,7 @@ pub fn wire(
         });
     }
     {
-        let (weak, state, link, cat, redraw) = (
-            window.as_weak(),
-            Rc::clone(state),
-            Rc::clone(link),
-            Rc::clone(cat),
-            redraw.clone(),
-        );
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
         window.on_lens_pick(move |i, stay| {
             let Some(w) = weak.upgrade() else { return };
             let text = w.get_query().to_string();
@@ -1487,20 +1315,8 @@ pub fn wire(
                         w.invoke_grep_toggled();
                     }
                 }
-                Some(Chosen::Disk(id)) => {
-                    link.send(Ask::Disk {
-                        volume: id,
-                        what: "index".into(),
-                    });
-                    crate::told(
-                        &w,
-                        cat.borrow()
-                            .get("The disk is being indexed.")
-                            .as_ref()
-                            .into(),
-                    );
-                    state.borrow_mut().qb.lenses.forget("volumes");
-                    redraw(Lensing::Asked);
+                Some(Chosen::Tile(k)) => {
+                    crate::placeact::tile_pick(&w, &state, k, lens::Pick::Only, &redraw);
                 }
                 None => {}
             }
@@ -1701,7 +1517,7 @@ pub fn wire(
     wire_v2(window, state, link, cat, redraw);
 }
 
-fn open_or_focus_field(
+pub(crate) fn open_or_focus_field(
     w: &MainWindow,
     state: &Rc<RefCell<State>>,
     redraw: &impl Fn(Lensing),
@@ -1919,129 +1735,7 @@ fn wire_v2(
             redraw(Lensing::Keep);
         });
     }
-    {
-        let (weak, state, link, cat, redraw) = (
-            window.as_weak(),
-            Rc::clone(state),
-            Rc::clone(link),
-            Rc::clone(cat),
-            redraw.clone(),
-        );
-        window.on_lens_place_act(move |what, target| {
-            let Some(w) = weak.upgrade() else { return };
-            let text = w.get_query().to_string();
-            let hm = home();
-            let info = {
-                let st = state.borrow();
-                st.qb
-                    .lenses
-                    .open
-                    .as_ref()
-                    .map(|o| (o.a, o.b, o.term.field.unwrap_or("under"), o.term.not))
-            };
-            let Some((a, b, fld, is_not)) = info else {
-                return;
-            };
-            let neg = if is_not { "!" } else { "" };
-            match what.as_str() {
-                "disk" => {
-                    link.send(Ask::Disk {
-                        volume: target.to_string(),
-                        what: "index".into(),
-                    });
-                    crate::told(
-                        &w,
-                        cat.borrow()
-                            .get("The disk is being indexed.")
-                            .as_ref()
-                            .into(),
-                    );
-                    state.borrow_mut().qb.lenses.forget("volumes");
-                    redraw(Lensing::Asked);
-                }
-                "pick" => {
-                    let start = target.to_string();
-                    let prefix = format!("{neg}{fld}:");
-                    std::thread::spawn(move || {
-                        let start_p = (!start.is_empty()).then(|| std::path::Path::new(&start));
-                        if let Some(chosen) = scour_openers::pick_folder(start_p) {
-                            let _ = slint::invoke_from_event_loop(move || {
-                                crate::deliver(Got::PickedFolder {
-                                    a,
-                                    b,
-                                    prefix,
-                                    path: chosen,
-                                });
-                            });
-                        }
-                    });
-                }
-                "dir" => {
-                    let shown = qlens::home_path(&hm, target.as_str());
-                    let slash = if shown.ends_with('/') {
-                        shown
-                    } else {
-                        format!("{shown}/")
-                    };
-                    let quoted = if slash.chars().any(char::is_whitespace) {
-                        format!("\"{slash}\"")
-                    } else {
-                        slash
-                    };
-                    let raw = format!("{neg}{fld}:{quoted}");
-                    let caret = a + raw.len() - usize::from(raw.ends_with('"'));
-                    let q = format!("{}{raw}{}", &text[..a], &text[b..]);
-                    write(&w, &state, q, caret);
-                    redraw(Lensing::Asked);
-                }
-                "flip" => {
-                    let other = if fld == "under" { "parent" } else { "under" };
-                    let shown = qlens::home_path(&hm, target.as_str());
-                    let slash = if shown == "/" {
-                        "/".into()
-                    } else {
-                        format!("{shown}/")
-                    };
-                    let quoted = if slash.chars().any(char::is_whitespace) {
-                        format!("\"{slash}\"")
-                    } else {
-                        slash
-                    };
-                    let raw = format!("{neg}{other}:{quoted}");
-                    let caret = a + raw.len() - usize::from(raw.ends_with('"'));
-                    let q = format!("{}{raw}{}", &text[..a], &text[b..]);
-                    write(&w, &state, q, caret);
-                    redraw(Lensing::Asked);
-                }
-                "choose" | "inc" | "exc" => {
-                    let pfx = match what.as_str() {
-                        "exc" => format!("!{fld}:"),
-                        "inc" => format!("{fld}:"),
-                        _ => format!("{neg}{fld}:"),
-                    };
-                    let shown = qlens::home_path(&hm, target.as_str());
-                    let quoted = if shown.chars().any(char::is_whitespace) {
-                        format!("\"{shown}\"")
-                    } else {
-                        shown
-                    };
-                    let tail = if !text[b..].starts_with(char::is_whitespace) {
-                        " "
-                    } else {
-                        ""
-                    };
-                    let ins = format!("{pfx}{quoted}{tail}");
-                    let q = format!("{}{ins}{}", &text[..a], &text[b..]);
-                    let caret = a + ins.len();
-                    state.borrow_mut().qb.lenses.close();
-                    w.set_lens_open(false);
-                    write(&w, &state, q, caret);
-                    redraw(Lensing::Keep);
-                }
-                _ => {}
-            }
-        });
-    }
+    crate::placeact::wire(window, state, link, cat, redraw.clone());
     {
         let (weak, state, link, cat) = (
             window.as_weak(),
