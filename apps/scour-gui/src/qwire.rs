@@ -372,11 +372,10 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
             .map_or(0.0, |c| c.tail - 2.0);
     // Just before a filter, the caret stands in the gap before it, not on its
     // frame's left edge.
-    let caret_x = if caps
-        .iter()
-        .any(|c| c.line == line && c.at == col && col > 0)
-    {
-        (caret_x - 4.0).max(0.0)
+    let caret_x = if caps.iter().any(|c| c.line == line && c.at == col) {
+        // At the start of the line too, into the field's own margin: the
+        // filter's frame begins 3 px before its first letter.
+        caret_x - if col == 0 { 6.0 } else { 4.0 }
     } else {
         caret_x
     };

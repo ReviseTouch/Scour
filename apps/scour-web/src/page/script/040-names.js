@@ -102,8 +102,22 @@
     td.replaceChildren();
     // A drive's root has no name of its own: `C:/` is called by its path.
     const name = f.name || f.path.replace(/\/+$/, "");
-    let at = span(name, terms);
-    if (!at && parsed && parsed.fuzzy && parsed.fuzzy.length) {
+    // Every place each word is, not the first only.
+    const all = spans(name, terms);
+    if (all.length) {
+      let pos = 0;
+      for (const [from, len] of all) {
+        if (from > pos) td.append(name.slice(pos, from));
+        const m = document.createElement("mark");
+        m.textContent = name.slice(from, from + len);
+        td.append(m);
+        pos = from + len;
+      }
+      if (pos < name.length) td.append(name.slice(pos));
+      return;
+    }
+    let at = null;
+    if (parsed && parsed.fuzzy && parsed.fuzzy.length) {
       at = fuzzySpan(name, parsed.fuzzy);
     }
     if (!at && KEPT && KEPT.typos === "always" && terms.length) {
@@ -204,19 +218,29 @@
     return [out, at];
   }
 
-  function span(name, terms) {
-    if (!terms.length) return null;
+  /* Every place each term is, as `Unaccented::marks` finds them in Rust:
+     in order, overlapping and touching ones joined, as [from, length]. */
+  function spans(name, terms) {
+    if (!terms.length) return [];
     const [text, at] = bare(name);
-    let best = null;
+    const found = [];
     for (const t of terms) {
       const want = bare(t)[0];
-      const i = want ? text.indexOf(want) : -1;
-      if (i < 0) continue;
-      const from = at ? at[i] : i;
-      const to = at ? at[i + want.length] : i + want.length;
-      if (!best || from < best[0]) best = [from, to - from];
+      if (!want) continue;
+      for (let i = text.indexOf(want); i >= 0; i = text.indexOf(want, i + 1)) {
+        const from = at ? at[i] : i;
+        const to = at ? at[i + want.length] : i + want.length;
+        if (to > from) found.push([from, to]);
+      }
     }
-    return best;
+    found.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const out = [];
+    for (const [a, b] of found) {
+      const last = out[out.length - 1];
+      if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+      else out.push([a, b]);
+    }
+    return out.map(([a, b]) => [a, b - a]);
   }
 
   /* Completions come from the field table, so one the parser would read as

@@ -683,6 +683,11 @@ test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos'
   vm.runInContext(section('  function subseqSpans(name, needle) {', '\n  /* Text as a name is searched'), c);
   const run = (src) => JSON.parse(JSON.stringify(vm.runInContext(src, c)));
   assert.deepEqual(run('subseqSpans("scour-gui", "scrgui")'), [[0, 2], [4, 5], [6, 9]]);
+  // Every word everywhere, as `Unaccented::marks` in Rust: `hasan salih`
+  // marks both in `HASAN SALİHOĞLU`, and the second `hasan` too.
+  assert.deepEqual(run('spans("HASAN SALİHOĞLU-hasan", ["hasan", "salih"])'), [[0, 5], [6, 5], [16, 5]]);
+  assert.deepEqual(run('spans("raporapor", ["rapor", "apora"])'), [[0, 9]]);
+  assert.deepEqual(run('spans("main.rs", ["zzz", ""])'), []);
   assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
 });
 

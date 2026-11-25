@@ -74,6 +74,40 @@ fn one_edit(a: &[char], b: &[char]) -> bool {
     }
 }
 
+/// A name in seven parts — before, mark, between, mark, between, mark,
+/// after — with every place each plain term is marked, up to three. With
+/// none, the one place `~` or `letters:` finds, as [`split_at_match`] does.
+pub fn name_parts<'a>(name: &'a str, terms: &[String]) -> [&'a str; 7] {
+    // `a;b` and `a|b` are either word: each is marked where it is.
+    let plain: Vec<&str> = terms
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !t.starts_with('^') && !t.starts_with('~'))
+        .flat_map(|t| t.split([';', '|']))
+        .collect();
+    let marks = scour_core::Unaccented::marks(name, &plain);
+    if marks.is_empty() {
+        let (pre, hit, post) = split_at_match(name, terms);
+        return [pre, hit, "", "", "", "", post];
+    }
+    let mut parts = [""; 7];
+    let mut at = 0;
+    for (k, &(a, b)) in marks.iter().take(3).enumerate() {
+        parts[k * 2] = &name[at..a];
+        parts[k * 2 + 1] = &name[a..b];
+        at = b;
+    }
+    // Past the third mark the rest is plain: three are what a row can show.
+    let shown = marks.len().min(3);
+    parts[shown * 2] = &name[at..];
+    if shown < 3 {
+        // What follows the last mark is the part drawn last.
+        parts[6] = parts[shown * 2];
+        parts[shown * 2] = "";
+    }
+    parts
+}
+
 /// A name cut into what precedes the match, the match, and what follows.
 /// The search runs on folded text and Turkish folding changes byte lengths, so
 /// an offset goes back through `fold_indexed` before it touches the original.
@@ -239,10 +273,14 @@ fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
 
     match id {
         "name" => {
-            let (pre, hit, post) = split_at_match(shown_name(h), terms);
+            let [pre, hit, mid, hit2, mid2, hit3, post] = name_parts(shown_name(h), terms);
             Cell {
                 pre: pre.into(),
                 hit: hit.into(),
+                mid: mid.into(),
+                hit2: hit2.into(),
+                mid2: mid2.into(),
+                hit3: hit3.into(),
                 post: post.into(),
                 ..text(String::new())
             }
@@ -481,6 +519,31 @@ mod tests {
             ("main.rs", "", "")
         );
         assert_eq!(split_at_match("main.rs", &[]), ("main.rs", "", ""));
+    }
+
+    #[test]
+    fn every_term_is_marked_up_to_three_places() {
+        let terms = ["hasan".to_string(), "salih".to_string()];
+        assert_eq!(
+            name_parts("030713_Hasan_Salihamidi.rtf", &terms),
+            ["030713_", "Hasan", "_", "Salih", "", "", "amidi.rtf"]
+        );
+        // A name that begins with its match has nothing before it.
+        assert_eq!(
+            name_parts("HASAN SALİHOĞLU", &terms),
+            ["", "HASAN", " ", "SALİH", "", "", "OĞLU"]
+        );
+        let many = name_parts("a-a-a-a", &["a".to_string()]);
+        assert_eq!(many, ["", "a", "-", "a", "-", "a", "-a"]);
+        assert_eq!(
+            name_parts("main.rs", &[]),
+            ["main.rs", "", "", "", "", "", ""]
+        );
+        // Either word of an OR.
+        assert_eq!(
+            name_parts("rapor-belge.pdf", &["belge;rapor".to_string()]),
+            ["", "rapor", "-", "belge", "", "", ".pdf"]
+        );
     }
 
     #[test]

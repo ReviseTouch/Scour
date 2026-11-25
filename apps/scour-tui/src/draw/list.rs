@@ -313,7 +313,30 @@ pub(super) fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (c
                                 spans.push(Span::styled(shown[cur..].to_string(), line));
                             }
                         } else {
-                            spans.push(Span::styled(shown.clone(), line));
+                            // Every plain word of the query, every place it is,
+                            // as the window and the page mark them.
+                            let words: Vec<&str> = scour_ui::query::terms(&app.query)
+                                .into_iter()
+                                .filter(|t| !t.starts_with('!') && !t.contains(':'))
+                                .flat_map(|t| t.split([';', '|']))
+                                .map(|t| t.trim_matches(['"', '*']))
+                                .filter(|t| !t.is_empty())
+                                .collect();
+                            let marks = scour_core::Unaccented::marks(&shown, &words);
+                            let mut cur = 0usize;
+                            for (s, e) in marks {
+                                if s > cur {
+                                    spans.push(Span::styled(shown[cur..s].to_string(), line));
+                                }
+                                spans.push(Span::styled(
+                                    shown[s..e].to_string(),
+                                    Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
+                                ));
+                                cur = e;
+                            }
+                            if cur < shown.len() {
+                                spans.push(Span::styled(shown[cur..].to_string(), line));
+                            }
                         }
                         if app.v2.grep_open
                             && let Some(fl) = hit.found.first()

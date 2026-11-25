@@ -88,6 +88,38 @@ impl Unaccented {
         Unaccented.fold(src)
     }
 
+    /// Every place in `name` one of `terms` is, as a name is searched:
+    /// byte ranges of `name` itself, in order, overlapping and touching ones
+    /// joined. Every term and every place, not the first: `hasan salih`
+    /// marks both words in `HASAN SALİHOĞLU`.
+    pub fn marks(name: &str, terms: &[&str]) -> Vec<(usize, usize)> {
+        let (folded, back) = Unaccented.fold_indexed(name);
+        let mut found: Vec<(usize, usize)> = Vec::new();
+        for term in terms {
+            let needle = Unaccented.fold(term);
+            if needle.is_empty() {
+                continue;
+            }
+            let mut from = 0;
+            while let Some(i) = folded[from..].find(&needle) {
+                let (a, b) = (from + i, from + i + needle.len());
+                found.push((back[a] as usize, back[b] as usize));
+                // From the next character: finds that overlap are all found.
+                from = a + folded[a..].chars().next().map_or(1, char::len_utf8);
+            }
+        }
+        found.retain(|&(a, b)| a < b && name.is_char_boundary(a) && name.is_char_boundary(b));
+        found.sort_unstable();
+        let mut out: Vec<(usize, usize)> = Vec::with_capacity(found.len());
+        for (a, b) in found {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    }
+
     /// The same for text [`DefaultFolder`] already folded, borrowed when no
     /// letter in it carries a mark — which is how a term is asked whether one does.
     pub fn of_folded(folded: &str) -> Cow<'_, str> {
@@ -201,6 +233,21 @@ impl Catalog for SourceCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_term_is_marked_everywhere_in_a_name() {
+        let n = "HASAN SALİHOĞLU-hasan";
+        let m = Unaccented::marks(n, &["hasan", "salih"]);
+        let got: Vec<&str> = m.iter().map(|&(a, b)| &n[a..b]).collect();
+        assert_eq!(got, ["HASAN", "SALİH", "hasan"]);
+        // Overlapping and touching finds are one run.
+        let n = "raporapor";
+        assert_eq!(Unaccented::marks(n, &["rapor", "apora"]), [(0, 9)]);
+        assert!(Unaccented::marks("main.rs", &["zzz", ""]).is_empty());
+        let n = "Şirket Raporu";
+        let m = Unaccented::marks(n, &["sirket"]);
+        assert_eq!(&n[m[0].0..m[0].1], "Şirket");
+    }
 
     #[test]
     fn turkish_i_family_collapses() {
