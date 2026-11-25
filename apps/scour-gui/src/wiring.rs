@@ -3,6 +3,7 @@
 
 use super::*;
 
+pub(crate) mod clicks;
 pub(crate) mod history;
 pub(crate) mod hooks;
 pub(crate) mod menu;

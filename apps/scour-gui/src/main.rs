@@ -841,6 +841,7 @@ fn main() -> Result<()> {
     );
     FIRST.with(|f| f.set(Some(launched)));
     wiring::hooks::wire(&wiring);
+    wiring::clicks::wire(&window);
     window.run().context("the event loop failed")?;
     #[cfg(unix)]
     drop(claim);
