@@ -1197,6 +1197,22 @@ its boot sector — 2.73 s (1.17 s asking, 1.56 s reading). No gain: the
 stick reads about 24 MB/s whatever asks it. All 3,000 files the same both
 ways; LCN 0 is cluster 2 (taken as cluster 0, 2,999 differed).
 
+The same stick and the same 3,000 files, formatted exFAT and then NTFS
+(`format /Q`, the files copied back, dismounted before every run):
+
+| | Scour's reader, 1 / 2 / 4 / 8 | raw, extents by opens | raw, from the MFT |
+|---|---|---:|---:|
+| FAT32 | 2.62–2.67 s | 2.73 s | — |
+| exFAT | 3.10 / 3.13 / 3.08 / 3.09 s | 5.92 s | — |
+| NTFS | 4.47 / 3.52 / 3.44 / 3.46 s | 2.38 s | **1.67 s** |
+
+On exFAT the raw reading loses: its clusters are large, so spans merged
+over gaps read 103 MiB for 30 MiB of files. On NTFS the MFT reading is the
+fastest of all (3 MiB of MFT in 0.14 s, then 1.53 s of reading) — 2× Scour's
+reader there, because the system's opening of NTFS files is the slow part,
+not the stick. One reader is slow on NTFS only. Every file the same in all
+three verifications. The stick is FAT32 again.
+
 ```sh
 cd tools/ntfsraw && cargo xwin build --release --target x86_64-pc-windows-msvc
 ntfsraw.exe raw set.txt      # elevated
