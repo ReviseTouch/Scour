@@ -8,6 +8,7 @@ use crate::qbar::{Laid, Zone, chars_before};
 use crate::qdress::{Dress, dress, dressed, head, width_of};
 use crate::qgroup::{self, Aim, Drawn};
 use crate::qwire::{QueryBar, home};
+use crate::ui::QFrame;
 use crate::{Cap, MainWindow, QBit, Span};
 
 /// Take the letters of one stretch of a line out of the runs, or draw them
@@ -49,6 +50,7 @@ pub struct Laidout {
     pub caps: Vec<Cap>,
     pub runs: Vec<Span>,
     pub bits: Vec<QBit>,
+    pub frames: Vec<QFrame>,
 }
 
 /// The query's place groups and `kind:`/`ext:` lists, each folded to fit a
@@ -144,6 +146,7 @@ fn group_cap(qb: &mut QueryBar, d: &Dress, text: &str, g: &Drawn, small: f32) ->
         whole: true,
         first: true,
         last: true,
+        group: true,
         ..Cap::default()
     };
     let unwritten = Dress {
@@ -198,6 +201,7 @@ fn bits(qb: &mut QueryBar, text: &str, groups: &[Drawn], laid: &[Laid]) -> Vec<Q
             bold: b.bold,
             dim: b.dim,
             disk: b.disk.into(),
+            struck: b.kind == 1 && g.head.not,
         }));
         zones.extend(g.zones.iter().map(|&(x0, x1, aim)| Zone {
             line: l.line,
@@ -262,7 +266,11 @@ pub fn lay_out(
         if c.len == c.head {
             c.hw -= c.tail;
         }
+        c.rescues = c.last
+            && qb.rescue_for == text
+            && crate::qeffect::rescuer(text, c.from as usize, c.to as usize, &qb.rescue).is_some();
     }
+    let frames = frames(qb, text, &groups);
     let bits = bits(qb, text, &groups, &all);
     qb.caps = groups.iter().filter_map(|g| g.cap.clone()).collect();
     qb.groups = all
@@ -270,7 +278,36 @@ pub fn lay_out(
         .zip(&groups)
         .map(|(l, g)| (g.start, g.end, l))
         .collect();
-    Laidout { caps, runs, bits }
+    Laidout {
+        caps,
+        runs,
+        bits,
+        frames,
+    }
+}
+
+/// A frame a line round each run joined by `|` that no capsule holds whole:
+/// the pieces the lines cut it into, each from its first column to its last.
+fn frames(qb: &QueryBar, text: &str, groups: &[Drawn]) -> Vec<QFrame> {
+    let drawn: Vec<(usize, usize)> = groups.iter().map(|g| (g.start, g.end)).collect();
+    let mut out = Vec::new();
+    for (a, b) in crate::qeffect::or_runs(text, &drawn) {
+        let (ca, cb) = (chars_before(text, a), chars_before(text, b));
+        for (i, l) in qb.field.lines.iter().enumerate() {
+            let (s, e) = (ca.max(l.start), cb.min(l.end));
+            if s >= e {
+                continue;
+            }
+            let x = qb.field.x(i, (s - l.start) as i32);
+            let w = qb.field.x(i, (e - l.start) as i32) - x;
+            out.push(QFrame {
+                line: i as i32,
+                x,
+                w,
+            });
+        }
+    }
+    out
 }
 
 /// A group's letters taken out of the runs, but for the member being edited;

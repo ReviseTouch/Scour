@@ -29,8 +29,14 @@ pub struct QueryBar {
     pub(crate) hover: Option<lens::Term>,
     /// Each filter of a query that found nothing: the term, the query
     /// without it, and what that finds once counted.
-    rescue: Vec<(String, String, Option<(u64, bool)>)>,
-    rescue_for: String,
+    pub(crate) rescue: Vec<(String, String, Option<(u64, bool)>)>,
+    pub(crate) rescue_for: String,
+    /// The lens generation the rescue's counts were asked with.
+    rescue_gen: u64,
+    /// The list's query, its total, and whether that total is exact.
+    pub(crate) listed: Option<(String, u64, bool)>,
+    /// The pill's effect counts.
+    pub(crate) effect: crate::qeffect::Effect,
     /// The query with a misspelt field name put right, when there is one.
     fix: Option<String>,
     /// The narrowing line: the query it is for, its answers, and its chips
@@ -153,6 +159,7 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         mut caps,
         runs,
         bits,
+        frames,
     } = crate::qlay::lay_out(w, qb, cat, &text, &s.spans);
     if let Some(h) = &qb.hover {
         let (a, b) = (
@@ -210,6 +217,7 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
     w.set_spans(ModelRc::new(VecModel::from(runs)));
     w.set_caps(ModelRc::new(VecModel::from(caps)));
     w.set_q_bits(ModelRc::new(VecModel::from(bits)));
+    w.set_q_frames(ModelRc::new(VecModel::from(frames)));
     w.set_sels(ModelRc::new(VecModel::from(sels)));
     w.set_q_shown(qb.field.shown() as i32);
     w.set_q_first(qb.field.first as i32);
@@ -359,8 +367,19 @@ pub fn answered(
     slot: u32,
     reply: Response,
 ) {
+    if slot >= crate::qeffect::EFFECT {
+        crate::qeffect::answered(w, s, cat, generation, slot, &reply);
+        return;
+    }
     if slot >= RESCUE {
-        rescue_answer(w, s, cat, slot - RESCUE, &reply);
+        // Only for the query it was asked for: a late one for an older
+        // query must not land in this list.
+        let asked = (s.qb.rescue_gen, s.qb.rescue_for.as_str());
+        if !s.qb.rescue.is_empty() && crate::qeffect::current(asked, generation, &s.query) {
+            rescue_answer(w, s, cat, slot - RESCUE, &reply);
+            // The capsules it marks.
+            draw(w, s, link, cat, Lensing::Keep);
+        }
         return;
     }
     let text = w.get_query().to_string();
@@ -388,8 +407,16 @@ pub fn refilled(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue) {
 
 /// A search came back. With nothing found, ask what each filter left out
 /// would find; with something, take the offers away.
-pub fn searched(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
+pub fn searched(
+    w: &MainWindow,
+    s: &mut State,
+    link: &Link,
+    cat: &Catalogue,
+    total: u64,
+    capped: bool,
+) {
     let text = s.query.clone();
+    s.qb.listed = Some((text.clone(), total, !capped));
     if total > 0 || text.trim().is_empty() || lens::reads(&text) {
         s.qb.rescue.clear();
         s.qb.rescue_for.clear();
@@ -412,6 +439,7 @@ pub fn searched(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, tot
         })
         .collect();
     let generation = s.qb.lenses.generation;
+    s.qb.rescue_gen = generation;
     for (i, (_, without, _)) in s.qb.rescue.iter().enumerate() {
         link.send(Ask::Lens {
             generation,
@@ -1080,6 +1108,7 @@ pub fn wire(
     }
     {
         let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        let (link, cat) = (Rc::clone(link), Rc::clone(cat));
         window.on_q_hover(move |line, col| {
             let Some(w) = weak.upgrade() else { return };
             let text = w.get_query().to_string();
@@ -1107,6 +1136,7 @@ pub fn wire(
             let Some((t, eline, ecol)) = found else {
                 if w.get_hov_on() {
                     w.set_hov_on(false);
+                    w.set_hov_fx(Default::default());
                     redraw(Lensing::Keep);
                 }
                 return;
@@ -1141,6 +1171,7 @@ pub fn wire(
             w.set_hov_on(true);
             state.borrow_mut().qb.hover = Some(t);
             redraw(Lensing::Keep);
+            crate::qeffect::hovered(&w, &state, &link, &cat.borrow());
         });
     }
     {

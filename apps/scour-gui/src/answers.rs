@@ -91,7 +91,7 @@ pub(super) fn search(cx: &Cx, got: Got) {
                 .unwrap_or_default(),
         );
         state.borrow_mut().similar = offered.map(|s| s.query.clone()).unwrap_or_default();
-        qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total);
+        qwire::searched(w, &mut state.borrow_mut(), link, cat, r.total, r.capped);
         grep_ui::listed(w, &mut state.borrow_mut(), cat, r.total, r.capped);
         qwire::narrow(w, &mut state.borrow_mut(), link, cat, r.total);
     }

@@ -406,6 +406,11 @@ export struct Cap {
     head-w: length,
     nice-w: length,
     tail: length,
+    // Drawn as inner chips (a place group, a list): its words are struck
+    // there, not across the capsule.
+    group: bool,
+    // Left out, it would bring the empty list back: a red mark at its corner.
+    rescues: bool,
 }
 
 // A word a capsule shows in the window's own face, for the window to measure.
@@ -428,6 +433,15 @@ export struct QBit {
     bold: bool,
     dim: int,
     disk: string,
+    // Words of an excluded group: red, struck through.
+    struck: bool,
+}
+
+// A dashed frame round terms joined by `|`, one a line, over the field.
+export struct QFrame {
+    line: int,
+    x: length,
+    w: length,
 }
 
 // Part of the query's selection, on one line.

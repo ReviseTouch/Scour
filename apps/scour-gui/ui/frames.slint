@@ -1,0 +1,40 @@
+// A quiet dashed outline, drawn over what it frames: Slint has no dashed
+// border, so the dashes are placed one by one.
+
+import { Theme } from "theme.slint";
+
+export component DashedBox inherits Rectangle {
+    property <length> dash: 4px;
+    property <length> step: 7px;
+    property <int> across: Math.floor((self.width - 8px) / self.step) + 1;
+    property <int> down: Math.floor((self.height - 8px) / self.step) + 1;
+    property <brush> ink: Theme.ink-3.with-alpha(0.7);
+    for i in root.across: Rectangle {
+        x: 4px + i * root.step;
+        y: 0px;
+        width: min(root.dash, root.width - 4px - self.x);
+        height: 1px;
+        background: root.ink;
+    }
+    for i in root.across: Rectangle {
+        x: 4px + i * root.step;
+        y: root.height - 1px;
+        width: min(root.dash, root.width - 4px - self.x);
+        height: 1px;
+        background: root.ink;
+    }
+    for i in root.down: Rectangle {
+        x: 0px;
+        y: 4px + i * root.step;
+        width: 1px;
+        height: min(root.dash, root.height - 4px - self.y);
+        background: root.ink;
+    }
+    for i in root.down: Rectangle {
+        x: root.width - 1px;
+        y: 4px + i * root.step;
+        width: 1px;
+        height: min(root.dash, root.height - 4px - self.y);
+        background: root.ink;
+    }
+}

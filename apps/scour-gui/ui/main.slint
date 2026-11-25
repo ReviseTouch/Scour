@@ -9,13 +9,14 @@ export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
 import { PlaceLens } from "place.slint";
+import { DashedBox } from "frames.slint";
 import { TimePanel, TypePanel, SizePanel } from "panels.slint";
 import { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook } from "panel-types.slint";
 export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
@@ -45,6 +46,9 @@ export component MainWindow inherits Window {
     in property <[Cap]> caps;
     in property <[QMeasure]> q-measure;
     in property <[QBit]> q-bits;
+    in property <[QFrame]> q-frames;
+    // What the capsule under the pointer does to the list, said in its pill.
+    in property <string> hov-fx;
     // Whether the keyboard is in the query: a filter is being written only then.
     out property <bool> q-focused: input.has-focus;
     callback q-focus-moved();
@@ -1478,7 +1482,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         // An excluded filter: what it holds is struck through.
-                        if c.tone == 2 && c.icon && c.whole: Rectangle {
+                        if c.tone == 2 && c.icon && c.whole && !c.group: Rectangle {
                             x: c.hw + 1px;
                             y: parent.height / 2;
                             width: parent.width - self.x - 9px;
@@ -1509,7 +1513,8 @@ export component MainWindow inherits Window {
                             y: 0px;
                             height: parent.height;
                             text: b.text;
-                            color: b.dim == 0 ? Theme.ink : b.dim == 1 ? Theme.ink-2 : Theme.ink-3;
+                            color: b.struck ? Theme.q-not
+                                : b.dim == 0 ? Theme.ink : b.dim == 1 ? Theme.ink-2 : Theme.ink-3;
                             font-size: 14px;
                             font-weight: b.bold ? 600 : 500;
                             vertical-alignment: center;
@@ -1520,12 +1525,39 @@ export component MainWindow inherits Window {
                             border-radius: 3.5px;
                             background: DiskInk.of(b.disk);
                         }
+                        if b.kind == 1 && b.struck: Rectangle {
+                            y: parent.height / 2;
+                            height: 1px;
+                            background: Theme.q-not;
+                        }
                         if b.kind == 3: Rectangle {
                             y: (parent.height - 3px) / 2;
                             height: 3px;
                             border-radius: 1.5px;
                             background: Theme.ink-3;
                         }
+                    }
+
+                    // Terms joined by `|`: a quiet dashed frame a line, over
+                    // the field, taking no room.
+                    for f in root.q-frames: DashedBox {
+                        x: field.pad + f.x - 4px;
+                        y: field.top + (f.line - root.q-first) * root.q-pitch + 1px;
+                        width: f.w + 8px;
+                        height: root.q-pitch - 2px;
+                        visible: f.line >= root.q-first && f.line < root.q-first + root.q-shown;
+                    }
+
+                    // A capsule that emptied the list: a red mark at its top
+                    // right, outside the line's flow.
+                    for c in root.caps: Rectangle {
+                        visible: c.rescues && c.line >= root.q-first && c.line < root.q-first + root.q-shown;
+                        x: field.pad + c.x + c.w - 2px;
+                        y: field.top + (c.line - root.q-first) * root.q-pitch;
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 3.5px;
+                        background: Theme.danger;
                     }
 
                     // The words the capsules show in the window's own face,
@@ -2110,7 +2142,8 @@ export component MainWindow inherits Window {
                         // Above the term, a capsule's as a word's: nothing is laid
                         // over what it holds, and nothing in the line moves.
                         visible: root.hov-on || self.over || field.pair-keep;
-                        x: clamp(field.pad + root.hov-x - self.width + 5px, 0px, field.width - self.width);
+                        // Placed by its buttons: the effect grows to their right.
+                        x: clamp(field.pad + root.hov-x - pair-btns.preferred-width - 4px + 5px, 0px, field.width - self.width);
                         y: field.top + root.hov-line * root.q-pitch - 24px;
                         width: pair-row.preferred-width + 4px;
                         height: 26px;
@@ -2129,6 +2162,8 @@ export component MainWindow inherits Window {
                         }
                         pair-row := HorizontalLayout {
                             padding: 2px;
+                            spacing: 2px;
+                          pair-btns := HorizontalLayout {
                             spacing: 2px;
                             if root.hov-fz: PairButton {
                                 label: "≈";
@@ -2149,6 +2184,17 @@ export component MainWindow inherits Window {
                                     root.term-act("drop");
                                 }
                             }
+                          }
+                            if root.hov-fx != "": Text {
+                                text: root.hov-fx;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                horizontal-alignment: left;
+                            }
+                            if root.hov-fx != "": Rectangle { width: 6px; }
                         }
                     }
 

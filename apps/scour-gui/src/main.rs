@@ -49,6 +49,7 @@ mod placewire;
 mod qbar;
 mod qcaret;
 mod qdress;
+mod qeffect;
 mod qflow;
 mod qgroup;
 mod qlay;
