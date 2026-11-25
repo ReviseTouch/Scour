@@ -203,6 +203,7 @@
     document.getElementById("q-time").classList.toggle("on", hasField(["dm"]));
     document.getElementById("q-fuzzy").classList.toggle("on", hasField(["fuzzy", "letters"]) || !!(KEPT && KEPT.typos === "always"));
     document.getElementById("q-grep").classList.toggle("grep-on", !grepBar.hidden || hasField(["content"]));
+    drawScopeChip(text);
   }
   function drawNarrow() {
     const emptyQ = !q.value.trim();

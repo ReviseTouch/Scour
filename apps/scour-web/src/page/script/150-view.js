@@ -300,6 +300,7 @@
     drawCost();
     if (LAST_STATUS) applyStatus(LAST_STATUS);
     drawAsk();
+    drawScopeChip(q.value);     // "Everywhere"
     if (!settingsBox.hidden) showSection(SECTION);
     if (!disksPanel.hidden) drawDisks();
     /* `drawPeek` returns early for the row it shows, so the labels stay. */

@@ -36,6 +36,7 @@
   function placeHeard(disks, sources) {
     if (disks) PLACE_DISKS = disks;
     if (sources) PLACE_SOURCES = sources;
+    drawScopeChip(q.value);
   }
 
   function placeTilesNow() {

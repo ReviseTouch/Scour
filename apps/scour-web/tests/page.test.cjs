@@ -881,8 +881,9 @@ function placeModel() {
   vm.runInContext(section('  const tileRoots = ', '\n  /* Each tile: held'), c);
   vm.runInContext(section('  function placeAnchor(', '\n  /* A tile clicked'), c);
   vm.runInContext(section('  function placeRest(', '\n  /* Each disk'), c);
+  vm.runInContext(section('  function scopeSays(', '\n  function drawScopeChip('), c);
   return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeRuns, placeRunOf,
-    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, placeAnchor, placeRest, STRIP_FLOOR, DISK_KINDS })`, c);
+    placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, placeAnchor, placeRest, scopeSays, STRIP_FLOOR, DISK_KINDS })`, c);
 }
 
 test('the place group: a disk in, a second beside it, one out, none left (lens/group_tests.rs)', () => {
@@ -1116,4 +1117,29 @@ test('the folder list is weighed by the query less its places, and no stray bar'
   assert.equal(M.placeRest('rapor|fatura under:'), 'rapor|fatura');
   assert.equal(M.placeRest('rapor !under:/x under:/a|under:/b'), 'rapor');
   assert.equal(M.placeRest('under:/a|parent:/b rapor|fatura dm:7d'), 'rapor|fatura dm:7d');
+});
+
+test('the scope chip names the disks held whole, else the folder, else everywhere', () => {
+  const M = placeModel();
+  const wire = ([disks, sources]) => [disks.map((d) => ({
+    volume: { id: d.id, label: d.label, kind: d.kind, fs: d.fs, roots: d.roots, size: d.size },
+    state: d.state, seen: { live: d.live, walking: d.walking },
+  })), sources];
+  const [disks, sources] = wire(fixMachine());
+  const says = (q) => J(M.scopeSays(q, PLACE_HOME, disks, sources));
+  const all = says('rapor');
+  assert.deepEqual(all.names, []);
+  assert.deepEqual(all.dots.map((d) => d.kind), ['system', 'fixed', 'removable', 'network']);
+  assert.deepEqual(all.dots.map((d) => d.asking), [false, false, true, false], 'a ringed dot for the stick');
+  assert.ok(all.dots.filter((d) => !d.asking).every((d) => d.lit));
+  const depo = says('rapor under:/mnt/depo');
+  assert.deepEqual(depo.names, ['Depo']);
+  assert.deepEqual(depo.dots.map((d) => d.lit), [false, true, false, false]);
+  const cachy = 'rapor under:/etc|under:~|under:/opt|under:/usr|under:/var';
+  assert.deepEqual(says(cachy + '|under:/mnt/depo').names, ['CACHY', 'Depo']);
+  assert.deepEqual(says(cachy).names, ['CACHY']);
+  assert.deepEqual(says('rapor under:~/Belgeler/').names, ['Belgeler']);
+  assert.deepEqual(says('rapor under:~/Belgeler/').dots.map((d) => d.lit), [true, false, false, false]);
+  assert.deepEqual(says('under:~').names, ['~']);
+  assert.deepEqual(says('rapor !under:/mnt/depo').names, [], 'an exclusion is still everywhere else');
 });
