@@ -2095,96 +2095,100 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        for m in [
-                            { id: "text", label: root.word-text },
-                            { id: "regex", label: root.word-regex },
-                            { id: "hex", label: root.word-hex },
-                        ]: Rectangle {
-                            y: 7px;
-                            height: 22px;
-                            width: mlbl.preferred-width + 10px;
-                            border-radius: 5px;
-                            background: root.grep-mode == m.id ? Theme.cap-read-ring : mtouch.has-hover ? Theme.hover : transparent;
-                            border-width: Theme.hair;
-                            border-color: Theme.cap-read-ring;
-                            mlbl := Text {
-                                text: m.label;
-                                color: root.grep-mode == m.id ? Theme.ink : Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10.5px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            mtouch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.grep-mode-picked(m.id); }
-                            }
-                        }
-                        Rectangle {
-                            y: 7px;
-                            height: 22px;
-                            width: 24px;
-                            border-radius: 5px;
-                            background: root.grep-case ? Theme.cap-read-ring : ctouch.has-hover ? Theme.hover : transparent;
-                            border-width: Theme.hair;
-                            border-color: Theme.cap-read-ring;
-                            Text {
-                                text: "Aa";
-                                color: root.grep-case ? Theme.ink : Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10.5px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            ctouch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.grep-case-toggled(); }
-                            }
-                        }
-                        Rectangle {
-                            y: 7px;
-                            height: 22px;
-                            width: 24px;
-                            border-radius: 5px;
-                            background: root.grep-binary ? Theme.cap-read-ring : btouch.has-hover ? Theme.hover : transparent;
-                            border-width: Theme.hair;
-                            border-color: Theme.cap-read-ring;
-                            Text {
-                                text: "01";
-                                color: root.grep-binary ? Theme.ink : Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10.5px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            btouch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.grep-bin-toggled(); }
-                            }
-                        }
-                        Rectangle {
-                            y: 7px;
-                            height: 22px;
-                            width: 24px;
-                            border-radius: 5px;
-                            background: root.grep-markup ? Theme.cap-read-ring : xtouch.has-hover ? Theme.hover : transparent;
-                            border-width: Theme.hair;
-                            border-color: Theme.cap-read-ring;
-                            Text {
-                                text: "<>";
-                                color: root.grep-markup ? Theme.ink : Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10.5px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            xtouch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.grep-markup-toggled(); }
+                        // The ways of reading, as one group, centred in the
+                        // line's height: a layout sets its children's `y`.
+                        VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                for m in [
+                                    { id: "text", label: root.word-text },
+                                    { id: "regex", label: root.word-regex },
+                                    { id: "hex", label: root.word-hex },
+                                ]: Rectangle {
+                                    height: 22px;
+                                    width: mlbl.preferred-width + 10px;
+                                    border-radius: 5px;
+                                    background: root.grep-mode == m.id ? Theme.cap-read-ring : mtouch.has-hover ? Theme.hover : transparent;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.cap-read-ring;
+                                    mlbl := Text {
+                                        text: m.label;
+                                        color: root.grep-mode == m.id ? Theme.ink : Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 10.5px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    mtouch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.grep-mode-picked(m.id); }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 22px;
+                                    width: 24px;
+                                    border-radius: 5px;
+                                    background: root.grep-case ? Theme.cap-read-ring : ctouch.has-hover ? Theme.hover : transparent;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.cap-read-ring;
+                                    Text {
+                                        text: "Aa";
+                                        color: root.grep-case ? Theme.ink : Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 10.5px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    ctouch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.grep-case-toggled(); }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 22px;
+                                    width: 24px;
+                                    border-radius: 5px;
+                                    background: root.grep-binary ? Theme.cap-read-ring : btouch.has-hover ? Theme.hover : transparent;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.cap-read-ring;
+                                    Text {
+                                        text: "01";
+                                        color: root.grep-binary ? Theme.ink : Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 10.5px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    btouch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.grep-bin-toggled(); }
+                                    }
+                                }
+                                Rectangle {
+                                    height: 22px;
+                                    width: 24px;
+                                    border-radius: 5px;
+                                    background: root.grep-markup ? Theme.cap-read-ring : xtouch.has-hover ? Theme.hover : transparent;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.cap-read-ring;
+                                    Text {
+                                        text: "<>";
+                                        color: root.grep-markup ? Theme.ink : Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 10.5px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    xtouch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.grep-markup-toggled(); }
+                                    }
+                                }
                             }
                         }
                         Text {
@@ -2193,22 +2197,28 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             vertical-alignment: center;
                         }
-                        Rectangle {
-                            y: 7px;
-                            height: 22px;
-                            width: 20px;
-                            border-radius: 5px;
-                            background: gxtouch.has-hover ? Theme.hover : transparent;
-                            Text {
-                                text: "×";
-                                color: gxtouch.has-hover ? Theme.ink : Theme.ink-3;
-                                font-size: 14px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                            gxtouch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.grep-toggled(); }
+                        // Centred like the ways of reading.
+                        VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle {
+                                    height: 22px;
+                                    width: 20px;
+                                    border-radius: 5px;
+                                    background: gxtouch.has-hover ? Theme.hover : transparent;
+                                    Text {
+                                        text: "×";
+                                        color: gxtouch.has-hover ? Theme.ink : Theme.ink-3;
+                                        font-size: 14px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    gxtouch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.grep-toggled(); }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2219,30 +2229,19 @@ export component MainWindow inherits Window {
                 // when, what kind, how big, a letter off, inside the file.
                 filter-button := Rectangle {
                     height: 46px;
-                    width: filter-row.preferred-width + 22px;
+                    width: 46px;
                     border-radius: 8px;
                     border-width: Theme.hair;
                     border-color: filter-hit.has-hover ? Theme.ink-3 : Theme.line;
                     background: filter-hit.has-hover ? Theme.hover : Theme.panel;
-                    filter-row := HorizontalLayout {
-                        alignment: center;
-                        spacing: 5px;
-                        Text {
-                            text: root.word-filter-button;
-                            color: filter-hit.has-hover ? Theme.ink : Theme.ink-2;
-                            font-size: 13px;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Image {
-                                width: 12px;
-                                height: 12px;
-                                source: @image-url("icons/tools/chevron.svg");
-                                colorize: filter-hit.has-hover ? Theme.ink : Theme.ink-3;
-                            }
-                        }
+                    // One picture, the filters' own; `:` and the list say the rest.
+                    Image {
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        source: @image-url("icons/tools/filter.svg");
+                        colorize: filter-hit.has-hover ? Theme.ink : Theme.ink-2;
                     }
                     filter-hit := TouchArea {
                         mouse-cursor: pointer;
@@ -2389,6 +2388,96 @@ export component MainWindow inherits Window {
                             overflow: elide;
                             horizontal-stretch: 1;
                         }
+                        }
+                        // The preview beside the list, put out and back from
+                        // here as the rail is from its own edge.
+                        VerticalLayout {
+                            alignment: center;
+                            Tool {
+                                width: 26px;
+                                height: 24px;
+                                icon: @image-url("icons/tools/peek.svg");
+                                has-icon: true;
+                                on: root.peeking;
+                                clicked => { root.peek-toggled(); }
+                            }
+                        }
+                        // In the corner: every way to narrow as a list, the
+                        // ones the line has no room for too.
+                        if root.chips.length > 0: VerticalLayout {
+                            alignment: center;
+                            padding-left: 2px;
+                            padding-right: 8px;
+                            more := Tool {
+                                width: 26px;
+                                height: 24px;
+                                glyph: "»";
+                                clicked => { more-list.show(); }
+                            }
+                            more-list := PopupWindow {
+                                x: more.width - 260px;
+                                y: more.height + 4px;
+                                width: 260px;
+                                height: min(360px, root.chips.length * 28px + 12px);
+                                Rectangle {
+                                    background: Theme.panel;
+                                    border-radius: 8px;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.line;
+                                    drop-shadow-blur: 12px;
+                                    drop-shadow-color: #00000030;
+                                    ScrollView {
+                                        x: 0px;
+                                        y: 6px;
+                                        height: parent.height - 12px;
+                                        viewport-height: root.chips.length * 28px;
+                                        for c[ci] in root.chips: Rectangle {
+                                            y: ci * 28px;
+                                            height: 28px;
+                                            background: more-touch.has-hover ? Theme.hover : transparent;
+                                            Image {
+                                                x: 10px;
+                                                y: 6px;
+                                                width: 16px;
+                                                height: 16px;
+                                                colorize: Theme.ink-3;
+                                                source: c.icon == "kind" ? @image-url("icons/tools/field-kind.svg")
+                                                    : c.icon == "ext" ? @image-url("icons/tools/field-ext.svg")
+                                                    : c.icon == "dm" ? @image-url("icons/tools/lens-time.svg")
+                                                    : c.icon == "size" ? @image-url("icons/tools/field-size.svg")
+                                                    : @image-url("icons/tools/folder.svg");
+                                            }
+                                            Text {
+                                                x: 34px;
+                                                width: parent.width - 34px - 70px;
+                                                text: c.label;
+                                                color: more-touch.has-hover ? Theme.ink : Theme.ink-2;
+                                                font-size: 12.5px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                x: parent.width - 64px;
+                                                width: 54px;
+                                                text: c.count;
+                                                color: Theme.ink-3;
+                                                font-size: 12px;
+                                                horizontal-alignment: right;
+                                                vertical-alignment: center;
+                                            }
+                                            more-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                pointer-event(e) => {
+                                                    if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+                                                        root.narrow-taken(c.token, e.modifiers.alt);
+                                                        more-list.close();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
