@@ -169,3 +169,39 @@ fn a_negated_member_is_neither_inside_nor_outside() {
     assert_eq!(scope("rapor", HOME), Scope::default());
     assert!(scope("under:/", HOME).holds("/"));
 }
+
+fn tile(q: &str, roots: &[&str], pick: Pick) -> String {
+    let roots: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
+    tile_toggle(q, HOME, &roots, pick).0
+}
+
+#[test]
+fn a_tile_of_several_roots_goes_in_and_out_as_one() {
+    let sys = ["/home/hasan", "/usr", "/etc"];
+    let q = tile("rapor", &sys, Pick::Only);
+    assert_eq!(q, "rapor under:~|under:/usr|under:/etc");
+    assert_eq!(tile(&q, &sys, Pick::Only), "rapor");
+    assert_eq!(tile(&q, &sys, Pick::Also), "rapor");
+    // Another disk beside it, then that one alone.
+    let both = tile(&q, &["/mnt/depo"], Pick::Also);
+    assert_eq!(both, "rapor under:~|under:/usr|under:/etc|under:/mnt/depo");
+    assert_eq!(
+        tile(&both, &["/mnt/depo"], Pick::Only),
+        "rapor under:/mnt/depo"
+    );
+    assert_eq!(tile(&both, &sys, Pick::Also), "rapor under:/mnt/depo");
+}
+
+#[test]
+fn a_tile_half_held_is_completed_not_dropped() {
+    let q = "rapor under:/usr ext:pdf";
+    assert_eq!(
+        tile(q, &["/usr", "/etc"], Pick::Also),
+        "rapor under:/usr|under:/etc ext:pdf"
+    );
+    assert_eq!(
+        tile(q, &["/usr", "/etc"], Pick::Only),
+        "rapor under:/usr|under:/etc ext:pdf"
+    );
+    assert_eq!(tile(q, &[], Pick::Only), "rapor ext:pdf");
+}

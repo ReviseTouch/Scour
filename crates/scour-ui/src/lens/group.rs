@@ -122,6 +122,37 @@ pub fn place_toggle(text: &str, home: &str, root: &str, pick: Pick) -> (String, 
     }
 }
 
+/// A whole tile put into or taken out of the place group: every root it is
+/// indexed through, as one click. A tile is held when all its roots are.
+/// `Only` leaves nothing else in the group, and on a tile held alone, nothing.
+pub fn tile_toggle(text: &str, home: &str, roots: &[String], pick: Pick) -> (String, usize) {
+    let want: Vec<String> = roots.iter().map(|r| norm(home, r)).collect();
+    let held: Vec<String> = scope(text, home)
+        .within
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    let all_in = !want.is_empty() && want.iter().all(|w| held.contains(w));
+    let alone = all_in && held.iter().all(|h| want.contains(h));
+    let (out_of, into): (Vec<&String>, Vec<&String>) = match pick {
+        Pick::Also if all_in => (want.iter().collect(), Vec::new()),
+        Pick::Also => (
+            Vec::new(),
+            want.iter().filter(|w| !held.contains(w)).collect(),
+        ),
+        Pick::Only if alone => (held.iter().collect(), Vec::new()),
+        Pick::Only => (
+            held.iter().filter(|h| !want.contains(h)).collect(),
+            want.iter().filter(|w| !held.contains(w)).collect(),
+        ),
+    };
+    let mut out = (text.to_string(), text.len());
+    for root in out_of.into_iter().chain(into) {
+        out = place_toggle(&out.0, home, root, Pick::Also);
+    }
+    out
+}
+
 /// What the query's place terms hold; see [`Scope`].
 pub fn scope(text: &str, home: &str) -> Scope {
     let held = |t: &Term| Held {
