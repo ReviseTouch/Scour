@@ -184,7 +184,7 @@ impl App {
 
     /// A launcher line whose filter the query already holds: the caret goes to
     /// the end of that term, and a `:` being typed goes. False for any other.
-    fn into_held(&mut self, term: &str) -> bool {
+    fn enter_held(&mut self, term: &str) -> bool {
         let Some(f) = lens::LAUNCH
             .iter()
             .find(|f| term.strip_suffix(':') == Some(f.field))
@@ -231,7 +231,7 @@ impl App {
             }
             return Want::Nothing;
         }
-        if !self.v2.place_mode && self.into_held(&term) {
+        if !self.v2.place_mode && self.enter_held(&term) {
             self.rebuild_lens();
             return self.typed();
         }
