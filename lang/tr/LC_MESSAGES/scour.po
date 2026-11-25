@@ -2995,3 +2995,6 @@ msgstr "CD ya da DVD"
 
 msgid "Search documents' XML, tags included"
 msgstr "Belgelerin XML'inde ara, etiketler dahil"
+
+msgid "Export the list as CSV…"
+msgstr "Listeyi CSV olarak dışa aktar…"

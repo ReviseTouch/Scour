@@ -1076,7 +1076,7 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout {
                 padding-left: 12px;
-                padding-right: 12px;
+                padding-right: 6px;
                 spacing: 2px;
                 if root.tabs-on && root.tab != "report": HorizontalLayout {
                 spacing: 2px;
@@ -1094,13 +1094,27 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     alignment: center;
                     padding-left: 4px;
-                    Tool {
+                    // Drawn as a tab not in front is, its + a picture so it
+                    // stands in the middle whatever the font.
+                    Rectangle {
                         width: 28px;
                         height: 28px;
-                        glyph: "+";
-                        glyph-size: 18px;
-                        framed: true;
-                        clicked => { root.tab-new(); }
+                        border-radius: 7px;
+                        border-width: 1px;
+                        border-color: plus-touch.has-hover ? Theme.ink-3 : Theme.line;
+                        background: plus-touch.has-hover ? Theme.hover : transparent;
+                        Image {
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            source: @image-url("icons/tools/plus.svg");
+                            colorize: plus-touch.has-hover ? Theme.ink : Theme.ink-2;
+                        }
+                        plus-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.tab-new(); }
+                        }
                     }
                 }
                 }
@@ -1109,7 +1123,7 @@ export component MainWindow inherits Window {
                     // Its own width, whatever the chips leave.
                     horizontal-stretch: 0;
                     padding-left: 10px;
-                    padding-right: 12px;
+                    padding-right: 0px;
                     spacing: 8px;
                     VerticalLayout {
                         alignment: center;
@@ -1135,52 +1149,62 @@ export component MainWindow inherits Window {
                             clicked => { root.report-in-browser(); }
                         }
                     }
+                    // How the list is shown: the one chosen, as one button;
+                    // pressed, the three to pick from.
                     if root.tab != "report": VerticalLayout {
                         alignment: center;
-                        Rectangle {
-                            height: 24px;
-                            width: views.preferred-width;
-                            border-radius: 6px;
-                            border-width: Theme.hair;
-                            border-color: Theme.line;
-                            views := HorizontalLayout {
-                                padding: 1px;
-                                spacing: 1px;
-                                Tool {
-                                    width: 26px;
-                                    height: 20px;
-                                    icon: @image-url("icons/tools/detail.svg");
-                                    has-icon: true;
-                                    on: root.view-mode == "detail";
-                                    clicked => { root.view-clicked("detail"); }
-                                }
-                                Tool {
-                                    width: 26px;
-                                    height: 20px;
-                                    icon: @image-url("icons/tools/icons.svg");
-                                    has-icon: true;
-                                    on: root.view-mode == "icons";
-                                    clicked => { root.view-clicked("icons"); }
-                                }
-                                Tool {
-                                    width: 26px;
-                                    height: 20px;
-                                    icon: @image-url("icons/tools/large.svg");
-                                    has-icon: true;
-                                    on: root.view-mode == "large";
-                                    clicked => { root.view-clicked("large"); }
+                        view-button := Tool {
+                            width: 30px;
+                            height: 26px;
+                            framed: true;
+                            has-icon: true;
+                            icon: root.view-mode == "icons" ? @image-url("icons/tools/icons.svg")
+                                : root.view-mode == "large" ? @image-url("icons/tools/large.svg")
+                                : @image-url("icons/tools/detail.svg");
+                            clicked => { view-list.show(); }
+                        }
+                        view-list := PopupWindow {
+                            x: (view-button.width - 100px) / 2;
+                            y: view-button.height + 4px;
+                            width: 100px;
+                            height: 36px;
+                            Rectangle {
+                                background: Theme.panel;
+                                border-radius: 8px;
+                                border-width: Theme.hair;
+                                border-color: Theme.line;
+                                drop-shadow-blur: 12px;
+                                drop-shadow-color: #00000030;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    padding: 4px;
+                                    spacing: 4px;
+                                    Tool {
+                                        width: 28px;
+                                        height: 28px;
+                                        icon: @image-url("icons/tools/detail.svg");
+                                        has-icon: true;
+                                        on: root.view-mode == "detail";
+                                        clicked => { root.view-clicked("detail"); view-list.close(); }
+                                    }
+                                    Tool {
+                                        width: 28px;
+                                        height: 28px;
+                                        icon: @image-url("icons/tools/icons.svg");
+                                        has-icon: true;
+                                        on: root.view-mode == "icons";
+                                        clicked => { root.view-clicked("icons"); view-list.close(); }
+                                    }
+                                    Tool {
+                                        width: 28px;
+                                        height: 28px;
+                                        icon: @image-url("icons/tools/large.svg");
+                                        has-icon: true;
+                                        on: root.view-mode == "large";
+                                        clicked => { root.view-clicked("large"); view-list.close(); }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Tool {
-                            width: 24px;
-                            height: 24px;
-                            icon: @image-url("icons/tools/export.svg");
-                            has-icon: true;
-                            clicked => { root.tool-clicked("export"); }
                         }
                     }
                     // Faces, language, disks, skips and the keys: one page.

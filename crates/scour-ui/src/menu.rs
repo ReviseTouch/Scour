@@ -235,6 +235,17 @@ pub const ITEMS: &[Item] = &[
         short: "",
     },
     Item {
+        id: "csv",
+        msgid: "Export the list as CSV…",
+        key: "",
+        group: 2,
+        weight: Weight::Plain,
+        when: When::One,
+        except: &[],
+        icon: "csv",
+        short: "",
+    },
+    Item {
         id: "details",
         msgid: "Details",
         key: "Space",
