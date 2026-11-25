@@ -8,9 +8,15 @@ export struct Cell {
     // than by position, which somebody chooses.
     id: string,
     text: string,
-    // Before the match, the match, after it. Empty for every column but `name`.
+    // Before the first match, the match, between it and the next, the next
+    // and the one after, and what follows: up to three marks. Empty for
+    // every column but `name`.
     pre: string,
     hit: string,
+    mid: string,
+    hit2: string,
+    mid2: string,
+    hit3: string,
     post: string,
     // Age band of a time column, 0 (minutes) to 5 (older); -1 means no colour.
     age: int,

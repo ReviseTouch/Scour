@@ -748,10 +748,15 @@ export component Head inherits Rectangle {
     }
 }
 
-// A name, or a line out of a file, with the match picked out.
+// A name, or a line out of a file, with what matched picked out: up to
+// three marks, the parts between them plain.
 export component Marked inherits Rectangle {
     in property <string> pre;
     in property <string> hit;
+    in property <string> mid;
+    in property <string> hit2;
+    in property <string> mid2;
+    in property <string> hit3;
     in property <string> post;
     in property <brush> colour: Theme.ink;
     // A name is drawn in the face's own type; a line out of a file in the
@@ -760,18 +765,31 @@ export component Marked inherits Rectangle {
     in property <length> size: 13px;
     in property <int> weight: 400;
     // What the whole name would take, for the tooltip's "does it fit".
-    preferred-width: before.preferred-width + label.preferred-width + after.preferred-width;
-    // **Placed by hand and clipped**: in a layout the marked part kept its
-    // own width and a name matched whole ran over the next columns. Each
-    // part gets what is left after the ones before it, so a long name is cut
-    // from its end, the mark included.
+    preferred-width: t0.preferred-width + t1.preferred-width + t2.preferred-width
+        + t3.preferred-width + t4.preferred-width + t5.preferred-width + t6.preferred-width;
+    // **Placed by hand and clipped**: in a layout a marked part kept its own
+    // width and a name matched whole ran over the next columns. Each part
+    // gets what is left after the ones before it, so a long name is cut from
+    // its end, marks included. An empty part is no width at all: an empty
+    // text still measured a little, and a name that began with its match
+    // stood further in than the rest.
     clip: true;
-    property <length> pre-w: min(before.preferred-width, root.width);
-    property <length> hit-w: min(label.preferred-width, root.width - self.pre-w);
+    property <length> w0: root.pre == "" ? 0px : min(t0.preferred-width, root.width);
+    property <length> x1: self.w0;
+    property <length> w1: root.hit == "" ? 0px : min(t1.preferred-width, max(0px, root.width - self.x1));
+    property <length> x2: self.x1 + self.w1;
+    property <length> w2: root.mid == "" ? 0px : min(t2.preferred-width, max(0px, root.width - self.x2));
+    property <length> x3: self.x2 + self.w2;
+    property <length> w3: root.hit2 == "" ? 0px : min(t3.preferred-width, max(0px, root.width - self.x3));
+    property <length> x4: self.x3 + self.w3;
+    property <length> w4: root.mid2 == "" ? 0px : min(t4.preferred-width, max(0px, root.width - self.x4));
+    property <length> x5: self.x4 + self.w4;
+    property <length> w5: root.hit3 == "" ? 0px : min(t5.preferred-width, max(0px, root.width - self.x5));
+    property <length> x6: self.x5 + self.w5;
 
-    before := Text {
+    t0 := Text {
         x: 0px;
-        width: root.pre-w;
+        width: root.w0;
         height: root.height;
         text: root.pre;
         color: root.colour;
@@ -781,18 +799,17 @@ export component Marked inherits Rectangle {
         overflow: elide;
         vertical-alignment: center;
     }
-
-    // Not a conditional element, so a slot is never rebuilt when a match
+    // Not conditional elements, so a slot is never rebuilt when a match
     // appears; an empty mark is a transparent box of no width.
     Rectangle {
-        x: root.pre-w;
-        width: root.hit-w;
-        height: label.preferred-height;
+        x: root.x1;
+        width: root.w1;
+        height: t1.preferred-height;
         y: (root.height - self.height) / 2;
         background: root.hit == "" ? transparent : Theme.mark;
         border-radius: 2px;
         clip: true;
-        label := Text {
+        t1 := Text {
             width: parent.width;
             text: root.hit;
             color: Theme.mark-ink;
@@ -803,10 +820,71 @@ export component Marked inherits Rectangle {
             vertical-alignment: center;
         }
     }
-
-    after := Text {
-        x: root.pre-w + root.hit-w;
-        width: max(0px, root.width - root.pre-w - root.hit-w);
+    t2 := Text {
+        x: root.x2;
+        width: root.w2;
+        height: root.height;
+        text: root.mid;
+        color: root.colour;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        x: root.x3;
+        width: root.w3;
+        height: t3.preferred-height;
+        y: (root.height - self.height) / 2;
+        background: root.hit2 == "" ? transparent : Theme.mark;
+        border-radius: 2px;
+        clip: true;
+        t3 := Text {
+            width: parent.width;
+            text: root.hit2;
+            color: Theme.mark-ink;
+            font-family: root.mono ? Fonts.mono : "";
+            font-size: root.size;
+            font-weight: root.weight;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    t4 := Text {
+        x: root.x4;
+        width: root.w4;
+        height: root.height;
+        text: root.mid2;
+        color: root.colour;
+        font-family: root.mono ? Fonts.mono : "";
+        font-size: root.size;
+        font-weight: root.weight;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        x: root.x5;
+        width: root.w5;
+        height: t5.preferred-height;
+        y: (root.height - self.height) / 2;
+        background: root.hit3 == "" ? transparent : Theme.mark;
+        border-radius: 2px;
+        clip: true;
+        t5 := Text {
+            width: parent.width;
+            text: root.hit3;
+            color: Theme.mark-ink;
+            font-family: root.mono ? Fonts.mono : "";
+            font-size: root.size;
+            font-weight: root.weight;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    t6 := Text {
+        x: root.x6;
+        width: max(0px, root.width - root.x6);
         height: root.height;
         text: root.post;
         color: root.colour;
