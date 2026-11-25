@@ -65,6 +65,8 @@ pub enum Ask {
     Rules,
     /// The disks, and what each is: for the panel and the question.
     Volumes,
+    /// What is indexed, source by source: which disks the scope chip shows.
+    Sources,
     /// An answer about a disk: `index`, `leave` or `later`.
     Disk {
         volume: String,
@@ -324,6 +326,7 @@ impl Freshness {
             Ask::Places
             | Ask::Rules
             | Ask::Volumes
+            | Ask::Sources
             | Ask::Disk { .. }
             | Ask::Status
             | Ask::Await { .. }
@@ -409,6 +412,7 @@ impl Link {
             | Ask::Places
             | Ask::Rules
             | Ask::Volumes
+            | Ask::Sources
             | Ask::Disk { .. }
             | Ask::Status
             | Ask::Remember { .. }
@@ -697,6 +701,7 @@ fn spawn_lane(
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Volumes => (0, Request::Volumes {}, Lane::Volumes),
+                Ask::Sources => (0, Request::Sources {}, Lane::Volumes),
                 Ask::Disk { volume, what } => (
                     0,
                     match what.as_str() {

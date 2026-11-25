@@ -47,6 +47,7 @@ mod placewire;
 mod qbar;
 mod qlens;
 mod qplace;
+mod qscope;
 mod qwire;
 mod report;
 mod rows;
@@ -1086,6 +1087,8 @@ fn apply(
         Got::Volumes(reply) => match *reply {
             Response::Volumes { disks, folders } => {
                 state.borrow_mut().asked_disk = disks::draw(w, cat, &disks);
+                state.borrow_mut().qb.disks = disks.clone();
+                qscope::draw(w, &mut state.borrow_mut().qb, cat, &w.get_query());
                 disks::draw_folders(w, cat, &folders);
                 // While something is being walked and the page is open, asked
                 // again: the line beside it says when the walk ends.
@@ -1099,6 +1102,10 @@ fn apply(
                         link.send(Ask::Volumes);
                     });
                 }
+            }
+            Response::Sources { sources } => {
+                state.borrow_mut().qb.sources = sources;
+                qscope::draw(w, &mut state.borrow_mut().qb, cat, &w.get_query());
             }
             _ => link.send(Ask::Volumes),
         },

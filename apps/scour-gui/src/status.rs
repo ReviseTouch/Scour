@@ -103,6 +103,7 @@ pub(super) fn disks_moved(state: &Rc<RefCell<State>>, link: &Link, asking: u32) 
     if s.disks_asking != Some(asking) {
         s.disks_asking = Some(asking);
         link.send(Ask::Volumes);
+        link.send(Ask::Sources);
     }
 }
 

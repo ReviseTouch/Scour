@@ -54,6 +54,11 @@ pub struct QueryBar {
     /// measure, in the order it was asked.
     widths: std::collections::HashMap<(String, bool), f32>,
     asked: Vec<(String, bool)>,
+    /// The last `volumes` and `sources` answers: the scope chip's disks.
+    pub disks: Vec<scour_proto::Disk>,
+    pub sources: Vec<scour_core::SourceInfo>,
+    /// What the chip shows now, so an unchanged one is not set again.
+    pub chip: crate::qscope::Chip,
 }
 
 impl QueryBar {
@@ -410,6 +415,7 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
         send(link, qb.lenses.generation, wants);
     }
     show_lens(w, &mut s.qb, cat);
+    crate::qscope::draw(w, &mut s.qb, cat, &text);
 }
 
 /// The open lens, as rows and words.
@@ -519,6 +525,11 @@ pub fn answered(
     }
     let text = w.get_query().to_string();
     let qb = &mut s.qb;
+    match &reply {
+        Response::Volumes { disks, .. } => qb.disks = disks.clone(),
+        Response::Sources { sources } => qb.sources = sources.clone(),
+        _ => {}
+    }
     let wants = with_env(cat, &qb.places, |env| {
         qb.lenses.answer(generation, slot, reply, &text, env)
     });

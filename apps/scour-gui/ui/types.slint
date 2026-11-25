@@ -108,6 +108,14 @@ export struct PlaceHeld {
     not: bool,
 }
 
+// One dot of the scope chip: a disk with something indexed on it, or ringed,
+// one waiting for an answer.
+export struct ScopeDot {
+    kind: string,
+    ring: bool,
+    lit: bool,
+}
+
 // The place lens's words, in the window's language.
 export struct PlaceWords {
     title: string,

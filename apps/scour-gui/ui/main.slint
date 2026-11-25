@@ -9,13 +9,14 @@ export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
 import { PlaceLens } from "place.slint";
+import { ScopeChip } from "place-parts.slint";
 import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
@@ -121,6 +122,9 @@ export component MainWindow inherits Window {
     in property <string> lens-sum;
     in property <string> lens-total;
     in property <string> lens-none;
+    // The scope chip at the left of the bar.
+    in property <[ScopeDot]> where-dots;
+    in property <string> where-label;
     in property <int> lens-sel;
     in property <string> lens-title;
     // The time lens's calendar: two months, a range picked with two presses.
@@ -195,9 +199,10 @@ export component MainWindow inherits Window {
     callback lens-spark-range(int, int);
     callback lens-place-act(string, string);
     // A disk tile pressed, Ctrl down or not; an entry of the place lens's
-    // "Searching in" line taken out.
+    // "Searching in" line taken out; the scope chip pressed.
     callback lens-tile(int, bool);
     callback lens-held-drop(int);
+    callback where-pressed();
     callback narrow-toggled();
     callback grep-toggled();
     callback grep-edited(string);
@@ -1330,10 +1335,12 @@ export component MainWindow inherits Window {
                     animate border-color { duration: 120ms; }
                     // One number for every layer: the runs, the capsules, the
                     // caret and a press are all placed from it.
-                    property <length> pad: 9px;
+                    // Past the scope chip, which stands at the start of the
+                    // first line; the lines under it start as far in.
+                    property <length> pad: scope-chip.x + scope-chip.width + 8px;
                     // What a line holds: the width less the padding and the
                     // past's button at the end.
-                    property <length> room: max(0px, field.width - field.pad * 2
+                    property <length> room: max(0px, field.width - field.pad - 9px
                         - (root.has-past ? 24px : 0px));
                     // One character's width, measured over forty because a
                     // layout rounds each run to whole pixels and the error
@@ -1918,6 +1925,19 @@ export component MainWindow inherits Window {
                         input.set-selection-offsets(w.from, w.to);
                     }
                 }
+
+                    // Over the presses that place the caret: a press on it opens
+                    // the place lens, as the launcher's Location line does.
+                    scope-chip := ScopeChip {
+                        x: 6px;
+                        y: field.top + (root.q-pitch - self.height) / 2;
+                        dots: root.where-dots;
+                        label: root.where-label;
+                        pressed => {
+                            input.focus();
+                            root.where-pressed();
+                        }
+                    }
 
                     // What says `Alt+↓` is there. Inside the field at its
                     // trailing edge, because the box stretches and a button

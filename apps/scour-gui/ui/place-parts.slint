@@ -1,8 +1,9 @@
-// The parts the place lens is built of: a disk's colour and icon, a worded
-// button, a tile, a folder's line.
+// The parts the place lens is built of — a disk's colour and icon, a
+// worded button, a tile, a folder's line — and the scope chip, which shows
+// the same disks at the left of the query bar.
 
 import { Theme, Fonts } from "theme.slint";
-import { PlaceDir, DiskTile, PlaceWords } from "types.slint";
+import { PlaceDir, DiskTile, ScopeDot, PlaceWords } from "types.slint";
 
 // A disk's colour by the wire's kind, and the dot beside its state.
 export global DiskInk {
@@ -301,6 +302,58 @@ export component DirLine inherits Rectangle {
         WordButton {
             label: root.words.exclude;
             pressed => { root.act("exc", root.d.path); }
+        }
+    }
+}
+
+// At the left of the query bar: a dot per disk the search can reach, and
+// where it looks. A press opens the place lens.
+export component ScopeChip inherits Rectangle {
+    in property <[ScopeDot]> dots;
+    in property <string> label;
+    callback pressed();
+    height: 26px;
+    // One width, whatever it says: the query beside it never shifts.
+    width: 124px;
+    border-radius: 7px;
+    border-width: Theme.hair;
+    border-color: chip-hit.has-hover ? Theme.ink-3 : Theme.line;
+    background: chip-hit.has-hover ? Theme.hover : Theme.ground;
+    chip-row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 9px;
+        spacing: 6px;
+        if root.dots.length > 0: VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 3px;
+                height: 8px;
+                for d in root.dots: Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: d.ring ? transparent : DiskInk.of(d.kind);
+                    border-width: d.ring ? 1.5px : 0px;
+                    border-color: DiskInk.of(d.kind);
+                    opacity: d.lit ? 1 : 0.35;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.ink-2;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    chip-hit := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.pressed();
+            }
         }
     }
 }

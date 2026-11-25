@@ -12,7 +12,7 @@ use scour_ui::path::{full_form, home_form, untrailed};
 use slint::ComponentHandle;
 
 use crate::link::{Ask, Got, Link};
-use crate::qwire::{Lensing, home, write};
+use crate::qwire::{self, Lensing, home, write};
 use crate::{MainWindow, State};
 
 /// Where the caret goes after a press wrote the place group: at the end of
@@ -174,6 +174,14 @@ pub fn wire(
         window.on_lens_held_drop(move |i| {
             if let Some(w) = weak.upgrade() {
                 drop_held(&w, &state, i.max(0) as usize, &redraw);
+            }
+        });
+    }
+    {
+        let (weak, state, redraw) = (window.as_weak(), Rc::clone(state), redraw.clone());
+        window.on_where_pressed(move || {
+            if let Some(w) = weak.upgrade() {
+                qwire::open_or_focus_field(&w, &state, &redraw, "under");
             }
         });
     }
