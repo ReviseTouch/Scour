@@ -255,3 +255,84 @@ A → B → C → D1 → D2 → D3 → E. A and B are independent of the rest; E
 not depend on D. After each phase: what changed, the tests added, what was
 looked at on which face, what was not verified, and any question for the
 owner — then wait for the go-ahead before the next phase.
+
+## 9. Corrections after scouting (2026-11-25)
+
+Two read-only passes over the code; their notes, with `file:line`, are in
+`/var/tmp/filter-panels/notes/phase-{b,d,e}.md` (scratch, not kept). Where
+this section and §3–§6 disagree, this section wins.
+
+### Phase B
+
+- **Counting a disk.** Not `usage` (300–350 ms, and `/` counts every disk
+  mounted under it). Ask `count{query: "file: under:<root>…", cap: u32::MAX}`
+  over the disk's *source roots* — 43 ms for Depo, about 220 ms for the
+  system disk. Pass the cap: the lenses' own is 100,000.
+- **A sixth state, `partly`.** A `manual` disk is not off when sources lie
+  inside it (the owner's system disk holds 4.8 M files through `home` and
+  `sistem`). Compute it from `sources` by longest root prefix; its tile lists
+  those roots and offers **no** "Index it" (that would make all of `/` a
+  source). The page bridge has no `/api/sources` route; add one (GET).
+- **Liveness is missing for config sources.** `handle/volumes.rs` looks
+  `seen` up by volume id, config sources are named (`home`, `depo`), so
+  `seen` comes back empty and every configured disk would draw as polled.
+  Step B0, before any tile: fill `seen` for a disk from the sources whose
+  roots lie on it. The reply's shape does not change. If the service cannot
+  tell whether a config source is watched, the tile says "indexed" and no
+  more — never a guess.
+- **Five kinds, five colours**: add `disk_optical`. A palette colour touches
+  `palette.rs` (struct, DARK, LIGHT, `css_vars`), `theme.slint`,
+  `scour-gui/src/size.rs::scheme`, `scour-tui/src/theme.rs`.
+- **An OR group needs its own helper.** `lens::replace` taking `under:/a`
+  out of `rapor under:/a|under:/b` leaves `rapor|under:/b` — "rapor *or*
+  under b". Add `lens::place_toggle(text, root) -> (String, usize)` that
+  adds to, removes from and dissolves the group, tested for: first disk,
+  second disk, back to one, back to none, a quoted path, `~`, and a
+  `!under:` elsewhere in the query left alone.
+- **Freshness.** The index revision moves about once a second, so "cache per
+  revision" caches nothing. Ask `volumes` each time the place lens opens and
+  keep counts for the life of that opening. The page's `lensSeen` is never
+  cleared today; clear the disk entries on open.
+- **Fix on the way, it is in the same code:** arrow keys in the place lens
+  move a selection over a list that is not the one drawn (page and window);
+  "Add" replaces the term instead of adding one.
+- **Terminal.** Its place lens has no disk list and its term toggle cannot
+  write a `|` group. It gets a one-disk-at-a-time list with kind, state and
+  count; no multi-select.
+- **The plug-in test cannot be automated here** (`udisksctl` wants admin
+  authentication). Test the model with fixtures; the owner plugs a stick once
+  at the end.
+
+### Phase D
+
+- No face asks `facets age` for the time lens: both make five `count` calls
+  and draw the sparkline from them. D1 replaces those with one `age` facet.
+- **Age edges are a day off `dm:Nd`**: edge *e* holds `floor(age/86400) <= e`.
+  For today / yesterday / 7 d / 30 d / year ask `[0,1,6,29,364]`.
+- **A closed date range drops its last day** (`dm:2026-11-24..2026-11-24`
+  finds nothing; the window's calendar loses the last picked day). D1 fixes
+  it in `scour-query`: a date as an upper bound means the end of that day.
+  With a test in the parser and against `scour-mock::brute_force`.
+- A histogram band is written older bound first: `dm:30d..7d`.
+- The page's kind/ext counts are a 200,000-row sample; add an age group to
+  the call, as the window does, to make them exact. The bridge hard-codes
+  `ext top:24` and one `edges` list per call; widen it for D1/D2.
+- `!empty:` finds nothing; "not empty" is `size:>0`.
+- Excluding one value needs its own term (`kind:doc !kind:build`); negation
+  covers a whole term. `lens::list` drops values it was not handed — keep
+  unknown ones.
+
+### Phase E
+
+- E2's state dot waits on B0. E4 has counts for the first four filters only
+  and by term text, not offset. E5: an OR group has no span in `explain`.
+  Order by risk, safest first: E3, E4, E2, E5, E1 (chips, then `+N` and
+  crumbs), E6 (window).
+- `ext:pdf ; odt` is one term to the engine and the page, three to
+  `lens::terms`. Make `lens::terms` agree with the engine before E1.
+
+### Found, not part of this plan
+
+The terminal's size rail offers `size:0`, which matches everything. The
+window's `rescue_answer` checks no generation, so a late answer can land in a
+newer list. `SourceInfo.caps` says `WATCH` for a source with `watch = false`.
