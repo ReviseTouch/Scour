@@ -43,7 +43,8 @@ pub struct Disks {
 pub enum Row {
     /// The disk, by its place among the tiles.
     Tile(usize),
-    /// Under a disk indexed through some of its folders: those folders.
+    /// Under a disk indexed through some of its folders, `Partly` or being
+    /// walked: those folders.
     Roots(usize),
     /// One of [`ANSWERS`] to the question an asking disk carries.
     Answer(usize, usize),
@@ -138,7 +139,8 @@ impl App {
         let mut rows = Vec::new();
         for (i, t) in tiles.iter().enumerate() {
             rows.push(Row::Tile(i));
-            if t.shown == Shown::Partly && !t.roots.is_empty() {
+            // Indexed through some of its folders, whatever it is doing now.
+            if !t.whole && !t.roots.is_empty() {
                 rows.push(Row::Roots(i));
             }
             if t.shown == Shown::Asking {
@@ -268,7 +270,7 @@ impl App {
             .min(16);
         // The widest count there will be, so the columns hold when it comes.
         let count_w = count(9_999_999).chars().count();
-        let root_w = wide.saturating_sub(INDENT + name_w + 2 + 2 + state_w + 1 + count_w);
+        let root_w = wide.saturating_sub(INDENT + name_w + 2 + 2 + state_w + 2 + count_w);
         let root_w = if root_w < 8 { 0 } else { root_w };
         let scope = lens::scope(&self.query, &home());
         let line = |text: String, key: String, dimmed: bool| PanelLine {

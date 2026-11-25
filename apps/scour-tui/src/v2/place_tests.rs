@@ -293,3 +293,19 @@ fn the_folders_add_and_exclude_beside_a_chosen_disk() {
     key(&mut app, '!');
     assert_eq!(app.query, "under:/mnt/depo|under:/mnt/data !under:/mnt/old");
 }
+
+#[test]
+fn a_disk_indexed_through_folders_lists_them_while_it_is_walked() {
+    let (mut app, sources) = machine();
+    app.disks[0].seen.walking = true;
+    app.disks[1].seen.walking = true;
+    app.open_place_lens();
+    app.sources_came(1, sources);
+    let lines = texts(&app, 80);
+    assert!(lines[0].contains("being walked"), "{}", lines[0]);
+    assert!(lines[1].contains("/usr · /var"), "{}", lines[1]);
+    assert!(
+        lines[2].contains("Depo"),
+        "a whole disk has no folders' line"
+    );
+}

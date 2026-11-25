@@ -720,12 +720,12 @@ fn act(want: Want, link: &Link) {
         Want::Hotkey(deed) => link.later(Ask::Hotkey(deed)),
         Want::Export { query, to } => link.later(Ask::Export { query, to }),
         Want::Tree(path) => link.later(Ask::Tree { path }),
-        // In the lane's order: the folders, then the disks, then the sources
-        // the disks are read against.
+        // The disks and the sources they are read against first: both answer
+        // at once, a folder's tree can take a third of a second.
         Want::Place { dir, opening } => {
-            link.later(Ask::Tree { path: dir });
             link.later(Ask::Volumes);
             link.later(Ask::Sources { opening });
+            link.later(Ask::Tree { path: dir });
         }
         Want::DiskCounts { opening, asks } => {
             for (id, query) in asks {
