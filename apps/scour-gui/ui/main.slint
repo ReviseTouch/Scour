@@ -2020,7 +2020,13 @@ export component MainWindow inherits Window {
                     border-color: grep-input.has-focus ? Theme.q-bad : Theme.cap-read-ring;
                     clip: true;
 
+                    // Inside the border, and the tint's corner as round as the
+                    // box's: `clip` does not follow a radius, and a square
+                    // tint showed past the corner.
                     HorizontalLayout {
+                        padding-left: Theme.hair;
+                        padding-top: Theme.hair;
+                        padding-bottom: Theme.hair;
                         padding-right: 6px;
                         spacing: 6px;
                         Rectangle {
@@ -2028,6 +2034,7 @@ export component MainWindow inherits Window {
                             Rectangle {
                                 opacity: 0.55;
                                 background: Theme.cap-read-ring;
+                                border-bottom-left-radius: 8px - Theme.hair;
                             }
                             inside-head := HorizontalLayout {
                                 alignment: center;
