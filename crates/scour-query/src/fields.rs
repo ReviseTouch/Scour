@@ -335,6 +335,20 @@ pub fn lookup(folded: &str) -> Option<&'static Field> {
 /// Calls the same value parsers the parser does, so a value that colours as
 /// usable is one that will be used.
 pub fn accepts(field: &Field, folded_value: &str, now: i64) -> bool {
+    // `a..b`, read by the parser as two comparisons: each end that is there
+    // must be one. Taken for a single value, a range the search reads fine
+    // was coloured as a mistake.
+    if matches!(field.takes, Takes::Size | Takes::Time)
+        && let Some((lo, hi)) = folded_value.split_once("..")
+    {
+        let one = |v: &str| match field.takes {
+            Takes::Size => parse_size_value(v).is_some(),
+            _ => parse_time_value(v, now).is_some(),
+        };
+        return !(lo.is_empty() && hi.is_empty())
+            && (lo.is_empty() || one(lo))
+            && (hi.is_empty() || one(hi));
+    }
     match field.takes {
         Takes::Nothing => true,
         Takes::Text => !folded_value.is_empty(),
@@ -445,6 +459,21 @@ mod tests {
         assert!(!accepts(kind, "zurna", 0), "kind:zurna falls back to text");
         let under = lookup("under").unwrap();
         assert!(!accepts(under, "", 0), "an empty scope is not a scope");
+    }
+
+    /// `a..b` is read by the parser as two comparisons; it is not a mistake
+    /// to be coloured as one (the window hid its narrowing line for it).
+    #[test]
+    fn a_range_is_accepted_when_its_ends_are() {
+        let dm = lookup("dm").unwrap();
+        assert!(accepts(dm, "2026-10-15..2026-11-20", 0));
+        assert!(accepts(dm, "..2026-11-20", 0));
+        assert!(accepts(dm, "2026-10-15..", 0));
+        assert!(!accepts(dm, "..", 0));
+        assert!(!accepts(dm, "2026-10-15..zurna", 0));
+        let size = lookup("size").unwrap();
+        assert!(accepts(size, "1mb..10mb", 0));
+        assert!(!accepts(size, "1mb..çok", 0));
     }
 
     #[test]

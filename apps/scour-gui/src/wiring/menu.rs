@@ -264,7 +264,8 @@ pub(crate) fn wire(wiring: &Wiring) {
                     }
                 }
                 "details" => w.set_peeking(!w.get_peeking()),
-                "csv" => w.invoke_tool_clicked("csv".into()),
+                // The list as the query has it, as the toolbar's export did.
+                "csv" => w.invoke_tool_clicked("export".into()),
 
                 "open-with" => {
                     // The menu becomes the list rather than growing a submenu;
