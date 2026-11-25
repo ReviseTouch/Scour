@@ -349,6 +349,10 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 app.v2.grep_binary = !app.v2.grep_binary;
                 return app.dispatch_grep(false);
             }
+            KeyCode::Char('m') if alt => {
+                app.v2.grep_markup = !app.v2.grep_markup;
+                return app.dispatch_grep(false);
+            }
             KeyCode::Esc => return app.toggle_grep(),
             KeyCode::Backspace if app.mode == Mode::Search => {
                 app.v2.grep_pattern.pop();

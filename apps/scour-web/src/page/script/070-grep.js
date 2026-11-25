@@ -4,7 +4,7 @@
   const grepView = document.getElementById("grep-view");
   const grepCaseBtn = document.getElementById("grep-case");
   const grepBinBtn = document.getElementById("grep-bin");
-  let GREP = { mode: "text", exact: false, binary: false, files: [], next: null, gen: 0, stop: null, timer: 0 };
+  let GREP = { mode: "text", exact: false, binary: false, markup: false, files: [], next: null, gen: 0, stop: null, timer: 0 };
 
   /* What the inside line says at its end: how many files a pattern would be
      read in, that they are being read, or how many hold it. */
@@ -74,6 +74,7 @@
       mode: GREP.mode,
       exact: GREP.exact ? "1" : "0",
       binary: GREP.binary ? "1" : "0",
+      markup: GREP.markup ? "1" : "0",
       sort: sortKey,
       desc: sortDesc ? "1" : "0",
       offset,
@@ -228,6 +229,12 @@
   grepBinBtn.addEventListener("click", () => {
     GREP.binary = !GREP.binary;
     grepBinBtn.setAttribute("aria-pressed", String(GREP.binary));
+    grepSoon(false);
+  });
+  const grepMarkupBtn = document.getElementById("grep-markup");
+  grepMarkupBtn.addEventListener("click", () => {
+    GREP.markup = !GREP.markup;
+    grepMarkupBtn.setAttribute("aria-pressed", String(GREP.markup));
     grepSoon(false);
   });
   document.getElementById("grep-close").addEventListener("click", () => setGrepOpen(false));

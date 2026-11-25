@@ -128,6 +128,7 @@ fn every_request_round_trips() {
             mode: GrepMode::Regex,
             exact_case: true,
             binary: false,
+            markup: true,
             sort: SortKey::Size,
             descending: true,
             offset: 64,

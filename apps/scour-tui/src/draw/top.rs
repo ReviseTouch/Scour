@@ -148,9 +148,10 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 }),
         ));
         let flags = format!(
-            " · {mode_lbl}{}{} · F8/Esc ]",
+            " · {mode_lbl}{}{}{} · F8/Esc ]",
             if app.v2.grep_exact { " Aa" } else { "" },
             if app.v2.grep_binary { " 01" } else { "" },
+            if app.v2.grep_markup { " <>" } else { "" },
         );
         parts.push(Span::styled(
             flags,

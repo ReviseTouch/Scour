@@ -242,6 +242,7 @@ pub enum Want {
         mode: scour_proto::GrepMode,
         exact_case: bool,
         binary: bool,
+        markup: bool,
         sort: SortKey,
         descending: bool,
         offset: u32,

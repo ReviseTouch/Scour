@@ -166,6 +166,7 @@ export component MainWindow inherits Window {
     in property <string> grep-mode: "text";
     in property <bool> grep-case;
     in property <bool> grep-binary;
+    in property <bool> grep-markup;
     in property <int> grep-focus-ask;
     in property <string> grep-summary;
     in property <string> grep-empty;
@@ -186,6 +187,7 @@ export component MainWindow inherits Window {
     callback grep-mode-picked(string);
     callback grep-case-toggled();
     callback grep-bin-toggled();
+    callback grep-markup-toggled();
     callback grep-more();
     callback grep-clicked(int);
     callback grep-opened(int);
@@ -2154,6 +2156,28 @@ export component MainWindow inherits Window {
                             btouch := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => { root.grep-bin-toggled(); }
+                            }
+                        }
+                        Rectangle {
+                            y: 7px;
+                            height: 22px;
+                            width: 24px;
+                            border-radius: 5px;
+                            background: root.grep-markup ? Theme.cap-read-ring : xtouch.has-hover ? Theme.hover : transparent;
+                            border-width: Theme.hair;
+                            border-color: Theme.cap-read-ring;
+                            Text {
+                                text: "<>";
+                                color: root.grep-markup ? Theme.ink : Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            xtouch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.grep-markup-toggled(); }
                             }
                         }
                         Text {

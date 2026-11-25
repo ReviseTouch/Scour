@@ -25,6 +25,8 @@ pub struct GrepAsk {
     pub needle: Needle,
     pub exact_case: bool,
     pub binary: bool,
+    /// A ZIP-based document's XML searched as it is: see `scour_grep::Options::markup`.
+    pub markup: bool,
     pub sort: SortKey,
     pub descending: bool,
     /// Files of the query already read by an earlier call.
@@ -89,6 +91,7 @@ pub(crate) fn run(
     })?;
     let mut options = Options {
         binary: ask.binary,
+        markup: ask.markup,
         max_size: ask.max_size,
         hits_per_file: ask.hits as usize,
         ..Options::default()

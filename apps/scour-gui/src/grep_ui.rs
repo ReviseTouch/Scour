@@ -19,6 +19,7 @@ pub struct GrepUi {
     pub mode: GrepMode,
     pub exact_case: bool,
     pub binary: bool,
+    pub markup: bool,
     pub generation: u64,
     pub files: Vec<GrepFile>,
     pub next: Option<u32>,
@@ -124,6 +125,7 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
             mode: s.grep.mode,
             exact_case: s.grep.exact_case,
             binary: s.grep.binary,
+            markup: s.grep.markup,
             sort: SortKey::named(&s.sort).unwrap_or_default(),
             descending: s.descending,
             offset,
@@ -440,6 +442,24 @@ pub fn wire(
                 s.grep.binary
             };
             w.set_grep_binary(bin);
+            trigger(&w, &mut state.borrow_mut(), &link, &cat.borrow(), false);
+        });
+    }
+    {
+        let (weak, state, link, cat) = (
+            window.as_weak(),
+            Rc::clone(state),
+            Rc::clone(link),
+            Rc::clone(cat),
+        );
+        window.on_grep_markup_toggled(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let on = {
+                let mut s = state.borrow_mut();
+                s.grep.markup = !s.grep.markup;
+                s.grep.markup
+            };
+            w.set_grep_markup(on);
             trigger(&w, &mut state.borrow_mut(), &link, &cat.borrow(), false);
         });
     }
