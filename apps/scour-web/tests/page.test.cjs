@@ -677,6 +677,46 @@ test('the lens names its fields, places and kinds as the window does', () => {
   assert.equal(run('LENS_FIELDS["t\\u00fcr"]'), 'kind');
 });
 
+// The launcher: the same rows, shortcuts and held filters `scour_ui::lens::launch` gives.
+test('the launcher groups its rows, finds their shortcuts and goes into a held filter', () => {
+  const c = context();
+  const TR = { Location: 'Konum', Modified: 'Değişme', Type: 'Tür', Extension: 'Uzantı', Size: 'Boyut', 'Similar spelling': 'Benzer yazım', Inside: 'İçinde' };
+  c.T = (s) => s;
+  // Split as `scour_ui::lens::terms`: whitespace and `|` outside quotes.
+  c.terms = (text) => {
+    const out = []; let s = null, quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i], cut = !quoted && (/\s/.test(ch) || ch === '|');
+      if (ch === '"') quoted = !quoted;
+      if (cut) { if (s !== null) { out.push([s, i]); s = null; } } else if (s === null) s = i;
+    }
+    if (s !== null) out.push([s, text.length]);
+    return out;
+  };
+  vm.runInContext(section('  const fold = ', '\n  const field = '), c);
+  vm.runInContext(section('  function fieldSplit(t) {', '\n  /* Terms and the whitespace'), c);
+  vm.runInContext(section('  const LENS_FIELDS = {', '\n  const LENS_TIMES'), c);
+  vm.runInContext(section('  const LAUNCH_HEADINGS = ', '\n  function launchHtml('), c);
+  const run = (src) => JSON.parse(JSON.stringify(vm.runInContext(src, c)));
+  const rows = run('launchRows("", ":")');
+  assert.deepEqual(rows.map((r) => r.field), ['under', 'dm', 'kind', 'ext', 'size', 'fuzzy', 'content']);
+  assert.deepEqual(rows.map((r) => r.icon), ['folder', 'clock', 'shapes', 'ext', 'size', 'approx', 'read']);
+  assert.deepEqual(rows.map((r) => r.heading), ['Narrow', '', '', '', '', 'How it searches', '']);
+  assert.deepEqual(rows.map((r) => r.key), [':l', ':m', ':t', ':e', ':siz', ':f', ':i']);
+  c.T = (s) => TR[s] || s;
+  assert.deepEqual(run('launchRows("", ":")').map((r) => r.key), [':ko', ':d', ':t', ':e', ':s', ':f', ':i']);
+  assert.deepEqual(run('launchRows("", ":iç")').map((r) => r.field), ['content']);
+  const held = (q) => run(`launchRows(${JSON.stringify(q)}, ":")`).filter((r) => r.held).map((r) => r.field);
+  assert.deepEqual(held('rapor :'), []);
+  assert.deepEqual(held('rapor !ext:pdf :'), ['ext']);
+  assert.deepEqual(held('tür:doc : rapor'), ['kind']);
+  assert.deepEqual(held('parent:/srv :'), ['under']);
+  assert.deepEqual(held(':kind'), []);
+  assert.deepEqual(run('intoHeld("rapor !ext:pdf :", 15, 16, "ext")'), { text: 'rapor !ext:pdf', caret: 14 });
+  assert.deepEqual(run('intoHeld("rapor :ty tür:doc;code dm:7d", 6, 9, "kind")'), { text: 'rapor tür:doc;code dm:7d', caret: 18 });
+  assert.equal(run('intoHeld("rapor :", 6, 7, "dm")'), null);
+});
+
 test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos', () => {
   const c = context();
   vm.runInContext(section('  function bare(s) {', '\n  function completions('), c);

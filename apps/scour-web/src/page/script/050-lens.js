@@ -20,14 +20,15 @@
     ext: "ext", content: "content", text: "content", icerik: "content", "i\u00e7erik": "content",
     fuzzy: "fuzzy", typo: "fuzzy", benzer: "fuzzy", letters: "letters", harfler: "letters",
   };
+  /* `scour_ui::lens::LAUNCH`: field, label, about, group, the capsule's picture. */
   const LENS_LAUNCH = [
-    ["under:", "Location", "which disk, which folder"],
-    ["dm:", "Modified", "when it last changed"],
-    ["kind:", "Type", "document, code, image…"],
-    ["ext:", "Extension", "pdf, rs, docx…"],
-    ["size:", "Size", "how big"],
-    ["fuzzy:", "Similar spelling", "one letter off still matches"],
-    ["content:", "Inside", "looks inside the file, not at its name"],
+    ["under", "Location", "which disk, which folder", "narrow", "folder"],
+    ["dm", "Modified", "when it last changed", "narrow", "clock"],
+    ["kind", "Type", "document, code, image…", "narrow", "shapes"],
+    ["ext", "Extension", "pdf, rs, docx…", "narrow", "ext"],
+    ["size", "Size", "how big", "narrow", "size"],
+    ["fuzzy", "Similar spelling", "one letter off still matches", "how", "approx"],
+    ["content", "Inside", "looks inside the file, not at its name", "how", "read"],
   ];
   const LENS_TIMES = [
     ["today", "today"], ["yesterday", "yesterday"], ["7d", "last 7 days"],
@@ -133,12 +134,10 @@
     const L = (label, hint, term, more) => Object.assign({ label: T(label), hint, term, n: null }, more || {});
     switch (LENS.kind) {
       case "launch": {
-        const want = fold(t.raw.slice(1));
         LENS.title = T("Add a filter");
         LENS.foot = T("Type a few letters to narrow it. Enter starts the filter.");
-        return LENS_LAUNCH
-          .filter(([f, l]) => !want || f.startsWith(want) || fold(T(l)).startsWith(want))
-          .map(([f, l, about]) => L(l, T(about), f, { launch: true }));
+        return launchRows(q.value, t.raw).map((r) =>
+          L(r.label, T(r.about), r.field + ":", { launch: true, field: r.field, icon: r.icon, key: r.key, held: r.held, group: r.heading ? T(r.heading) : "" }));
       }
       case "time":
         LENS.title = T("When it last changed");
@@ -476,6 +475,10 @@
     lensBox.classList.toggle("lens-band", LENS.kind === "time" || LENS.kind === "size");
     if (LENS.kind === "place") {
       lensBox.innerHTML = lensPlaceHtml();
+    } else if (LENS.kind === "launch") {
+      LENS.sel = Math.max(0, Math.min(LENS.sel, LENS.items.length - 1));
+      lensBox.innerHTML = '<div class="lhead"><b>' + escape_(LENS.title) + "</b></div>" +
+        launchHtml(LENS.items, LENS.sel) + '<div class="lfoot">' + escape_(LENS.foot) + "</div>";
     } else {
       const its = LENS.items;
       LENS.sel = Math.max(0, Math.min(LENS.sel, its.length - 1));
@@ -525,6 +528,16 @@
     }
     const { a, b } = LENS;
     const v = q.value;
+    // A filter the query already holds is gone into, not written twice.
+    const held = it.launch && it.held && intoHeld(v, a, b, it.field);
+    if (held) {
+      lensClose();
+      q.value = held.text;
+      q.setSelectionRange(held.caret, held.caret);
+      render();
+      lensSync(true);
+      return;
+    }
     let text = it.term;
     let caretIn = null;
     // What the files hold is not a filter in the query but the line under
