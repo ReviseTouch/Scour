@@ -5419,17 +5419,18 @@ export component MainWindow inherits Window {
         width: pill-text.preferred-width + 26px;
         height: 30px;
         border-radius: 15px;
-        background: pill-hit.has-hover ? Theme.hover : (Theme.dark ? Theme.panel-2 : Theme.panel);
+        // A shade darker than the list under it, so it reads as a button.
+        background: pill-hit.has-hover ? Theme.hover : Theme.panel-2;
         border-width: Theme.hair;
-        border-color: root.new-above > 0 ? Theme.q-key : Theme.line;
+        border-color: root.new-above > 0 ? Theme.q-key : Theme.ink-3;
         drop-shadow-blur: 10px;
         drop-shadow-offset-y: 2px;
-        drop-shadow-color: #0000001a;
+        drop-shadow-color: #0000002e;
         pill-text := Text {
             text: root.new-above > 0
                 ? "↑ " + root.new-above + " " + root.word-new
                 : "↑ " + root.word-top;
-            color: root.new-above > 0 ? Theme.q-key : Theme.ink-2;
+            color: root.new-above > 0 ? Theme.q-key : Theme.ink;
             font-size: 12.5px;
             horizontal-alignment: center;
             vertical-alignment: center;
