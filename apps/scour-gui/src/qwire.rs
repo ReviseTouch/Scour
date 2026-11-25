@@ -370,6 +370,13 @@ pub fn draw(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, lensing
             .iter()
             .find(|c| c.edit && c.line == line && c.at + c.len == col)
             .map_or(0.0, |c| c.tail - 2.0);
+    // Just before a filter, the caret stands in the gap before it, not on its
+    // frame's left edge.
+    let caret_x = if caps.iter().any(|c| c.line == line && c.at == col && col > 0) {
+        (caret_x - 4.0).max(0.0)
+    } else {
+        caret_x
+    };
     let mut sels = sels;
     for sl in &mut sels {
         let l = sl.line as usize;

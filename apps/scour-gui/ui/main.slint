@@ -1090,6 +1090,17 @@ export component MainWindow inherits Window {
                         closed => { root.tab-closed(i); }
                     }
                 }
+                // A new tab, where the next one will stand.
+                VerticalLayout {
+                    alignment: center;
+                    padding-left: 4px;
+                    Tool {
+                        width: 26px;
+                        height: 26px;
+                        glyph: "+";
+                        clicked => { root.tab-new(); }
+                    }
+                }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 HorizontalLayout {
@@ -1160,21 +1171,6 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                    if root.tab != "report": VerticalLayout {
-                        alignment: center;
-                        TextTool {
-                            label: root.word-peek;
-                            on: root.peeking;
-                            clicked => { root.peek-toggled(); }
-                        }
-                    }
-                    if root.tabs-on && root.tab != "report": VerticalLayout {
-                        alignment: center;
-                        TextTool {
-                            label: "+ " + root.word-tab;
-                            clicked => { root.tab-new(); }
-                        }
-                    }
                     VerticalLayout {
                         alignment: center;
                         Tool {
@@ -1195,6 +1191,19 @@ export component MainWindow inherits Window {
                             has-icon: true;
                             on: root.disk-question != "";
                             clicked => { root.tool-clicked("settings"); }
+                        }
+                    }
+                    // The preview beside the list, at the right edge it opens
+                    // on: its picture, as the rail's is at the left.
+                    if root.tab != "report": VerticalLayout {
+                        alignment: center;
+                        Tool {
+                            width: 26px;
+                            height: 24px;
+                            icon: @image-url("icons/tools/peek.svg");
+                            has-icon: true;
+                            on: root.peeking;
+                            clicked => { root.peek-toggled(); }
                         }
                     }
                 }
