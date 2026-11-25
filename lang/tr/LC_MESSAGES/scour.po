@@ -3004,3 +3004,48 @@ msgstr "Belgelerin XML'inde ara, etiketler dahil"
 
 msgid "Export the list as CSV…"
 msgstr "Listeyi CSV olarak dışa aktar…"
+
+msgid "checked now and then"
+msgstr "aralıklı yoklanıyor"
+
+msgid "being walked"
+msgstr "taranıyor"
+
+msgid "some folders indexed"
+msgstr "bazı klasörleri indekste"
+
+msgid "Not this time"
+msgstr "Bu sefer değil"
+
+msgid "Add"
+msgstr "Ekle"
+
+msgid "Exclude"
+msgstr "Dışla"
+
+msgid "Everywhere"
+msgstr "Her yer"
+
+msgid "Searching in:"
+msgstr "Aranacak yer:"
+
+msgid "everywhere"
+msgstr "her yer"
+
+msgid "{n} disks"
+msgstr "{n} disk"
+
+msgid "newly plugged in"
+msgstr "yeni takıldı"
+
+msgid "Where the search looks: one slice a disk, as wide as its files in the index"
+msgstr "Arama evreni: her dilim bir disk, genişliği indeksteki dosya sayısı"
+
+msgid "click a disk: search only there"
+msgstr "diske tıkla: yalnız orada ara"
+
+msgid "Ctrl+click: several"
+msgstr "Ctrl+tık: birden çok"
+
+msgid "Where it searches"
+msgstr "Nerede arıyor"
