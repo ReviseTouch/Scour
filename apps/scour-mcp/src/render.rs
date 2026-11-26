@@ -407,6 +407,9 @@ pub fn human(r: &Response) -> String {
             ),
         },
         Response::Text { text } => text.clone(),
+        // No tool asks for it: what the service keeps and what it costs is the
+        // owner's panel, not a question a model needs to put.
+        Response::Resources(_) => String::new(),
         // No export tool is exposed: a model must not be handed two hundred
         // megabytes through a context window, and answering with a filename
         // instead would make it the only tool here that writes to disk.

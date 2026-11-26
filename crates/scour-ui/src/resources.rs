@@ -53,7 +53,7 @@ pub const THINGS: [Thing; 5] = [
     Thing {
         token: "index",
         label: "Index",
-        note: "{n} entries · {parts} parts",
+        note: "{n} entries · parts: {parts}",
         act: Act {
             what: Do::Reset,
             button: "Start over…",
@@ -71,7 +71,7 @@ pub const THINGS: [Thing; 5] = [
             what: Do::ForgetTexts,
             button: "Empty…",
             ask: "Text read out of PDF and Office documents is deleted. Content search is slower until it has read them again.",
-            go: "Empty",
+            go: "Empty it",
             done: "Document texts emptied.",
             danger: true,
         },
@@ -84,7 +84,7 @@ pub const THINGS: [Thing; 5] = [
             what: Do::ClearPreviews,
             button: "Empty…",
             ask: "Previews are deleted; each is made again the first time its document is looked at.",
-            go: "Empty",
+            go: "Empty it",
             done: "Previews emptied.",
             danger: true,
         },
@@ -97,7 +97,7 @@ pub const THINGS: [Thing; 5] = [
             what: Do::ClearPage,
             button: "Empty…",
             ask: "The page window's own browser data is deleted: its cache and its window size.",
-            go: "Empty",
+            go: "Empty it",
             done: "Profile emptied.",
             danger: true,
         },
@@ -165,6 +165,8 @@ pub const RUNNING: [(&str, &str); 5] = [
 
 /// Under the MCP line: why there are so many.
 pub const MCP_NOTE: &str = "Every open Claude session starts one of its own.";
+/// After it: how long the oldest has run, `{u}` said as [`uptime`] says it.
+pub const OLDEST: &str = "The oldest has been running for {u}.";
 
 /// The panel's words that are not a row's.
 pub const TITLE: &str = "Scour on this machine";

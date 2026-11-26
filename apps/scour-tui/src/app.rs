@@ -467,9 +467,6 @@ pub struct App {
     pub scanning: Option<u64>,
     /// Writes of the index that have failed in a row; see `scour_ui::UNWRITTEN`.
     pub unwritten: u32,
-    /// Whether the index has grown an unsorted tail worth rebuilding: every
-    /// query reads that tail, so it is what the search drifts to.
-    pub rebuild_advised: bool,
     /// Set when a redraw is owed. Nothing is drawn without one: a terminal that
     /// redraws on a timer burns a core doing nothing.
     pub dirty: bool,
@@ -488,7 +485,6 @@ impl Default for App {
             query: String::new(),
             caret: 0,
             mode: Mode::Search,
-            rebuild_advised: false,
             generation: 0,
             pages: Pages::default(),
             cursor: 0,

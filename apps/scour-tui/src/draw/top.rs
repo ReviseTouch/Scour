@@ -407,15 +407,6 @@ pub(super) fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: 
             Style::new().fg(theme.key()),
         ));
     }
-    // And whether searching is still as fast as it was built to be: every query
-    // reads the unsorted tail, which a week of use takes from 1.9 ms to 21.5.
-    if app.rebuild_advised {
-        parts.push(Span::styled("  ·  ", dim));
-        parts.push(Span::styled(
-            app.say(scour_ui::REBUILD_ADVISED),
-            Style::new().fg(theme.not()),
-        ));
-    }
     // A disk that came, asked about until somebody answers: the key opens
     // the panel that holds the answers.
     if let Some(question) = app.disk_question() {

@@ -486,10 +486,9 @@ fn run(
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
-            Beat::Reply(Got::Awake(revision, walked, stale, asking, unwritten)) => {
+            Beat::Reply(Got::Awake(revision, walked, asking, unwritten)) => {
                 state.scanning = walked;
                 state.unwritten = unwritten;
-                state.rebuild_advised = stale;
                 act(state.disks_moved(asking), link);
                 let want = state.awake(revision);
                 act(want, link);
@@ -600,10 +599,9 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }
             Beat::Reply(Got::LensFaceted { tag, reply }) => state.lens_faceted(tag, &reply),
             Beat::Reply(Got::LensCounted { tag, total }) => state.lens_counted(tag, total),
-            Beat::Reply(Got::Awake(revision, walked, stale, asking, unwritten)) => {
+            Beat::Reply(Got::Awake(revision, walked, asking, unwritten)) => {
                 state.scanning = walked;
                 state.unwritten = unwritten;
-                state.rebuild_advised = stale;
                 act(state.disks_moved(asking), link);
                 let want = state.awake(revision);
                 act(want, link);

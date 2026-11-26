@@ -238,6 +238,16 @@ pub const FEATURES: &[Feature] = &[
             Has,
         ],
     },
+    Feature {
+        id: "resources",
+        what: "what Scour keeps on the machine, its memory and processor, emptying and restarting",
+        faces: [
+            Has,
+            Has,
+            Not("not yet: `scour resources` from a shell"),
+            Has,
+        ],
+    },
 ];
 
 /// Start a face so that it outlives the one starting it: a desktop closing a
