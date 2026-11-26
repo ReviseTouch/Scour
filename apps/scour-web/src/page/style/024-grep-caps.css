@@ -1,0 +1,51 @@
+  /* The content line's pattern: each piece the caret is not in a capsule in
+     the content colours, an excluded one red; the piece under the caret its
+     letters. A capsule's letters stay in the layer at no width (`.z`). */
+  .grep-bar:not(.raw) input { caret-color: transparent; }
+  .grep-bar:not(.raw) input::selection { background: transparent; color: transparent; }
+  .grep-bar.raw input { color: var(--ink); }
+  .grep-bar.raw .gshadow, .grep-bar.raw .gdecor { display: none; }
+  .gshadow .z { font-size: 0; }
+  .gshadow .gc {
+    display: inline-flex; align-items: stretch; vertical-align: middle;
+    height: 24px; margin: 0 1px; box-sizing: border-box; border-radius: 6px;
+    background: var(--panel); box-shadow: inset 0 0 0 1px var(--ring);
+    --ring: var(--cap-read-ring); --art: var(--q-bad);
+  }
+  .gshadow .gc.gk-not.many .gw { background: var(--panel); }
+  .gshadow .gc.gk-not { background: var(--cap-neg); --ring: var(--cap-neg-ring); --art: var(--q-not); }
+  .gshadow .gc.hov { box-shadow: inset 0 0 0 1px var(--ink-3); }
+  .gshadow .gc > .art { display: inline-flex; align-items: stretch; }
+  /* The head: what kind of piece, small, on the capsule's own tint. */
+  .gshadow .gc .gh {
+    display: inline-flex; align-items: center; padding: 0 7px 0 8px; border-radius: 6px 0 0 6px;
+    background: color-mix(in srgb, var(--ring) 55%, transparent); box-shadow: inset 0 0 0 1px var(--ring);
+    color: var(--art); font: 600 11px/1 var(--sans); white-space: nowrap;
+  }
+  .gshadow .gc .gb { display: inline-flex; align-items: center; padding: 0 8px; }
+  .gshadow .gc .gw { font: 600 13px/1 var(--mono); color: var(--ink); white-space: pre; }
+  .gshadow .gc .gsim { font-style: normal; font-weight: 700; color: var(--art); margin-right: 2px; }
+  /* Several alternatives: each an inner capsule, "or" between, quiet. */
+  .gshadow .gc.many .gb { padding: 0 3px; }
+  .gshadow .gc.many .gw {
+    display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px;
+    background: var(--cap-read); box-shadow: inset 0 0 0 1px var(--ring);
+  }
+  .gshadow .gc .gor, .gshadow .gand { font: 500 11px/1 var(--sans); color: var(--ink-3); }
+  .gshadow .gc .gor { padding: 0 5px; }
+  .gshadow .gand { padding: 0 6px 0 1px; }
+  .gshadow .gc.gk-not .gw { text-decoration: line-through; text-decoration-color: var(--q-not); }
+  /* The letters being typed: each operator in its colour. */
+  .gshadow .gop.or { color: var(--q-key); font-weight: 700; }
+  .gshadow .gop.not { color: var(--q-not); font-weight: 700; }
+  .gshadow .gop.quote { color: var(--q-bad); font-weight: 700; }
+  .gshadow .gop.tilde { color: var(--q-bad); font-weight: 700; }
+  /* The caret and the selection, drawn over the layer, as the query bar's. */
+  .gdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .gdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }
+  .gdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; animation: qblink 1.06s steps(1) infinite; }
+  @media (prefers-reduced-motion: reduce) { .gdecor .qcaret { animation: none; } }
+  /* The pill and the launcher float over the page, placed by the script. */
+  .qacts.gacts { position: fixed; z-index: 70; }
+  .lens.glaunch { position: fixed; width: 360px; }
+  .lens.glaunch .lrow .ic .aa { font: 700 12px/1 var(--sans); }

@@ -37,8 +37,13 @@ pub fn toggle_not(input: &str, at: usize) -> String {
         return input.to_string();
     };
     if piece.kind == PieceKind::Not {
-        let bang = piece.ops.first().copied().unwrap_or(piece.start);
         let c: Vec<char> = input.chars().collect();
+        let bang = piece
+            .ops
+            .iter()
+            .copied()
+            .find(|&i| c[i] == '!')
+            .unwrap_or(piece.start);
         let mut to = bang + 1;
         while to < piece.end && c[to].is_whitespace() {
             to += 1;
@@ -84,6 +89,7 @@ mod tests {
         assert_eq!(toggle_not("a !b", 1), "a b");
         assert_eq!(toggle_not("a ! b", 1), "a b");
         assert_eq!(toggle_not("x|y", 0), "!x|y");
+        assert_eq!(toggle_not("x ; !y", 0), "x ; y");
         assert_eq!(toggle_similar("rapor", 0, 0), "~rapor");
         assert_eq!(toggle_similar("~rapor", 0, 0), "rapor");
         assert_eq!(toggle_similar("a|b", 0, 1), "a|~b");

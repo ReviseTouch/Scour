@@ -728,13 +728,151 @@ test('subsequence and fuzzy highlighting mark letters in order and 1-edit typos'
   // marks both in `HASAN SALİHOĞLU`, and the second `hasan` too.
   assert.deepEqual(run('nameSpans("HASAN SALİHOĞLU-hasan", ["hasan", "salih"])'), [[0, 5], [6, 5], [16, 5]]);
   assert.deepEqual(run('nameSpans("raporapor", ["rapor", "apora"])'), [[0, 9]]);
-  // The content field's pieces, as `scour_ui::pattern::pieces` takes them.
-  vm.runInContext(section('  function patternPieces(input) {', '\n  /* The letters behind the field'), c);
-  const shown = (p) => JSON.parse(run(`JSON.stringify(patternPieces(${JSON.stringify(p)}).map((x) => [Array.from(${JSON.stringify(p)}).slice(x.start, x.end).join(""), x.kind, x.ops.length]))`));
-  assert.deepEqual(shown('icra "dava dosyası" !karar a;b'), [["icra", "word", 0], ['"dava dosyası"', "phrase", 2], ["!karar", "not", 1], ["a;b", "or", 1]]);
-  assert.deepEqual(shown("(a | b) x ; y ! z"), [["(a | b)", "or", 3], ["x ; y", "or", 1], ["! z", "not", 1]]);
   assert.deepEqual(run('nameSpans("main.rs", ["zzz", ""])'), []);
   assert.deepEqual(run('fuzzySpan("rapor_2026.pdf", ["raporr"])'), [0, 5]);
+});
+
+// The content field's model: `scour_ui::pattern` (pieces, edit, launch) in
+// the page's words. Each case is one of `pattern.rs`, `pattern/edit.rs` or
+// `pattern/launch.rs`'s tests, with the same inputs and answers.
+const PJ = (x) => JSON.parse(JSON.stringify(x));
+function patternModel() {
+  const c = context();
+  c.T = (s) => s;
+  vm.runInContext(section('  const escape_ = (s) =>', '\n  const FIELDS = ['), c);
+  vm.runInContext(section('  /* ---------------- the content pattern', '\n  /* ---------------- the content field'), c);
+  vm.runInContext(section('  /* ---------------- the content field', '\n  /* ---- drawn ---- */'), c);
+  c.CONTENT_ITEMS = vm.runInContext('CONTENT_ITEMS', c);
+  return c;
+}
+
+test('a content pattern is taken apart as the search takes it (pattern.rs)', () => {
+  const c = patternModel();
+  const shown = (input) => {
+    const ch = Array.from(input);
+    return PJ(c.patternPieces(input)).map((p) => [ch.slice(p.start, p.end).join(''), p.kind, p.ops.map((i) => ch[i])]);
+  };
+  assert.deepEqual(shown('icra "dava dosyası" !karar a;b'), [
+    ['icra', 'word', []], ['"dava dosyası"', 'phrase', ['"', '"']], ['!karar', 'not', ['!']], ['a;b', 'or', [';']],
+  ]);
+  assert.deepEqual(shown('(a | b) x ; y ! z'), [
+    ['(a | b)', 'or', ['(', '|', ')']], ['x ; y', 'or', [';']], ['! z', 'not', ['!']],
+  ]);
+  assert.deepEqual(shown('şirket'), [['şirket', 'word', []]]);
+  // A tilde forgives, and each alternative is its own capsule.
+  assert.deepEqual(shown('~rapor'), [['~rapor', 'similar', ['~']]]);
+  assert.deepEqual(shown('!~taslak ~a|b'), [['!~taslak', 'not', ['!', '~']], ['~a|b', 'or', ['~', '|']]]);
+  assert.deepEqual(shown('a~b'), [['a~b', 'word', []]]);
+  assert.deepEqual(shown('~'), [['~', 'word', []]]);
+  assert.equal(shown('"~x"')[0][1], 'phrase');
+  const alts = (input) => {
+    const ch = Array.from(input);
+    return PJ(c.patternPieces(input)).map((p) => p.alts.map((a) => [ch.slice(a.start, a.end).join(''), a.phrase, a.similar]));
+  };
+  assert.deepEqual(alts('icra ~a|"b c" !(x | y)'), [
+    [['icra', false, false]],
+    [['a', false, true], ['b c', true, false]],
+    [['x', false, false], ['y', false, false]],
+  ]);
+  // The caret keeps its piece as letters.
+  const p = c.patternPieces('ab cd');
+  assert.equal(c.patternPieceAt(p, 0), 0);
+  assert.equal(c.patternPieceAt(p, 2), 0);
+  assert.equal(c.patternPieceAt(p, 4), 1);
+  assert.equal(c.patternPieceAt(c.patternPieces('ab  cd'), 3), null);
+});
+
+test('the pill rewrites the pattern (pattern/edit.rs)', () => {
+  const c = patternModel();
+  assert.equal(c.patternRemove('a b c', 1), 'a c');
+  assert.equal(c.patternRemove('a b c', 2), 'a b');
+  assert.equal(c.patternRemove('a', 0), '');
+  assert.equal(c.patternToggleNot('a b', 1), 'a !b');
+  assert.equal(c.patternToggleNot('a !b', 1), 'a b');
+  assert.equal(c.patternToggleNot('a ! b', 1), 'a b');
+  assert.equal(c.patternToggleNot('x|y', 0), '!x|y');
+  assert.equal(c.patternToggleNot('x ; !y', 0), 'x ; y');
+  assert.equal(c.patternToggleSimilar('rapor', 0, 0), '~rapor');
+  assert.equal(c.patternToggleSimilar('~rapor', 0, 0), 'rapor');
+  assert.equal(c.patternToggleSimilar('a|b', 0, 1), 'a|~b');
+  assert.equal(c.patternToggleSimilar('!~x', 0, 0), '!x');
+  assert.equal(c.patternToggleSimilar('"a b"', 0, 0), '"a b"');
+  assert.ok(c.patternPieces('~a')[0].alts[0].similar);
+});
+
+test('a colon asks, letters narrow it, and choosing writes in its place (pattern/launch.rs)', () => {
+  const c = patternModel();
+  assert.deepEqual(PJ(c.contentAsking('rapor :', 7)), [6, '']);
+  assert.deepEqual(PJ(c.contentAsking('rapor :ben', 10)), [6, 'ben']);
+  assert.deepEqual(PJ(c.contentAsking(':', 1)), [0, '']);
+  assert.equal(c.contentAsking('"a :', 4), null);
+  assert.equal(c.contentAsking('10:3', 4), null);
+  assert.equal(c.contentAsking('rapor', 5), null);
+  const same = (s) => s;
+  const tokens = (typed, name) => PJ(c.contentItems(typed, name).map((i) => i.token));
+  assert.equal(c.contentItems('', same).length, 5);
+  assert.deepEqual(tokens('sim', same), ['similar']);
+  const tr = (m) => ({ 'Similar spelling': 'Benzer yazım', Without: 'Değil' })[m] || m;
+  assert.deepEqual(tokens('BEN', tr), ['similar']);
+  assert.deepEqual(tokens('xyz', same), []);
+  const by = (t) => c.CONTENT_ITEMS.find((i) => i.token === t);
+  assert.deepEqual(PJ(c.contentChoose('rapor :', 6, 7, by('phrase'))), ['rapor ""', 7]);
+  assert.deepEqual(PJ(c.contentChoose('rapor :ve', 6, 9, by('or'))), ['rapor|', 6]);
+  assert.deepEqual(PJ(c.contentChoose(':ben x', 0, 4, by('similar'))), ['~ x', 1]);
+  assert.deepEqual(PJ(c.contentChoose('a :c', 2, 4, by('case'))), ['a ', 2]);
+  // The Rust model's labels and about lines are the page's, word for word.
+  const rust = readFileSync(require('node:path').join(__dirname, '../../../crates/scour-ui/src/pattern/launch.rs'), 'utf8');
+  for (const it of c.CONTENT_ITEMS) {
+    assert.ok(rust.includes(`token: "${it.token}",\n        label: "${it.label}",\n        about: "${it.about}",`), it.token);
+  }
+});
+
+/* The text of a drawn layer outside its art, as the caret's offsets read it. */
+function layerLetters(html) {
+  let out = '', art = 0;
+  const stack = [];
+  for (const m of html.matchAll(/<(\/?)(span|i)([^>]*)>|([^<]+)/g)) {
+    if (m[4] !== undefined) { if (!art) out += m[4]; continue; }
+    if (m[1]) { if (stack.pop()) art--; continue; }
+    const isArt = /class="art\b/.test(m[3]);
+    stack.push(isArt);
+    if (isArt) art++;
+  }
+  return out.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+
+test('the content field draws each piece the caret is not in as its capsule', () => {
+  const c = patternModel();
+  const text = 'icra "dava dosyası" ~rapor a|~b !taslak';
+  const n = Array.from(text).length;
+  const caps = (html) => [...html.matchAll(/<span class="gc gk-([\w ]+)" data-k="(\d+)"/g)].map((m) => [m[1], +m[2]]);
+  const ands = (html) => (html.match(/class="art gand"/g) || []).length;
+  // Caret at the end: the last piece is letters, the rest capsules.
+  const atEnd = c.grepLayerHtml(text, n);
+  assert.deepEqual(caps(atEnd), [['word', 0], ['phrase', 1], ['similar', 2], ['or many', 3]]);
+  assert.match(atEnd, /<span class="glive"><span class="gop not">!<\/span>taslak<\/span>$/);
+  assert.equal(ands(atEnd), 3, 'an "and" between two capsules, none beside the letters');
+  assert.match(atEnd, /<span class="gh">exact phrase<\/span><span class="gb"><span class="gw" data-alt="0">“dava dosyası”<\/span>/);
+  assert.match(atEnd, /<span class="gh">similar<\/span><span class="gb"><span class="gw" data-alt="0"><i class="gsim">≈<\/i>rapor<\/span>/);
+  assert.match(atEnd, /<span class="gh">either<\/span><span class="gb"><span class="gw" data-alt="0">a<\/span><span class="gor">or<\/span><span class="gw" data-alt="1"><i class="gsim">≈<\/i>b<\/span>/);
+  assert.equal(layerLetters(atEnd), text, 'every letter once, in order');
+  // Caret inside `~rapor`: that piece is letters, its tilde coloured; `!taslak` red.
+  const inside = c.grepLayerHtml(text, 23);
+  assert.deepEqual(caps(inside), [['word', 0], ['phrase', 1], ['or many', 3], ['not', 4]]);
+  assert.match(inside, /<span class="glive"><span class="gop tilde">~<\/span>rapor<\/span>/);
+  assert.match(inside, /<span class="gh">without<\/span><span class="gb"><span class="gw" data-alt="0">taslak<\/span>/);
+  assert.equal(ands(inside), 2);
+  assert.equal(layerLetters(inside), text);
+  // No caret (a selection, or the field left): every piece a capsule.
+  const rest = c.grepLayerHtml(text, -1);
+  assert.equal(caps(rest).length, 5);
+  assert.equal(ands(rest), 4);
+  assert.equal(layerLetters(rest), text);
+  // `!x|y`: red, its alternatives joined by "or"; a lone tilde keeps its letters.
+  assert.match(c.grepLayerHtml('!x|y', -1), /gc gk-not many.*without.*>x<.*gor">or<.*>y</);
+  assert.match(c.grepLayerHtml('~', -1), /<span class="gw">~<\/span>/);
+  assert.equal(layerLetters(c.grepLayerHtml('a  <b> "c', 2)), 'a  <b> "c');
+  assert.equal(c.grepLayerHtml('', 0), '');
 });
 
 test('drawGrep renders sortable headers and aligned metadata columns without missing globals', () => {

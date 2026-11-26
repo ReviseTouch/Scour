@@ -77,13 +77,14 @@
            same box. Hidden until asked for. -->
       <div class="grep-bar" id="grep-bar" hidden>
         <span class="ghead"><span aria-hidden="true">≣</span><span data-t="Inside"></span></span>
-        <!-- The field's letters are drawn by the shadow behind it, each piece of
-             the pattern in its capsule, each operator in its colour; the field
-             keeps the caret and the selection. -->
+        <!-- The field's letters are drawn by the layer behind it: every piece
+             of the pattern but the one under the caret in its capsule. The
+             input keeps the text; the caret and selection are drawn over. -->
         <span class="gfield">
           <span class="gshadow" id="grep-shadow" aria-hidden="true"></span>
           <input type="text" id="grep-q" spellcheck="false" autocomplete="off"
                  data-t-ph="Search inside matching files… (a;b  !c)" data-t-aria="Search inside matching files…">
+          <span class="gdecor" id="grep-decor" aria-hidden="true"></span>
         </span>
         <div class="grep-seg" role="group">
           <button type="button" data-gmode="text" aria-pressed="true" data-t="Text"></button>
@@ -100,6 +101,9 @@
         <button type="button" class="grep-x" id="grep-close"
                 data-t-title="Close grep" data-t-aria="Close grep">×</button>
       </div>
+      <!-- Over the content line, never in it: a capsule's pill, and what `:` offers. -->
+      <div class="qacts gacts" id="grep-acts"></div>
+      <div class="lens glaunch" id="grep-launch" role="listbox" data-t-aria="Choices" hidden></div>
       </div>
       <!-- Quiet on-demand lenses and filters: unfold only when asked. -->
       <div class="qtriggers" id="qtriggers">
