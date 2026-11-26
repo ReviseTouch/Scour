@@ -299,6 +299,7 @@
     /* The two lines nothing else rewrites until something happens. */
     drawCost();
     if (LAST_STATUS) applyStatus(LAST_STATUS);
+    resRelabel();
     drawAsk();
     drawScopeChip(q.value);     // "Everywhere"
     if (!settingsBox.hidden) showSection(SECTION);

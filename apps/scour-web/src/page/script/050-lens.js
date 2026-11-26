@@ -111,7 +111,7 @@
     const kind = t && lensKindOf(t);
     const keep = LENS && t && LENS.a === t.a;
     // By itself only at the end of a filter, and never over a capsule's part at rest.
-    const by = kind !== "word" && caret === t.b && !restsOnCapsule(caret);
+    const by = !!t && kind !== "word" && caret === t.b && !restsOnCapsule(caret);
     if (!kind || !(asked || keep || by)) { lensClose(); return; }
     const sel = keep && LENS.kind === kind ? LENS.sel : 0;
     const opening = kind === "place" && LENS?.kind !== "place";

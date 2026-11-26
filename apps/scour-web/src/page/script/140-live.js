@@ -25,24 +25,6 @@
       walking.textContent = said;
       walking.hidden = !said;
       sep.hidden = !said;
-
-      /* Said only when it is due, and it says what to do about it. */
-      const stale = document.getElementById("stale");
-      const staleSep = document.getElementById("stale-sep");
-      const advice = s.rebuild_advised
-        ? fmt(s.unsorted || 0) + " " + T("unsorted") + " — " +
-          T("`scour maintain rebuild` would speed searches up")
-        : "";
-      if (stale.dataset.advice !== advice) {
-        stale.dataset.advice = advice;
-        // Two spellings, and the meter picks by width: the sentence, or the count alone.
-        stale.innerHTML = advice
-          ? `<span class="long">${escape_(advice)}</span><span class="short">${escape_(fmt(s.unsorted || 0) + " " + T("unsorted"))}</span>`
-          : "";
-        moved = true;
-      }
-      stale.hidden = !advice;
-      staleSep.hidden = !advice;
     }
     /* `LIST`, not the capped reply: a heartbeat would put `1.000+` back. */
     if (LIST.query !== null) {

@@ -199,12 +199,10 @@
       <!-- Switching a skip rule off starts a walk; this is what then moves. -->
       <span class="sep" id="scanning-sep" hidden>·</span>
       <span id="scanning" class="scanning" hidden></span>
-      <!-- Every query reads the unsorted tail: a week took ordering by path
-           from 1.9 ms to 21.5, and a rebuild put it back. -->
-      <span class="sep" id="stale-sep" hidden>·</span>
-      <span id="stale" class="stale" hidden></span>
       <span class="sep" id="path-note-sep">·</span>
-      <span id="path-note" data-t="connecting…"></span>
+      <!-- The index line, pressed, opens what Scour keeps on this machine. -->
+      <button type="button" id="path-note" class="mdoor" aria-expanded="false"
+              aria-controls="res" data-t="connecting…"></button>
       <!-- The status bar's right end: a disk waiting for an answer, how words
            are read for every search, and the two keys worth knowing. -->
       <span class="mright">
@@ -216,6 +214,25 @@
         <span class="mkeys"><kbd>:</kbd> <span data-t="filter"></span>
           <kbd>Alt</kbd>+<kbd>T</kbd> <span data-t="tab"></span></span>
       </span>
+    </div>
+
+    <!-- Over the list, above the status bar: filled by `resDraw`, asked
+         again every two seconds while it is open. -->
+    <div id="res" class="rp" role="region" hidden>
+      <div class="rp-h">
+        <div class="rp-t" id="rp-t"></div>
+        <div class="rp-sum" id="rp-sum"></div>
+        <button type="button" class="rp-x" id="rp-x" data-t-title="close" data-t-aria="close">×</button>
+      </div>
+      <div class="rp-g">
+        <section class="rp-blk" id="rp-disk"></section>
+        <div class="rp-col2">
+          <section class="rp-blk" id="rp-mem"></section>
+          <section class="rp-blk" id="rp-cpu"></section>
+          <section class="rp-blk" id="rp-run"></section>
+        </div>
+      </div>
+      <div class="rp-f" id="rp-foot"></div>
     </div>
 
     <!-- Choosing a face starts a program, so a second press confirms it. -->

@@ -1,0 +1,165 @@
+  /* ---------------- the resources panel ----------------
+     Over the list, left, a step above the status bar; not modal. The mock's
+     colours by the palette's names: its key is `--q-key`, its red `--q-not`.
+     Nothing on hover changes a size. */
+  .rp {
+    position: fixed; left: 12px; bottom: 36px; z-index: 55;
+    width: min(820px, calc(100vw - 24px)); max-height: calc(100vh - 140px);
+    overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px;
+    box-shadow: 0 22px 48px -20px rgba(0,0,0,.78);
+    font: 500 12.5px/1.45 var(--sans); color: var(--ink);
+  }
+  :root[data-theme="light"] .rp { box-shadow: 0 18px 40px -22px rgba(0,0,0,.45); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .rp { box-shadow: 0 18px 40px -22px rgba(0,0,0,.45); }
+  }
+  .rp[hidden] { display: none; }
+  .rp .rp-i {
+    width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor;
+    stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .rp button { font: inherit; color: inherit; cursor: pointer; }
+  .rp button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  .rp-h {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 11px 12px 10px 14px; border-bottom: 1px solid var(--line);
+  }
+  .rp-t { font-weight: 650; font-size: 14px; margin-right: auto; }
+  .rp-sum { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rp-pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px;
+    border-radius: 6px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line);
+    font-size: 12px; color: var(--ink-2); white-space: nowrap;
+  }
+  .rp-pill b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .rp .rp-x {
+    width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent;
+    background: none; color: var(--ink-3); font-size: 17px; line-height: 1; padding: 0;
+  }
+  .rp .rp-x:hover { border-color: var(--line); color: var(--ink); }
+
+  .rp-g { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  .rp-blk { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .rp-g > .rp-blk { border-right: 1px solid var(--line); }
+  .rp-col2 { display: flex; flex-direction: column; min-width: 0; }
+  .rp-col2 .rp-blk + .rp-blk { border-top: 1px solid var(--line); }
+  @media (max-width: 760px) {
+    .rp-g { grid-template-columns: minmax(0, 1fr); }
+    .rp-g > .rp-blk { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+  .rp-bh {
+    display: flex; align-items: center; gap: 8px; font: 650 12px var(--sans);
+    color: var(--ink-2); letter-spacing: .02em; text-transform: uppercase;
+  }
+  .rp-bh .n {
+    margin-left: auto; font: 600 12px var(--sans); color: var(--ink);
+    font-variant-numeric: tabular-nums; text-transform: none; letter-spacing: 0;
+  }
+  .rp-none { margin: 0; font-size: 12px; color: var(--ink-3); }
+
+  /* The rows on disk: name and note, size, path, the press, its share. */
+  .rp-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 10px;
+    border-radius: 8px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line-soft);
+  }
+  .rp-row .nm { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-weight: 600; }
+  .rp-row .nm small {
+    font-weight: 400; color: var(--ink-3); font-size: 11.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rp-row .sz { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rp-row .path {
+    font: 11.5px var(--mono); color: var(--ink-3); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: center;
+  }
+  .rp .acts { display: flex; justify-content: flex-end; gap: 6px; }
+  .rp-row .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line-soft); overflow: hidden; }
+  .rp-row .bar i { display: block; height: 100%; background: var(--q-key); border-radius: 2px; }
+  .rp .rp-btn {
+    height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel-2); font-size: 11.5px; font-weight: 600;
+    color: var(--ink-2); white-space: nowrap;
+  }
+  .rp .rp-btn:hover { border-color: var(--ink-3); color: var(--ink); }
+  .rp .rp-btn.danger { color: var(--q-not); }
+  .rp .rp-btn.danger:hover { border-color: var(--q-not); }
+  .rp .rp-btn.go { background: var(--q-not); border-color: var(--q-not); color: var(--ground); }
+  .rp .rp-btn.plain { border-color: transparent; background: none; }
+  .rp .rp-btn[disabled] { cursor: default; opacity: .6; }
+  .rp-sub {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+    margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--ink-2);
+  }
+  .rp-sub b { font-variant-numeric: tabular-nums; color: var(--ink); }
+  .rp-sub .acts { margin-left: auto; }
+  .rp-sub .rp-ask, .rp-sub .rp-said { flex-basis: 100%; }
+  /* An ask, in the row it is about: red for what deletes, the accent's for the rest. */
+  .rp-ask {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+    margin-top: 6px; padding: 8px 10px; border-radius: 7px; font-size: 12.5px; color: var(--ink);
+    background: var(--cap-neg); box-shadow: inset 0 0 0 1px var(--cap-neg-ring);
+  }
+  .rp-ask.calm { background: var(--cap); box-shadow: inset 0 0 0 1px var(--cap-ring); }
+  .rp-ask p { margin: 0; flex: 1 1 260px; }
+  .rp-said { grid-column: 1 / -1; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--q-key); }
+  .rp-said.bad { color: var(--q-not); }
+  .rp-said.quiet { font-weight: 500; color: var(--ink-2); }
+
+  /* Memory: the machine's bar, then a row a program with its share. */
+  .rp-sys { display: flex; flex-direction: column; gap: 5px; }
+  .rp-sysbar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; background: var(--line-soft); }
+  .rp-sysbar .us { background: var(--q-key); min-width: 3px; }
+  .rp-sysbar .oth { background: var(--ink-3); opacity: .35; }
+  .rp-sysnote { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11.5px; color: var(--ink-3); }
+  .rp-sysnote i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .rp-sysnote i.us { background: var(--q-key); }
+  .rp-sysnote i.oth { background: var(--ink-3); opacity: .35; }
+  .rp-mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; font-size: 12.5px; }
+  .rp-mrow .w { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .rp-mrow .w small { color: var(--ink-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-mrow .v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .rp-mrow .mbar { grid-column: 1 / -1; position: relative; height: 4px; border-radius: 2px; background: var(--line-soft); }
+  .rp-mrow .mbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--q-key); border-radius: 2px; }
+  /* The most the service has held, as an outline behind what it holds now. */
+  .rp-mrow .mbar u {
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--ink-3); opacity: .5; text-decoration: none;
+  }
+
+  /* The processor: the service's share of one core, a sample every two seconds. */
+  .rp-spark { position: relative; }
+  .rp-spark svg { display: block; width: 100%; height: 64px; }
+  .rp-spark .top { position: absolute; left: 0; top: -2px; font: 500 10px var(--mono); color: var(--ink-3); }
+  .rp-spark .grid { stroke: var(--line-soft); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .rp-spark .ln {
+    fill: none; stroke: var(--q-key); stroke-width: 1.6; stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .rp-spark .ar { fill: var(--q-key); opacity: .14; }
+  .rp-spark .end {
+    stroke: var(--q-key); stroke-width: 5; stroke-linecap: round; vector-effect: non-scaling-stroke;
+  }
+  .rp-fact { margin: 0; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  .rp-face {
+    display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 2px 8px;
+    align-items: center; font-size: 12.5px;
+  }
+  .rp-face .rp-i { color: var(--ink-3); }
+  .rp-face .c { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .rp-face small { grid-column: 2 / -1; color: var(--ink-3); font-size: 11.5px; }
+
+  .rp-f {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 14px;
+    border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2);
+  }
+  .rp-f .acts { margin-left: auto; }
+  .rp-f .dim { opacity: .55; }
+  .rp-f .rp-said { flex-basis: 100%; margin-top: 0; }
+  .rp-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px; background: var(--q-key);
+  }

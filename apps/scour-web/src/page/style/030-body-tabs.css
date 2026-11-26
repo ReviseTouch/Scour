@@ -46,8 +46,6 @@
   }
   .tabplus:hover { background: var(--hover); }
   .rail { overflow-y: auto; min-height: 0; }
-  /* Advice, not an alarm: the window works, it is only slower than it should be. */
-  .stale { color: var(--t1); }
   /* The previous query's counts, dimmed; the 0.12s delay stops a flicker. */
   .rail.settling { opacity: .55; transition: opacity .18s ease-in .12s; }
   @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }

@@ -285,9 +285,9 @@
   });
 
   /* The meter is one line. What a width cannot hold is shed least useful first:
-     the index facts, the rows read, the advisory said in two words, then the
-     advisory itself. The count and the time never go. */
-  const METER_STEPS = ["note", "rows", "stale-short", "stale"];
+     the rows read, the two keys worth knowing, then the index line, which
+     opens the resources panel. The count and the time never go. */
+  const METER_STEPS = ["rows", "keys", "note"];
   /* Takes steps until `fits(taken)` says so; pure, so it can be tested. */
   function meterPlan(steps, fits) {
     const taken = [];
@@ -300,10 +300,7 @@
   function fitMeter() {
     const meterEl = document.querySelector(".meter");
     if (!meterEl) return;
-    const set = (taken) => {
-      meterEl.dataset.drop = taken.filter((t) => t !== "stale-short").join(" ");
-      meterEl.dataset.stale = taken.includes("stale-short") ? "short" : "";
-    };
+    const set = (taken) => { meterEl.dataset.drop = taken.join(" "); };
     const taken = meterPlan(METER_STEPS, (so_far) => {
       set(so_far);
       return meterEl.scrollWidth <= meterEl.clientWidth;

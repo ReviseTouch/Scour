@@ -595,11 +595,94 @@ test('the meter sheds pieces least useful first, and only as many as it must', (
   vm.runInContext(section('  const METER_STEPS = [', '\n  function fitMeter() {'), c);
   const steps = vm.runInContext('METER_STEPS', c);
   const plan = vm.runInContext('meterPlan', c);
-  assert.deepEqual([...steps], ['note', 'rows', 'stale-short', 'stale']);
+  assert.deepEqual([...steps], ['rows', 'keys', 'note']);
   assert.deepEqual([...plan(steps, () => true)], [], 'nothing goes when it fits');
-  assert.deepEqual([...plan(steps, (taken) => taken.length >= 2)], ['note', 'rows'], 'the index facts, then the rows read');
-  assert.deepEqual([...plan(steps, (taken) => taken.length >= 3)], ['note', 'rows', 'stale-short'], 'the advisory is said short before it goes');
+  assert.deepEqual([...plan(steps, (taken) => taken.length >= 2)], ['rows', 'keys'], 'the rows read and the keys go before the line that opens the panel');
   assert.deepEqual([...plan(steps, () => false)], [...steps], 'and at worst all of it, never the count or the time');
+});
+
+// The resources panel's model: `scour_ui::resources` in the page's words.
+// Each case is a case of the Rust test named beside it, with the same inputs
+// and the same answers; the words are the Rust's, string for string.
+const RJ = (x) => JSON.parse(JSON.stringify(x));
+function resourcesModel() {
+  const c = context();
+  c.T = (s) => s;
+  vm.runInContext(section('  /* ---------------- the resources model', '\n  /* ---------------- the resources panel'), c);
+  return c;
+}
+const RES_RS = () => readFileSync(require('node:path').join(__dirname, '../../../crates/scour-ui/src/resources.rs'), 'utf8');
+const rustStrings = (block, keys) =>
+  [...block.matchAll(new RegExp(`\\b(${keys}): "((?:[^"\\\\]|\\\\.)*)"`, 'g'))].map((m) => [m[1], m[2].replace(/\\(.)/g, '$1')]);
+const rustBlock = (rs, from, until) => { const at = rs.indexOf(from); assert.ok(at >= 0, from); return rs.slice(at, rs.indexOf(until, at)); };
+
+test('every thing the service sends has a line, and only the settings cannot be emptied (resources.rs)', () => {
+  const c = resourcesModel();
+  // every_thing_the_service_sends_has_a_line_and_only_the_settings_cannot_be_emptied
+  for (const token of ['index', 'texts', 'previews', 'page', 'state']) {
+    const t = c.resThing(token);
+    assert.ok(t, token);
+    assert.equal(t.act.danger, token !== 'state', token);
+    assert.equal(t.act.ask === '', token === 'state', token);
+  }
+  assert.equal(c.resThing('nonsense'), null);
+  assert.ok(c.resRefused('open'));
+  assert.equal(c.resRefused(''), null);
+  assert.equal(c.resRefused('kept'), null);
+  assert.ok(c.resRestartAct().ask === '' && !c.resSort().danger);
+});
+
+test('the panel says what the Rust says, word for word (resources.rs)', () => {
+  const c = resourcesModel();
+  const rs = RES_RS();
+  const keys = 'token|label|note|button|ask|go|done';
+  const flat = (acts) => RJ(acts.flatMap((a) => keys.split('|').filter((k) => k in a).map((k) => [k, a[k]])));
+  const things = c.resThings().map((t) => ({ token: t.token, label: t.label, note: t.note, ...t.act }));
+  const thingsRs = rustBlock(rs, 'pub const THINGS', '\n];');
+  assert.deepEqual(flat(things), rustStrings(thingsRs, keys));
+  assert.deepEqual(RJ(things.map((t) => t.danger)), [...thingsRs.matchAll(/danger: (true|false)/g)].map((m) => m[1] === 'true'));
+  assert.deepEqual(flat([c.resSort()]), rustStrings(rustBlock(rs, 'pub const SORT', '\n};'), keys));
+  assert.deepEqual(flat([c.resRestartAct()]), rustStrings(rustBlock(rs, 'pub const RESTART', '\n};'), keys));
+  assert.deepEqual(RJ(c.resRunning()), [...rustBlock(rs, 'pub const RUNNING', '\n];').matchAll(/\("(\w+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]]));
+  assert.equal(c.resRefused('open'), /"open" => Some\("([^"]+)"\)/.exec(rs)[1]);
+  const consts = Object.fromEntries([...rs.matchAll(/pub const (\w+): &str =\s*"((?:[^"\\]|\\.)*)";/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(RJ(c.resWords()), consts);
+});
+
+test('shares are of one core and of the machine (resources.rs)', () => {
+  const c = resourcesModel();
+  // shares_are_of_one_core_and_of_the_machine
+  const a = { uptime_ms: 10000, service_ms: 1000, busy: 100, total: 1000 };
+  const b = { uptime_ms: 12000, service_ms: 1500, busy: 150, total: 1400 };
+  const s = c.resShares(a, b);
+  assert.ok(Math.abs(s.service - 25) < 0.01, JSON.stringify(s));
+  assert.ok(Math.abs(s.machine - 12.5) < 0.01, JSON.stringify(s));
+  // The same answer twice, and a service that started again in between.
+  assert.equal(c.resShares(a, a), null);
+  assert.equal(c.resShares(b, a), null);
+});
+
+test('uptime is said in its two largest units, and bars never vanish (resources.rs)', () => {
+  const c = resourcesModel();
+  // uptime_is_said_in_its_two_largest_units
+  assert.deepEqual(RJ(c.resUptime(42000)), ['{a} s', 42, 0]);
+  assert.deepEqual(RJ(c.resUptime(82000)), ['{a} min {b} s', 1, 22]);
+  assert.deepEqual(RJ(c.resUptime(4380000)), ['{a} h {b} min', 1, 13]);
+  assert.deepEqual(RJ(c.resUptime(97200000)), ['{a} d {b} h', 1, 3]);
+  // bars_are_shares_of_the_largest_and_never_vanish
+  assert.deepEqual(RJ(c.resBars([545, 0, 296])), [1, 0, 296 / 545]);
+  assert.deepEqual(RJ(c.resBars([2 ** 30, 1])), [1, 0.01]);
+  assert.deepEqual(RJ(c.resBars([])), []);
+  assert.deepEqual(RJ(c.resBars([0, 0])), [0, 0]);
+  // format.rs: compact_bytes
+  assert.equal(c.compactBytes(667264614, ','), '636,4 MB');
+  assert.equal(c.compactBytes(667264614, '.'), '636.4 MB');
+  assert.equal(c.compactBytes(2147483648, ','), '2,0 GB');
+  assert.equal(c.compactBytes(0, '.'), '0.0 MB');
+  assert.equal(c.compactBytes(1073741823, '.'), '1024.0 MB', 'the unit is chosen before the rounding, as there');
+  assert.equal(c.compactBytes(1310720, '.'), '1.2 MB', 'a tie goes to the even tenth');
+  assert.deepEqual([c.decimalMark('tr'), c.decimalMark('tr-TR'), c.decimalMark('en')], [',', ',', '.']);
+  assert.equal(c.resFill('{n} entries · parts: {parts}', { n: '7', parts: '8' }), '7 entries · parts: 8');
 });
 
 test('a refresh keeps a visible selected row on screen when arrivals push it down', async () => {
