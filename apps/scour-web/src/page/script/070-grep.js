@@ -24,6 +24,7 @@
 
   function setGrepOpen(open) {
     grepBar.hidden = !open;
+    holdTab();
     syncTriggers(q.value);
     if (!open) {
       if (GREP.stop) GREP.stop.abort();
@@ -39,6 +40,21 @@
     grepInput.select();
     drawGrepMeter(false);
     if (grepInput.value.trim()) grepSoon(false);
+  }
+
+  /* Another tab's pattern: the line open with it, or closed and empty. The
+     caret stays in the query, where a tab switch leaves it. */
+  function putGrep(text) {
+    grepInput.value = text;
+    drawGrepShadow();
+    if (!text) {
+      if (!grepBar.hidden) setGrepOpen(false);
+      return;
+    }
+    grepBar.hidden = false;
+    syncTriggers(q.value);
+    drawGrepMeter(false);
+    grepSoon(false);
   }
 
   function grepSoon(append) {
@@ -228,7 +244,7 @@
     const gf = row && GREP.files[+row.dataset.gfi];
     if (gf) launch(gf.path, "file");
   });
-  grepInput.addEventListener("input", () => { drawGrepShadow(); grepLaunchSync(); grepSoon(false); });
+  grepInput.addEventListener("input", () => { drawGrepShadow(); grepLaunchSync(); holdTab(); grepSoon(false); });
   grepInput.addEventListener("keydown", (e) => {
     if (grepLaunchKey(e)) return;
     if (e.key === "Escape") { e.preventDefault(); setGrepOpen(false); }

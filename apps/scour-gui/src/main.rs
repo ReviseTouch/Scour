@@ -456,6 +456,7 @@ fn main() -> Result<()> {
             query: args.query.clone(),
             sort: kept.sort.clone(),
             descending: kept.descending,
+            content: String::new(),
         },
     )));
     let front = tabs.borrow().front().clone();
@@ -729,12 +730,24 @@ fn main() -> Result<()> {
         panic!("deliberate — proving the crash log writes");
     }
 
+    // A query asked for on the command line is a search of its own: the front
+    // tab's content line comes back only with the front tab's query.
+    let reading = args.query.is_empty()
+        && tab_strip::put_content(&window, &mut state.borrow_mut(), &front.content);
     if !args.query.is_empty() {
         window.set_query(args.query.clone().into());
         window.invoke_query_changed(args.query.clone().into());
     } else if !front.query.is_empty() {
         window.set_query(front.query.as_str().into());
         window.invoke_query_changed(front.query.as_str().into());
+    } else if reading {
+        grep_ui::trigger(
+            &window,
+            &mut state.borrow_mut(),
+            &link,
+            &cat.borrow(),
+            false,
+        );
     }
 
     // A long line in one go: how to stand on the renderer's `i16` ceiling.

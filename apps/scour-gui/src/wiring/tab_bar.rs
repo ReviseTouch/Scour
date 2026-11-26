@@ -23,6 +23,7 @@ pub(crate) fn wire(wiring: &Wiring) {
             let state = Rc::clone(state);
             let tabs = Rc::clone(tabs);
             let cat = Rc::clone(cat);
+            let link = Rc::clone(link);
             let weak = window.as_weak();
             let keep = Rc::clone(&keep);
             move |moved: Option<scour_settings::SearchTab>| {
@@ -30,7 +31,7 @@ pub(crate) fn wire(wiring: &Wiring) {
                 draw_tabs(&w, &tabs.borrow(), &cat.borrow());
                 keep();
                 if let Some(tab) = moved {
-                    show_tab(&w, &state, &tab);
+                    show_tab(&w, &state, &link, &cat.borrow(), &tab);
                 }
             }
         };

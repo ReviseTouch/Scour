@@ -20,4 +20,8 @@ pub struct SearchTab {
     pub sort: String,
     #[serde(default)]
     pub descending: Option<bool>,
+    /// The content line's pattern, empty when the line is closed: a new tab
+    /// starts without one, and coming back to a tab brings its own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content: String,
 }

@@ -7,8 +7,12 @@
   let TABS_READ = false;
   let tabsTimer = 0;
   const strip = document.getElementById("stabs");
-  const freshTab = () => ({ query: "", sort: "modified", descending: true });
-  const nowTab = () => ({ query: q.value, sort: sortKey, descending: sortDesc });
+  const freshTab = () => ({ query: "", sort: "modified", descending: true, content: "" });
+  /* The content line's pattern is the tab's too, while the line is open. */
+  const nowTab = () => ({
+    query: q.value, sort: sortKey, descending: sortDesc,
+    content: grepBar.hidden ? "" : grepInput.value,
+  });
   const keepTabs = () => keep({ tabs: TABS, tab: TAB });
 
   function drawTabs() {
@@ -51,6 +55,8 @@
     if (COLUMNS.some((c) => c.key === t.sort)) sortKey = t.sort;
     sortDesc = typeof t.descending === "boolean" ? t.descending : true;
     q.value = t.query || "";
+    /* Before `render`, which holds what is on screen into this tab. */
+    putGrep(t.content || "");
     render();
     q.focus();
   }
@@ -132,11 +138,13 @@
       query: typeof t.query === "string" ? t.query : "",
       sort: typeof t.sort === "string" && t.sort ? t.sort : "modified",
       descending: typeof t.descending === "boolean" ? t.descending : true,
+      content: typeof t.content === "string" ? t.content : "",
     }));
     TAB = Math.min(Math.max(0, Number(s.tab) || 0), TABS.length - 1);
     const f = TABS[TAB];
     if (COLUMNS.some((c) => c.key === f.sort)) sortKey = f.sort;
     sortDesc = f.descending;
+    if (f.content) putGrep(f.content);
     drawTabs();
     if (f.query && f.query !== q.value) { q.value = f.query; return true; }
     return false;

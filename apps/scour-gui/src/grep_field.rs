@@ -136,6 +136,19 @@ fn rewrite(
     crate::grep_ui::trigger(w, s, link, cat, false);
 }
 
+/// Another tab's pattern in the field, the caret at its end. Searching is the
+/// caller's.
+pub fn load(w: &MainWindow, s: &mut State, text: &str) {
+    let n = text.chars().count();
+    w.set_grep_pattern(text.into());
+    s.grep.pattern = text.to_owned();
+    let f = &mut s.grep.field;
+    (f.caret, f.anchor, f.pill) = (n, n, None);
+    w.set_grep_hov(-1);
+    w.set_grep_put_at(i32::try_from(text.len()).unwrap_or(i32::MAX));
+    w.set_grep_put(w.get_grep_put() + 1);
+}
+
 /// A capsule's pill pressed: `drop`, `neg` or `fz`, on the capsule it was over.
 fn act(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, what: &str) {
     let Some((at, alt)) = s.grep.field.pill else {

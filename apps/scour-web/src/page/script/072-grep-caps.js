@@ -168,6 +168,7 @@
     grepInput.setSelectionRange(caretUnit, caretUnit);
     drawGrepShadow();
     grepLaunchSync();
+    holdTab();
     drawGrepMeter(true);
     grepSoon(false);
   }

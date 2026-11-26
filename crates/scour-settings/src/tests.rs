@@ -19,6 +19,7 @@ fn a_face_opens_newest_first_in_every_tab_and_keeps_the_rest() {
         query: q.into(),
         sort: sort.into(),
         descending: Some(false),
+        content: "icra".into(),
     };
     let s = Settings {
         sort: "size".into(),
@@ -36,6 +37,8 @@ fn a_face_opens_newest_first_in_every_tab_and_keeps_the_rest() {
         s.tabs.iter().map(|t| t.query.as_str()).collect::<Vec<_>>(),
         ["a", "b"]
     );
+    // What a tab reads inside its files stays with it.
+    assert!(s.tabs.iter().all(|t| t.content == "icra"));
     assert_eq!(s.tab, 1);
 }
 
@@ -349,6 +352,7 @@ fn tabs_are_kept_whole_and_capped() {
         query: "rapor".into(),
         sort: "size".into(),
         descending: Some(true),
+        content: "~rapor !taslak".into(),
     };
     Change {
         tabs: Some(vec![one.clone(); TABS + 5]),
@@ -367,6 +371,16 @@ fn tabs_are_kept_whole_and_capped() {
     }
     .apply(&mut s);
     assert_eq!(s.tabs.len(), TABS);
+
+    // A tab without a content line writes no key for it, and reads back as one.
+    let plain = SearchTab {
+        query: "a".into(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&plain).expect("write");
+    assert!(!json.contains("content"), "{json}");
+    let back: SearchTab = serde_json::from_str(r#"{"query":"a"}"#).expect("read");
+    assert_eq!(back, plain);
 }
 
 #[test]

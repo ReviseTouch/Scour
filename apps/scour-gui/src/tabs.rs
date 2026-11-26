@@ -9,12 +9,13 @@ pub struct Tabs {
     active: usize,
 }
 
-/// What a new tab starts as: nothing typed, newest first.
+/// What a new tab starts as: nothing typed, newest first, no content line.
 pub fn fresh() -> SearchTab {
     SearchTab {
         query: String::new(),
         sort: scour_core::SortKey::Modified.name().into(),
         descending: Some(true),
+        content: String::new(),
     }
 }
 
@@ -148,6 +149,19 @@ mod tests {
         assert_eq!(new, fresh());
         assert_eq!(queries(&t), ["rapor", ""]);
         assert_eq!(t.active(), 1);
+    }
+
+    #[test]
+    fn a_new_tab_has_no_content_line_and_the_old_one_keeps_its_own() {
+        let reading = SearchTab {
+            content: "~rapor".into(),
+            ..tab("ext:pdf")
+        };
+        let mut t = Tabs::kept(&[], 0, tab(""));
+        let new = t.open(reading.clone());
+        assert_eq!(new.content, "");
+        let back = t.switch(0, new).expect("switched");
+        assert_eq!(back, reading);
     }
 
     #[test]
