@@ -1,6 +1,6 @@
-  /* The content line's pattern: each piece the caret is not in a capsule in
-     the content colours, an excluded one red; the piece under the caret its
-     letters. A capsule's letters stay in the layer at no width (`.z`). */
+  /* The content line's pattern: every piece a capsule in the content
+     colours, an excluded one red, the one being written ringed. An
+     operator's letter stays in the layer at no width (`.z`) beside its art. */
   .grep-bar:not(.raw) input { caret-color: transparent; }
   .grep-bar:not(.raw) input::selection { background: transparent; color: transparent; }
   .grep-bar.raw input { color: var(--ink); }
@@ -15,6 +15,7 @@
   .gshadow .gc.gk-not.many .gw { background: var(--panel); }
   .gshadow .gc.gk-not { background: var(--cap-neg); --ring: var(--cap-neg-ring); --art: var(--q-not); }
   .gshadow .gc.hov { box-shadow: inset 0 0 0 1px var(--ink-3); }
+  .gshadow .gc.live { box-shadow: inset 0 0 0 2px var(--focus); }
   .gshadow .gc > .art { display: inline-flex; align-items: stretch; }
   /* The head: what kind of piece, small, on the capsule's own tint. */
   .gshadow .gc .gh {
@@ -25,6 +26,10 @@
   .gshadow .gc .gb { display: inline-flex; align-items: center; padding: 0 8px; }
   .gshadow .gc .gw { font: 600 13px/1 var(--mono); color: var(--ink); white-space: pre; }
   .gshadow .gc .gsim { font-style: normal; font-weight: 700; color: var(--art); margin-right: 2px; }
+  .gshadow .gc .gq { font-style: normal; font-weight: 700; color: var(--art); }
+  /* A word not written yet: room for the caret, a faint slot when alone. */
+  .gshadow .gc .gslot { display: inline-block; width: 1.5ch; height: 14px; vertical-align: middle; }
+  .gshadow .gc:not(.many) .gslot { box-shadow: inset 0 0 0 1px var(--ink-3); border-radius: 3px; opacity: .45; }
   /* Several alternatives: each an inner capsule, "or" between, quiet. */
   .gshadow .gc.many .gb { padding: 0 3px; }
   .gshadow .gc.many .gw {
@@ -34,12 +39,8 @@
   .gshadow .gc .gor, .gshadow .gand { font: 500 11px/1 var(--sans); color: var(--ink-3); }
   .gshadow .gc .gor { padding: 0 5px; }
   .gshadow .gand { padding: 0 6px 0 1px; }
+  .gshadow .gand.mute { visibility: hidden; }
   .gshadow .gc.gk-not .gw { text-decoration: line-through; text-decoration-color: var(--q-not); }
-  /* The letters being typed: each operator in its colour. */
-  .gshadow .gop.or { color: var(--q-key); font-weight: 700; }
-  .gshadow .gop.not { color: var(--q-not); font-weight: 700; }
-  .gshadow .gop.quote { color: var(--q-bad); font-weight: 700; }
-  .gshadow .gop.tilde { color: var(--q-bad); font-weight: 700; }
   /* The caret and the selection, drawn over the layer, as the query bar's. */
   .gdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
   .gdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }

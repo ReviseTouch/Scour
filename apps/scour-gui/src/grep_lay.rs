@@ -1,8 +1,11 @@
-//! The content field drawn: each piece of the pattern a capsule — its head,
+//! The content field drawn: every piece of the pattern a capsule — its head,
 //! its alternatives as inner capsules joined by "or", a quiet "and" between
-//! two of them — except the piece the caret is in, which stays letters. The
-//! pattern is the only model; this says where each column of it is drawn,
-//! so a press, the caret and the selection land on the text.
+//! two of them — the one being written too, so nothing moves when the caret
+//! comes or goes. An operator is not drawn as itself: `!` is the "without"
+//! head, `~` the "similar" head or a ≈, quotes are “ ”, `;` is the "or". Each
+//! still has its column, and the pattern is the only model: this says where
+//! each column is drawn, so a press, the caret and the selection land on the
+//! text.
 
 use scour_ui::pattern::{self, Alt, Piece, PieceKind};
 
@@ -12,19 +15,19 @@ const HEAD_PAD: f32 = 6.0;
 /// Inside an inner capsule, each side; either side of a quiet word.
 const CHIP_PAD: f32 = 5.0;
 const QUIET_PAD: f32 = 5.0;
+/// An alternative not written yet, in characters: room for the caret.
+const HOLE: f32 = 1.5;
 
 /// What a drawn bit is.
 pub const CHIP: i32 = 0;
 pub const WORD: i32 = 1;
 pub const QUIET: i32 = 2;
 pub const MARK: i32 = 3;
+/// An empty alternative on its own: where the word will be written.
+pub const SLOT: i32 = 4;
 
-/// The letters' roles: plain, `|`/`;`/parentheses, `!`, a quote, `~`.
+/// The letters' roles outside capsules: a regex or hex is all plain.
 pub const PLAIN: i32 = 0;
-pub const OR_OP: i32 = 1;
-pub const NOT_OP: i32 = 2;
-pub const QUOTE: i32 = 3;
-pub const TILDE: i32 = 4;
 
 /// One character of the field's face, and one of its small face.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +55,8 @@ pub struct CapBox {
     pub hw: f32,
     pub head: String,
     pub not: bool,
+    /// The caret is in it.
+    pub live: bool,
     /// Where each alternative is drawn, for the pill to act on the one
     /// under the pointer.
     pub alts: Vec<(f32, f32)>,
@@ -76,46 +81,66 @@ pub struct Lay {
     pub xs: Vec<f32>,
 }
 
-fn role(c: char) -> i32 {
-    match c {
-        '!' => NOT_OP,
-        '"' => QUOTE,
-        '~' => TILDE,
-        _ => OR_OP,
+/// Where a column is drawn, the first said winning: a letter's or a mark's
+/// before a capsule's edge.
+fn stop(stops: &mut Vec<(usize, f32)>, col: usize, x: f32) {
+    if !stops.iter().any(|&(c, _)| c == col) {
+        stops.push((col, x));
     }
 }
 
-/// One alternative as it reads in a capsule: `≈`, its quotes, its words.
+/// One alternative as it reads in a capsule — `≈`, its quotes, its words or
+/// the room for them — and where each of its columns is drawn.
+#[allow(clippy::too_many_arguments)]
 fn alt_bits(
     chars: &[char],
     a: &Alt,
     mark_similar: bool,
+    chip: bool,
     x: f32,
     m: Metrics,
     not: bool,
+    stops: &mut Vec<(usize, f32)>,
 ) -> Vec<Bit> {
     let mut out = Vec::new();
     let mut at = x;
-    let mut put = |kind: i32, text: String, out: &mut Vec<Bit>| {
-        let w = text.chars().count() as f32 * m.adv;
+    let mut put = |kind: i32, text: String, w: f32, at: &mut f32| {
         out.push(Bit {
-            x: at,
+            x: *at,
             w,
             kind,
             text,
             not,
         });
-        at += w;
+        *at += w;
     };
+    let quote = usize::from(a.phrase);
     if a.similar && mark_similar {
-        put(MARK, "≈".into(), &mut out);
+        stop(stops, a.start - 1 - quote, at);
+        put(MARK, "≈".into(), m.adv, &mut at);
     }
     if a.phrase {
-        put(MARK, "\u{201c}".into(), &mut out);
+        stop(stops, a.start - 1, at);
+        put(MARK, "\u{201c}".into(), m.adv, &mut at);
     }
-    put(WORD, chars[a.start..a.end].iter().collect(), &mut out);
-    if a.phrase {
-        put(MARK, "\u{201d}".into(), &mut out);
+    if a.is_hole() {
+        stop(stops, a.start, at + 2.0);
+        // In an inner capsule its ground is the room; alone, a slot of its own.
+        let kind = if chip { QUIET } else { SLOT };
+        put(kind, String::new(), HOLE * m.adv, &mut at);
+    } else {
+        for j in 0..a.end - a.start {
+            stop(stops, a.start + j, at + j as f32 * m.adv);
+        }
+        let word: String = chars[a.start..a.end].iter().collect();
+        let w = word.chars().count() as f32 * m.adv;
+        put(WORD, word, w, &mut at);
+        stop(stops, a.end, at);
+    }
+    if a.phrase && chars.get(a.end) == Some(&'"') {
+        stop(stops, a.end, at);
+        put(MARK, "\u{201d}".into(), m.adv, &mut at);
+        stop(stops, a.end + 1, at);
     }
     out
 }
@@ -124,7 +149,8 @@ fn bits_w(b: &[Bit]) -> f32 {
     b.iter().map(|b| b.w).sum()
 }
 
-/// One piece as a capsule from `x`: its box and what is drawn in it.
+/// One piece as a capsule from `x`: its box, what is drawn in it, and where
+/// each of its columns is.
 fn capsule(
     chars: &[char],
     at: usize,
@@ -132,7 +158,7 @@ fn capsule(
     x: f32,
     m: Metrics,
     words: &dyn Fn(&str) -> String,
-) -> (CapBox, Vec<Bit>) {
+) -> (CapBox, Vec<Bit>, Vec<f32>) {
     let not = p.kind == PieceKind::Not;
     let head = p.kind.label().map(words).unwrap_or_default();
     let hw = if head.is_empty() {
@@ -142,60 +168,69 @@ fn capsule(
     };
     let mut bits = Vec::new();
     let mut alts = Vec::new();
+    let mut stops = Vec::new();
     let mut cur = x + if hw > 0.0 { hw + PAD - 1.0 } else { PAD };
     // A lone similar word says it in its head; an alternative says it with ≈.
     let mark = p.kind != PieceKind::Similar;
-    match p.alts.len() {
-        0 => {
-            let raw: String = chars[p.start..p.end].iter().collect();
-            let w = raw.chars().count() as f32 * m.adv;
+    if p.alts.len() <= 1 {
+        let b = match p.alts.first() {
+            Some(a) => alt_bits(chars, a, mark, false, cur, m, not, &mut stops),
+            None => Vec::new(),
+        };
+        let w = bits_w(&b);
+        alts.push((cur, cur + w));
+        bits.extend(b);
+        cur += w;
+    } else {
+        let or = words(pattern::OR);
+        for (i, a) in p.alts.iter().enumerate() {
+            if i > 0 {
+                let w = or.chars().count() as f32 * m.small;
+                bits.push(Bit {
+                    x: cur + QUIET_PAD,
+                    w,
+                    kind: QUIET,
+                    text: or.clone(),
+                    not,
+                });
+                cur += w + 2.0 * QUIET_PAD;
+            }
+            let inner = alt_bits(chars, a, mark, true, cur + CHIP_PAD, m, not, &mut stops);
+            let w = bits_w(&inner) + 2.0 * CHIP_PAD;
             bits.push(Bit {
                 x: cur,
                 w,
-                kind: WORD,
-                text: raw,
+                kind: CHIP,
+                text: String::new(),
                 not,
             });
+            bits.extend(inner);
             alts.push((cur, cur + w));
             cur += w;
-        }
-        1 => {
-            let b = alt_bits(chars, &p.alts[0], mark, cur, m, not);
-            let w = bits_w(&b);
-            alts.push((cur, cur + w));
-            bits.extend(b);
-            cur += w;
-        }
-        _ => {
-            let or = words(pattern::OR);
-            for (i, a) in p.alts.iter().enumerate() {
-                if i > 0 {
-                    let w = or.chars().count() as f32 * m.small;
-                    bits.push(Bit {
-                        x: cur + QUIET_PAD,
-                        w,
-                        kind: QUIET,
-                        text: or.clone(),
-                        not,
-                    });
-                    cur += w + 2.0 * QUIET_PAD;
-                }
-                let inner = alt_bits(chars, a, mark, cur + CHIP_PAD, m, not);
-                let w = bits_w(&inner) + 2.0 * CHIP_PAD;
-                bits.push(Bit {
-                    x: cur,
-                    w,
-                    kind: CHIP,
-                    text: String::new(),
-                    not,
-                });
-                bits.extend(inner);
-                alts.push((cur, cur + w));
-                cur += w;
-            }
         }
     }
     let w = cur + PAD - x;
+    // `!`, `(`, a lone `~`: the head's start; `)`: the capsule's end. The
+    // columns between two drawn ones share the room between them.
+    stop(&mut stops, p.start, x + 2.0);
+    stop(&mut stops, p.end, x + w - 2.0);
+    stops.sort_by_key(|&(c, _)| c);
+    let mut xs = vec![0.0; p.end - p.start + 1];
+    for pair in stops.windows(2) {
+        let ((c0, x0), (c1, x1)) = (pair[0], pair[1]);
+        for c in c0..=c1 {
+            let t = if c1 > c0 {
+                (c - c0) as f32 / (c1 - c0) as f32
+            } else {
+                0.0
+            };
+            xs[c - p.start] = x0 + (x1 - x0) * t;
+        }
+    }
+    // Never back: a column is never drawn left of the one before it.
+    for i in 1..xs.len() {
+        xs[i] = xs[i].max(xs[i - 1]);
+    }
     let cap = CapBox {
         piece: at,
         start: p.start,
@@ -205,9 +240,10 @@ fn capsule(
         hw,
         head,
         not,
+        live: false,
         alts,
     };
-    (cap, bits)
+    (cap, bits, xs)
 }
 
 /// `text` laid out with the caret at char column `caret`. `content` false
@@ -226,97 +262,118 @@ pub fn lay(
     } else {
         Vec::new()
     };
-    let editing = pattern::piece_at(&pieces, caret);
-    let capsule_at = |i: usize| {
-        pieces
-            .iter()
-            .position(|p| p.start == i)
-            .filter(|&k| Some(k) != editing)
-    };
+    let live = pattern::piece_at(&pieces, caret);
     let mut out = Lay {
         xs: vec![0.0; n + 1],
         ..Lay::default()
     };
-    let (mut x, mut i) = (0.0f32, 0usize);
-    let mut after_cap = false;
-    while i < n {
-        if let Some(k) = capsule_at(i) {
-            let p = &pieces[k];
-            let (cap, bits) = capsule(&chars, k, p, x, m, words);
-            let span = (p.end - p.start).max(1) as f32;
-            for (j, col) in (p.start..=p.end).enumerate() {
-                out.xs[col] = x + cap.w * j as f32 / span;
-            }
-            x += cap.w;
-            i = p.end;
-            out.caps.push(cap);
-            out.bits.extend(bits);
-            after_cap = true;
-            continue;
+    let mut x = 0.0f32;
+    let mut i = 0usize;
+    for (k, p) in pieces.iter().enumerate() {
+        if i < p.start {
+            x = between(
+                &mut out,
+                &chars,
+                i,
+                p.start,
+                k > 0,
+                true,
+                caret,
+                x,
+                m,
+                words,
+            );
         }
-        // Spaces between two capsules: the quiet "and" every piece must hold.
-        if after_cap && chars[i].is_whitespace() {
-            let mut e = i;
-            while e < n && chars[e].is_whitespace() {
-                e += 1;
-            }
-            if e < n && capsule_at(e).is_some() {
-                let and = words(pattern::AND);
-                let aw = and.chars().count() as f32 * m.small;
-                let w = aw + 2.0 * QUIET_PAD + 2.0;
-                out.bits.push(Bit {
-                    x: x + QUIET_PAD + 1.0,
-                    w: aw,
-                    kind: QUIET,
-                    text: and,
-                    not: false,
-                });
-                for (j, col) in (i..=e).enumerate() {
-                    out.xs[col] = x + w * j as f32 / (e - i) as f32;
-                }
-                x += w;
-                i = e;
-                continue;
-            }
+        let (mut cap, bits, xs) = capsule(&chars, k, p, x, m, words);
+        cap.live = live == Some(k);
+        for (j, cx) in xs.into_iter().enumerate() {
+            out.xs[p.start + j] = cx;
         }
-        after_cap = false;
+        x += cap.w;
+        i = p.end;
+        out.caps.push(cap);
+        out.bits.extend(bits);
+    }
+    if i < n {
+        between(
+            &mut out,
+            &chars,
+            i,
+            n,
+            !pieces.is_empty(),
+            false,
+            caret,
+            x,
+            m,
+            words,
+        );
+    }
+    out
+}
+
+/// What stands between two capsules, or before or after them: spaces after
+/// a capsule are the quiet "and" — written when a capsule follows or the
+/// caret is there to start one, its room kept either way — and anything else
+/// is letters.
+#[allow(clippy::too_many_arguments)]
+fn between(
+    out: &mut Lay,
+    chars: &[char],
+    from: usize,
+    to: usize,
+    after_cap: bool,
+    before_cap: bool,
+    caret: usize,
+    x: f32,
+    m: Metrics,
+    words: &dyn Fn(&str) -> String,
+) -> f32 {
+    if after_cap && chars[from..to].iter().all(|c| c.is_whitespace()) {
+        let and = words(pattern::AND);
+        let aw = and.chars().count() as f32 * m.small;
+        let w = aw + 2.0 * QUIET_PAD + 2.0;
+        if before_cap || (caret > from && caret <= to) {
+            out.bits.push(Bit {
+                x: x + QUIET_PAD + 1.0,
+                w: aw,
+                kind: QUIET,
+                text: and,
+                not: false,
+            });
+        }
+        let span = (to - from) as f32;
+        for (j, col) in out.xs[from + 1..=to].iter_mut().enumerate() {
+            *col = x + w * (j + 1) as f32 / span;
+        }
+        return x + w;
+    }
+    let mut x = x;
+    for (i, &c) in chars.iter().enumerate().take(to).skip(from) {
         out.xs[i] = x;
-        let c = chars[i];
         if !c.is_whitespace() {
-            let r = editing
-                .map(|k| &pieces[k])
-                .filter(|p| p.ops.contains(&i))
-                .map_or(PLAIN, |_| role(c));
             match out.runs.last_mut() {
                 Some(last)
-                    if last.role == r
-                        && (last.x + last.text.chars().count() as f32 * m.adv - x).abs() < 0.01 =>
+                    if (last.x + last.text.chars().count() as f32 * m.adv - x).abs() < 0.01 =>
                 {
                     last.text.push(c);
                 }
                 _ => out.runs.push(Run {
                     text: c.to_string(),
                     x,
-                    role: r,
+                    role: PLAIN,
                 }),
             }
         }
         x += m.adv;
-        i += 1;
     }
-    out.xs[n] = x;
-    out
+    out.xs[to] = x;
+    x
 }
 
-/// The column a press at `x` puts the caret at: a capsule's end, or the
-/// letter edge nearest it.
+/// The column a press at `x` puts the caret at: the nearest drawn one, in a
+/// capsule as anywhere — the capsule stays one.
 pub fn hit(l: &Lay, x: f32) -> usize {
-    if let Some(c) = l.caps.iter().find(|c| x >= c.x && x <= c.x + c.w) {
-        return c.end;
-    }
-    let inside = |i: usize| l.caps.iter().any(|c| c.start < i && i < c.end);
     (0..l.xs.len())
-        .filter(|&i| !inside(i))
         .min_by(|&a, &b| (l.xs[a] - x).abs().total_cmp(&(l.xs[b] - x).abs()))
         .unwrap_or(0)
 }

@@ -1,7 +1,8 @@
 //! The content field's drawing and its pill and `:` menu, wired: the caret
 //! and the pointer come in, `grep_lay` says where everything is, and the
-//! pill's and the menu's choices rewrite the pattern through the shared model
-//! (`scour_ui::pattern`). The pattern text is the only model.
+//! pill's and the menu's choices, and the keys that open or empty a capsule,
+//! rewrite the pattern through the shared model (`scour_ui::pattern`). The
+//! pattern text is the only model.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -63,6 +64,7 @@ pub fn redraw(w: &MainWindow, s: &mut State, cat: &Catalogue) {
         hw: c.hw,
         head: c.head.as_str().into(),
         not: c.not,
+        live: c.live,
     })));
     w.set_grep_bits(model(l.bits.iter().map(|b| GrepBit {
         x: b.x,
@@ -201,6 +203,35 @@ fn hover(w: &MainWindow, s: &mut State, x: f32) {
     w.set_grep_hov_fz_on(a.is_some_and(|a| a.similar));
 }
 
+/// A key the pattern answers itself (`pattern::edit`): Backspace in an empty
+/// capsule takes it and its operator, a space in one is not written, a quote
+/// comes with its pair. False: the field types it.
+fn key(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, key: &str) -> bool {
+    let f = &s.grep.field;
+    if s.grep.mode != GrepMode::Text || f.anchor != f.caret {
+        return false;
+    }
+    let text = w.get_grep_pattern().to_string();
+    let done = match key {
+        "\u{8}" => edit::backspace(&text, f.caret),
+        " " => edit::space(&text, f.caret),
+        "\"" => edit::quote(&text, f.caret),
+        _ => None,
+    };
+    let Some((after, caret)) = done else {
+        return false;
+    };
+    if after != text {
+        rewrite(w, s, link, cat, after, caret);
+    } else if caret != s.grep.field.caret {
+        (s.grep.field.caret, s.grep.field.anchor) = (caret, caret);
+        w.set_grep_put_at(byte_of(&text, caret) as i32);
+        w.set_grep_put(w.get_grep_put() + 1);
+        redraw(w, s, cat);
+    }
+    true
+}
+
 /// A line of what `:` offers chosen.
 fn pick(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, i: usize) {
     let Some(item) = s.grep.field.menu.get(i).copied() else {
@@ -262,6 +293,15 @@ pub fn wire(
         window.on_grep_act(move |what| {
             let Some(w) = weak.upgrade() else { return };
             act(&w, &mut state.borrow_mut(), &link, &cat.borrow(), &what);
+        });
+    }
+    {
+        let (weak, state, link, cat) = (weak(), Rc::clone(state), Rc::clone(link), Rc::clone(cat));
+        window.on_grep_key(move |k| {
+            let Some(w) = weak.upgrade() else {
+                return false;
+            };
+            key(&w, &mut state.borrow_mut(), &link, &cat.borrow(), &k)
         });
     }
     {

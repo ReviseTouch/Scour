@@ -247,6 +247,7 @@
   grepInput.addEventListener("input", () => { drawGrepShadow(); grepLaunchSync(); holdTab(); grepSoon(false); });
   grepInput.addEventListener("keydown", (e) => {
     if (grepLaunchKey(e)) return;
+    if (grepPatternKey(e)) return;
     if (e.key === "Escape") { e.preventDefault(); setGrepOpen(false); }
     else if (e.key === "Enter") { e.preventDefault(); runGrep(false); }
   });

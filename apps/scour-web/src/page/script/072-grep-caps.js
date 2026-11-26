@@ -1,56 +1,78 @@
   /* ---------------- the content field ----------------
-   * The pattern drawn behind its input: every piece but the one under the
-   * caret a capsule in the content colours, that one plain letters. Every
-   * letter of the pattern stays in the layer once and in order — a capsule's
-   * at no width, beside the art that says it — so a text offset is always
-   * somewhere, as in the query bar. The text is the only model. */
+   * The pattern drawn behind its input: every piece a capsule in the content
+   * colours, an excluded one red — the one being written too, so nothing
+   * moves when the caret comes or goes. An operator is not drawn as itself:
+   * `!` is the "without" head, `~` the "similar" head or a ≈, quotes are
+   * “ ”, `;` the "or". Every letter of the pattern stays in the layer once
+   * and in order — an operator's at no width (`.z`) beside the art that says
+   * it — so a text offset is always somewhere. The text is the only model. */
 
-  /* The piece under the caret: its letters, each operator in its colour. */
-  function grepLettersHtml(chars, p) {
-    const ops = new Set(p.ops);
-    let out = "";
-    for (let i = p.start; i < p.end; i++) {
-      const c = chars[i];
-      if (!ops.has(i)) { out += escape_(c); continue; }
-      const role = c === "!" ? "not" : c === '"' ? "quote" : c === "~" ? "tilde" : "or";
-      out += '<span class="gop ' + role + '">' + escape_(c) + "</span>";
-    }
-    return '<span class="glive">' + out + "</span>";
+  const gz = (t) => (t ? '<span class="z">' + escape_(t) + "</span>" : "");
+
+  /* Where alternative `a` begins and ends in the text, its own operators
+     (`~` drawn as ≈, its quotes) inside. */
+  function grepAltSpan(chars, a, mark) {
+    const q = a.phrase ? 1 : 0;
+    const from = a.similar && mark ? a.start - 1 - q : a.start - q;
+    const closed = a.phrase && chars[a.end] === '"';
+    return [from, closed ? a.end + 1 : a.end, closed];
   }
 
-  /* A piece at rest: its head, then each alternative — a phrase in its
-     quotes, a forgiving one after `≈` — joined by "or". */
-  function grepCapHtml(chars, p, k) {
-    const raw = chars.slice(p.start, p.end).join("");
+  /* One alternative: ≈, its quotes, its letters — or a slot for them. */
+  function grepAltHtml(chars, a, j, mark) {
+    const q = a.phrase ? 1 : 0;
+    let out = "";
+    if (a.similar && mark) out += gz(chars[a.start - 1 - q]) + '<i class="art gsim">≈</i>';
+    if (a.phrase) out += gz('"') + '<i class="art gq">“</i>';
+    out += a.start === a.end ? '<span class="art gslot" data-c="' + a.start + '"></span>'
+      : escape_(chars.slice(a.start, a.end).join(""));
+    if (a.phrase && chars[a.end] === '"') out += '<i class="art gq">”</i>' + gz('"');
+    return '<span class="gw' + (a.start === a.end ? " hole" : "") + '" data-alt="' + j + '">' + out + "</span>";
+  }
+
+  /* A piece as its capsule: what opens it (`!`, `(`, a lone `~`) at no width
+     before its head, each alternative with what joins it to the one before
+     inside it, what closes it (`)`) at its end. */
+  function grepCapHtml(chars, p, k, live) {
     const head = PIECE_HEAD[p.kind];
-    const alt = (a, j) => {
-      const w = chars.slice(a.start, a.end).join("");
-      return '<span class="gw" data-alt="' + j + '">' + (a.similar ? '<i class="gsim">≈</i>' : "") +
-        escape_(a.phrase ? "“" + w + "”" : w) + "</span>";
-    };
-    const body = p.alts.length
-      ? p.alts.map((a, j) => (j ? '<span class="gor">' + escape_(T("or")) + "</span>" : "") + alt(a, j)).join("")
-      : '<span class="gw">' + escape_(raw) + "</span>";
-    return '<span class="gc gk-' + p.kind + (p.alts.length > 1 ? " many" : "") + '" data-k="' + k + '" data-a="' + p.start +
-      '" data-b="' + p.end + '"><span class="z">' + escape_(raw) + '</span><span class="art">' +
-      (head ? '<span class="gh">' + escape_(T(head)) + "</span>" : "") + '<span class="gb">' + body + "</span></span></span>";
+    const mark = p.kind !== "similar";
+    const spans = p.alts.map((a) => grepAltSpan(chars, a, mark));
+    const first = spans.length ? spans[0][0] : p.end;
+    let body = "", at = first;
+    p.alts.forEach((a, j) => {
+      if (j) body += '<span class="art gor">' + escape_(T("or")) + "</span>";
+      const alt = grepAltHtml(chars, a, j, mark);
+      body += at < spans[j][0] ? alt.replace('">', '">' + gz(chars.slice(at, spans[j][0]).join(""))) : alt;
+      at = spans[j][1];
+    });
+    return '<span class="gc gk-' + p.kind + (p.alts.length > 1 ? " many" : "") + (live ? " live" : "") +
+      '" data-k="' + k + '" data-a="' + p.start + '" data-b="' + p.end + '">' +
+      gz(chars.slice(p.start, first).join("")) +
+      (head ? '<span class="art gh">' + escape_(T(head)) + "</span>" : "") +
+      '<span class="gb">' + body + "</span>" + gz(chars.slice(at, p.end).join("")) + "</span>";
   }
 
   /* The whole layer for `text` with the caret at column `caret` (-1: none,
-     or a selection). A quiet "and" between two capsules; none beside the
-     letters, so typing a piece never moves its own line. */
+     or a selection). Spaces after a capsule are a quiet "and", its room kept
+     and its word written when a capsule follows or the caret is there to
+     start one; anything else outside a capsule is letters. */
   function grepLayerHtml(text, caret) {
     const chars = Array.from(text);
     const pieces = patternPieces(text);
     const live = caret < 0 ? null : patternPieceAt(pieces, caret);
+    const gap = (a, b, before) => {
+      const run = chars.slice(a, b).join("");
+      if (!a || !pieces.length || /\S/u.test(run)) return escape_(run);
+      const said = before || (caret > a && caret <= b);
+      return '<span class="art gand' + (said ? "" : " mute") + '">' + escape_(T("and")) + "</span>" + gz(run);
+    };
     let html = "", at = 0;
     pieces.forEach((p, k) => {
-      html += escape_(chars.slice(at, p.start).join(""));
-      if (k > 0 && k !== live && k - 1 !== live) html += '<span class="art gand">' + escape_(T("and")) + "</span>";
-      html += k === live ? grepLettersHtml(chars, p) : grepCapHtml(chars, p, k);
+      if (at < p.start) html += gap(at, p.start, true);
+      html += grepCapHtml(chars, p, k, k === live);
       at = p.end;
     });
-    return html + escape_(chars.slice(at).join(""));
+    return at < chars.length ? html + gap(at, chars.length, false) : html;
   }
 
   /* Columns against the input's UTF-16 offsets. */
@@ -79,7 +101,9 @@
       acceptNode: (n) => (n.parentElement && n.parentElement.closest(".art") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
     });
     for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-      GSEGS.push({ node: n, start: acc, end: acc + n.nodeValue.length });
+      const el = n.parentElement;
+      const kind = el.classList.contains("z") ? "z" : el.closest(".gw") ? "l" : "t";
+      GSEGS.push({ node: n, start: acc, end: acc + n.nodeValue.length, kind, cap: el.closest(".gc") });
       acc += n.nodeValue.length;
     }
     if (GPILL) markGrepHover();
@@ -93,73 +117,86 @@
     return [...r.getClientRects()].filter((x) => x.width > 0.1);
   }
 
-  /* Where the caret is drawn for an input offset: left of the letter there,
-     right of the one before, or the start of the line. */
+  /* Where a segment's offset `i` is drawn: an operator's at its no-width
+     place, a letter's left edge, or the right edge of the one before. */
+  function grepSegX(seg, i) {
+    if (seg.kind === "z") return seg.node.parentElement.getBoundingClientRect().left;
+    if (i < seg.end - seg.start) { const r = grepRects(seg, i, i + 1)[0]; if (r) return r.left; }
+    const r = grepRects(seg, i - 1, i).pop();
+    return r ? r.right : seg.node.parentElement.getBoundingClientRect().left;
+  }
+
+  /* Where the caret is drawn for an input offset: in a slot waiting for its
+     word, after a word's last letter, at the end of a capsule it closes, or
+     before what stands there. */
   function grepCaretBox(off) {
-    for (const s of GSEGS) {
-      if (off < s.start || off >= s.end) continue;
-      const r = grepRects(s, off - s.start, off - s.start + 1)[0];
-      if (r) return r.left;
-    }
-    for (const s of GSEGS) {
-      if (off <= s.start || off > s.end) continue;
-      const r = grepRects(s, off - s.start - 1, off - s.start).pop();
-      if (r) return r.right;
-    }
+    const text = grepInput.value;
+    const col = grepCol(text, off);
+    const slot = grepShadow.querySelector('.gslot[data-c="' + col + '"]');
+    if (slot) return slot.getBoundingClientRect().left + 3;
+    const word = GSEGS.find((s) => s.kind === "l" && s.end === off && s.end > s.start);
+    if (word) return grepSegX(word, off - word.start);
+    const cap = [...grepShadow.querySelectorAll(".gc")].find((el) => grepUnit(text, +el.dataset.b) === off);
+    const last = cap && GSEGS.filter((s) => s.cap === cap).pop();
+    if (last) return last.kind === "z" ? last.node.parentElement.getBoundingClientRect().right : grepSegX(last, last.end - last.start);
+    const at = GSEGS.find((s) => off >= s.start && off < s.end);
+    if (at) return grepSegX(at, off - at.start);
+    const end = GSEGS[GSEGS.length - 1];
+    if (end) return end.kind === "z" ? end.node.parentElement.getBoundingClientRect().right : grepSegX(end, end.end - end.start);
     return grepShadow.getBoundingClientRect().left - grepShadow.scrollLeft;
   }
 
-  /* The caret, or the selection's boxes; the layer scrolled to keep the caret in sight. */
+  /* The caret, or the selection's box; the layer scrolled to keep the caret in sight. */
   function drawGrepDecor() {
     grepDecor.innerHTML = "";
     if (document.activeElement !== grepInput) return;
     const box = grepDecor.getBoundingClientRect();
     const a = grepInput.selectionStart ?? 0, c = grepInput.selectionEnd ?? 0;
+    const sb = grepShadow.getBoundingClientRect();
+    const moving = grepInput.selectionDirection === "backward" ? a : c;
+    let x = grepCaretBox(moving);
+    if (x > sb.right - 2 || x < sb.left) {
+      grepShadow.scrollLeft += x > sb.right - 2 ? x - sb.right + 24 : x - sb.left - 24;
+      x = grepCaretBox(moving);
+    }
     if (a === c) {
-      let x = grepCaretBox(a);
-      const sb = grepShadow.getBoundingClientRect();
-      if (x > sb.right - 2 || x < sb.left) {
-        grepShadow.scrollLeft += x > sb.right - 2 ? x - sb.right + 24 : x - sb.left - 24;
-        x = grepCaretBox(a);
-      }
       grepDecor.innerHTML = '<div class="qcaret" style="left:' + (x - box.left) + 'px;top:7px;height:22px"></div>';
       return;
     }
-    const text = grepInput.value;
-    const lo = Math.min(a, c), hi = Math.max(a, c);
-    const boxes = [];
-    for (const el of grepShadow.querySelectorAll(".gc")) {
-      if (grepUnit(text, +el.dataset.a) < hi && grepUnit(text, +el.dataset.b) > lo) boxes.push(el.getBoundingClientRect());
-    }
-    for (const s of GSEGS) {
-      const from = Math.max(lo, s.start), to = Math.min(hi, s.end);
-      if (from < to) boxes.push(...grepRects(s, from - s.start, to - s.start));
-    }
-    grepDecor.innerHTML = boxes.map((r) => '<div class="qsel" style="left:' + (r.left - box.left) + "px;top:6px;width:" +
-      r.width + 'px;height:24px"></div>').join("");
+    const lo = grepCaretBox(Math.min(a, c)), hi = grepCaretBox(Math.max(a, c));
+    grepDecor.innerHTML = '<div class="qsel" style="left:' + (lo - box.left) + "px;top:6px;width:" +
+      Math.max(0, hi - lo) + 'px;height:24px"></div>';
   }
 
-  /* The input offset under a point: a capsule's end, or the letter there. */
-  function grepOffsetAt(x, y) {
-    grepInput.style.pointerEvents = "none";
-    grepShadow.style.pointerEvents = "auto";
-    const el = document.elementFromPoint(x, y);
-    let pos = null;
-    if (document.caretPositionFromPoint) {
-      const p = document.caretPositionFromPoint(x, y);
-      if (p) pos = { node: p.offsetNode, off: p.offset };
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(x, y);
-      if (r) pos = { node: r.startContainer, off: r.startOffset };
-    }
-    grepInput.style.pointerEvents = "";
-    grepShadow.style.pointerEvents = "";
+  /* The input offset nearest a point: a column in a capsule as anywhere. */
+  function grepOffsetAt(x) {
     const text = grepInput.value;
-    const cap = el && el.closest && el.closest(".gc");
-    if (cap && grepShadow.contains(cap)) return grepUnit(text, +cap.dataset.b);
-    const seg = pos && GSEGS.find((s) => s.node === pos.node);
-    if (seg) return seg.start + Math.min(pos.off, seg.end - seg.start);
-    return x < grepShadow.getBoundingClientRect().left + 4 ? 0 : text.length;
+    const n = Array.from(text).length;
+    let best = 0, gap = Infinity;
+    for (let col = 0; col <= n; col++) {
+      const u = grepUnit(text, col);
+      const d = Math.abs(grepCaretBox(u) - x);
+      if (d < gap) { gap = d; best = u; }
+    }
+    return best;
+  }
+
+  /* Backspace in an empty capsule, a space with no word in it yet, a quote:
+     the pattern's own (`pattern::edit`). True when it was answered here. */
+  function grepPatternKey(e) {
+    if (GREP.mode !== "text" || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
+    if (e.key !== "Backspace" && e.key !== " " && e.key !== '"') return false;
+    const a = grepInput.selectionStart ?? 0;
+    if (a !== grepInput.selectionEnd) return false;
+    const text = grepInput.value, caret = grepCol(text, a);
+    const done = e.key === "Backspace" ? patternBackspace(text, caret)
+      : e.key === " " ? patternSpace(text, caret) : patternQuote(text, caret);
+    if (!done) return false;
+    e.preventDefault();
+    const [after, at] = done;
+    if (after !== text) grepSetText(after, grepUnit(after, at));
+    else { grepInput.setSelectionRange(grepUnit(text, at), grepUnit(text, at)); drawGrepShadow(); }
+    return true;
   }
 
   /* The field's text changed from outside the keyboard: drawn, read again. */
@@ -178,7 +215,7 @@
     if (e.button !== 0 || GREP.mode !== "text") return;
     e.preventDefault();
     grepInput.focus({ preventScroll: true });
-    const v = grepInput.value, off = grepOffsetAt(e.clientX, e.clientY);
+    const v = grepInput.value, off = grepOffsetAt(e.clientX);
     if (e.detail >= 3) { grepInput.setSelectionRange(0, v.length); return; }
     if (e.detail === 2) {
       let lo = off, hi = off;
@@ -194,7 +231,7 @@
   document.addEventListener("mousemove", (e) => {
     if (!grepDrag) return;
     if (!(e.buttons & 1)) { grepDrag = null; return; }
-    const off = grepOffsetAt(e.clientX, e.clientY), a = grepDrag.anchor;
+    const off = grepOffsetAt(e.clientX), a = grepDrag.anchor;
     grepInput.setSelectionRange(Math.min(a, off), Math.max(a, off), off < a ? "backward" : "forward");
   });
   document.addEventListener("mouseup", () => { grepDrag = null; });

@@ -218,6 +218,8 @@ export component MainWindow inherits Window {
     callback grep-caret(int, int);
     callback grep-hit(length) -> int;
     callback grep-hover(length);
+    // A key the pattern answers itself; false lets the field type it.
+    callback grep-key(string) -> bool;
     // The capsule under the pointer, and what its pill offers.
     in property <int> grep-hov: -1;
     in property <length> grep-hov-x;
@@ -2358,6 +2360,7 @@ export component MainWindow inherits Window {
                                 sels: root.grep-sels;
                                 hov: root.grep-hov;
                                 shift: grep-area.shift;
+                                focused: grep-input.has-focus;
                             }
                             grep-input := TextInput {
                                 x: 0px;
@@ -2407,6 +2410,13 @@ export component MainWindow inherits Window {
                                         root.grep-toggled();
                                         return accept;
                                     }
+                                    // Backspace in an empty capsule, a space with
+                                    // no word in it yet, a quote: the pattern's own.
+                                    if (!e.modifiers.control && !e.modifiers.alt
+                                        && (e.text == Key.Backspace || e.text == " " || e.text == "\"")
+                                        && root.grep-key(e.text)) {
+                                        return accept;
+                                    }
                                     if (e.modifiers.control && (e.text == "g" || e.text == "G")) {
                                         root.grep-toggled();
                                         return accept;
@@ -2415,7 +2425,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                             // Presses and the pointer, by where things are drawn:
-                            // a capsule pressed puts the caret at its end.
+                            // a press in a capsule puts the caret in it.
                             TouchArea {
                                 mouse-cursor: text;
                                 property <int> anchor: 0;

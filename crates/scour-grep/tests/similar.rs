@@ -120,9 +120,20 @@ fn a_quoted_or_escaped_tilde_is_a_tilde() {
     assert_eq!(marked("\"~rapor\"", "a~rapor").unwrap(), ["~rapor"]);
     assert_eq!(marked("\\~rapor", "bir rapar"), None);
     assert_eq!(marked("\\~rapor", "a~rapor").unwrap(), ["~rapor"]);
-    assert_eq!(marked("~", "a ~ b").unwrap(), ["~"]);
-    assert_eq!(marked("~|yok", "a ~ b").unwrap(), ["~"]);
-    assert_eq!(marked("yok|~", "a ~ b").unwrap(), ["~"]);
+    assert_eq!(marked("\"~\"", "a ~ b").unwrap(), ["~"]);
+    assert_eq!(marked("\\~", "a ~ b").unwrap(), ["~"]);
+}
+
+/// A bare `~` is a similar word not written yet, as a bare `!` is a word not
+/// yet ruled out: the field shows it as a capsule waiting for its word, so it
+/// looks for nothing.
+#[test]
+fn a_bare_tilde_looks_for_nothing() {
+    let empty = Expr::new(&Needle::Text("~".into()), false);
+    assert!(matches!(empty, Err(scour_grep::BadPattern::Empty)));
+    assert_eq!(marked("~|yok", "a ~ b"), None);
+    assert_eq!(marked("yok|~", "a ~ yok").unwrap(), ["yok"]);
+    assert_eq!(marked("a ~", "a ~ b").unwrap(), ["a"]);
 }
 
 #[test]

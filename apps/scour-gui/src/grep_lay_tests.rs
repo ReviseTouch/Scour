@@ -35,7 +35,7 @@ fn s(v: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn every_piece_but_the_edited_one_is_a_capsule() {
+fn every_piece_is_a_capsule_the_one_being_written_too() {
     let l = lay(SAMPLE, cols(SAMPLE), true, M, &same);
     assert_eq!(
         read(&l),
@@ -47,59 +47,100 @@ fn every_piece_but_the_edited_one_is_a_capsule() {
             ),
             ("similar".into(), s(&["rapor"])),
             ("either".into(), s(&["a", "or", "≈", "b"])),
+            ("without".into(), s(&["taslak"])),
         ]
     );
-    // The caret's piece stays letters, its `!` in its own colour.
-    assert_eq!(
-        l.runs,
-        vec![
-            Run {
-                text: "!".into(),
-                x: l.xs[32],
-                role: NOT_OP
-            },
-            Run {
-                text: "taslak".into(),
-                x: l.xs[33],
-                role: PLAIN
-            },
-        ]
-    );
-    // "and" between capsules, a plain space before the letters.
+    // No letters outside a capsule, and the caret's one is ringed.
+    assert!(l.runs.is_empty());
+    let live: Vec<bool> = l.caps.iter().map(|c| c.live).collect();
+    assert_eq!(live, [false, false, false, false, true]);
     let ands = l.bits.iter().filter(|b| b.text == "and").count();
-    assert_eq!(ands, 3);
-    assert!((l.xs[32] - l.xs[31] - M.adv).abs() < 0.01);
+    assert_eq!(ands, 4);
 }
 
 #[test]
-fn the_caret_in_a_piece_gives_it_back_its_letters() {
-    // In `~rapor`: the tilde is an operator there, and the rest are capsules.
-    let l = lay(SAMPLE, 22, true, M, &same);
-    let heads: Vec<String> = l.caps.iter().map(|c| c.head.clone()).collect();
-    assert_eq!(heads, ["", "exact phrase", "either", "without"]);
-    let r: Vec<(&str, i32)> = l.runs.iter().map(|r| (r.text.as_str(), r.role)).collect();
-    assert_eq!(r, [("~", TILDE), ("rapor", PLAIN)]);
-    // The letters are as wide as letters: the caret walks them one by one.
-    for c in 20..26 {
+fn nothing_moves_when_the_caret_comes_or_goes() {
+    let n = cols(SAMPLE);
+    let at = |c: usize| lay(SAMPLE, c, true, M, &same);
+    let (end, start, inside) = (at(n), at(0), at(22));
+    let boxes = |l: &Lay| l.caps.iter().map(|c| (c.x, c.w)).collect::<Vec<_>>();
+    assert_eq!(boxes(&end), boxes(&start));
+    assert_eq!(boxes(&end), boxes(&inside));
+    assert_eq!(end.xs, start.xs);
+    assert_eq!(end.xs, inside.xs);
+    // Columns never go back.
+    assert!(end.xs.windows(2).all(|w| w[1] >= w[0]));
+}
+
+#[test]
+fn the_caret_walks_the_letters_and_an_operator_is_its_art() {
+    let l = lay(SAMPLE, 33, true, M, &same);
+    let not = l.caps.last().unwrap();
+    assert!(not.not && not.live);
+    // `!` stands at the head's start, the word after the head, a letter apart.
+    assert!((l.xs[32] - (not.x + 2.0)).abs() < 0.01);
+    assert!(l.xs[33] > not.x + not.hw);
+    for c in 33..39 {
         assert!((l.xs[c + 1] - l.xs[c] - M.adv).abs() < 0.01);
     }
-    let not = l.caps.last().unwrap();
-    assert!(not.not);
-    assert_eq!(read(&l)[3].1, s(&["taslak"]));
+    // The phrase's quotes are its marks: inside them, the words.
+    let phrase = &l.caps[1];
+    assert!(l.xs[5] >= phrase.x + phrase.hw);
+    assert!((l.xs[7] - l.xs[6] - M.adv).abs() < 0.01);
+    assert!(l.xs[19] <= phrase.x + phrase.w);
 }
 
 #[test]
-fn a_press_on_a_capsule_lands_at_its_end_and_between_on_a_letter() {
+fn an_operator_opens_a_capsule_with_room_for_its_word() {
+    // `!` after a word: a "without" capsule, the caret in its slot.
+    let l = lay("ara !", 5, true, M, &same);
+    assert_eq!(l.caps.len(), 2);
+    let not = &l.caps[1];
+    assert_eq!(not.head, "without");
+    assert!(not.live && not.not);
+    assert!(l.xs[5] > not.x + not.hw && l.xs[5] < not.x + not.w);
+    assert!(l.bits.iter().any(|b| b.kind == SLOT));
+    // `;` after a word: "either", the word and an empty inner capsule.
+    let l = lay("ara;", 4, true, M, &same);
+    assert_eq!(read(&l), vec![("either".into(), s(&["ara", "or", ""]))]);
+    let hole = l.caps[0].alts[1];
+    assert!(l.xs[4] > hole.0 && l.xs[4] < hole.1);
+    // Two quotes: the caret between the marks.
+    let l = lay("\"\"", 1, true, M, &same);
+    assert_eq!(read(&l)[0].0, "exact phrase");
+    let marks: Vec<f32> = l
+        .bits
+        .iter()
+        .filter(|b| b.kind == MARK)
+        .map(|b| b.x)
+        .collect();
+    assert!(marks.len() == 2 && l.xs[1] > marks[0] && l.xs[1] < marks[1]);
+}
+
+#[test]
+fn the_and_keeps_its_room_and_is_written_when_the_caret_starts_a_piece() {
+    let wrote = |l: &Lay| l.bits.iter().any(|b| b.text == "and");
+    let typing = lay("ara ", 4, true, M, &same);
+    let away = lay("ara ", 1, true, M, &same);
+    assert!(wrote(&typing));
+    assert!(!wrote(&away));
+    assert_eq!(typing.xs, away.xs);
+    // The next piece starts where the caret was.
+    let next = lay("ara x", 5, true, M, &same);
+    assert!((next.caps[1].x - typing.xs[4]).abs() < M.adv);
+}
+
+#[test]
+fn a_press_lands_on_the_nearest_column_in_a_capsule_too() {
     let l = lay(SAMPLE, cols(SAMPLE), true, M, &same);
     let phrase = &l.caps[1];
-    assert_eq!(hit(&l, phrase.x + phrase.w / 2.0), 19);
+    let c = hit(&l, phrase.x + phrase.w / 2.0);
+    assert!((7..18).contains(&c), "{c}");
     // Past everything: the end.
     assert_eq!(hit(&l, 1e6), cols(SAMPLE));
     // Inside the letters: the nearest edge.
     let t = l.xs[35];
     assert_eq!(hit(&l, t + 2.0), 35);
-    // Columns never go back.
-    assert!(l.xs.windows(2).all(|w| w[1] >= w[0]));
 }
 
 #[test]
@@ -109,7 +150,9 @@ fn the_pointer_finds_the_alternative_it_is_on() {
     let (a0, a1) = (c.alts[0], c.alts[1]);
     assert_eq!(over(&l, (a0.0 + a0.1) / 2.0), Some((0, 0)));
     assert_eq!(over(&l, (a1.0 + a1.1) / 2.0), Some((0, 1)));
-    assert_eq!(over(&l, l.xs[6] + 5.0), None);
+    let x = &l.caps[1];
+    assert_eq!(over(&l, x.x + x.w / 2.0), Some((1, 0)));
+    assert_eq!(over(&l, x.x + x.w + 5.0), None);
 }
 
 #[test]
@@ -127,8 +170,8 @@ fn words_are_translated_and_other_modes_are_letters() {
         .filter(|b| b.kind == QUIET)
         .map(|b| b.text.as_str())
         .collect();
-    assert_eq!(quiet, ["ya da", "ve"]);
-    assert_eq!(l.caps[0].head, "ya");
+    assert_eq!(quiet, ["ve", "ya da", "ve"]);
+    assert_eq!(l.caps[1].head, "ya");
     // A regex is letters, every one.
     let r = lay("a|b c", 5, false, M, &same);
     assert!(r.caps.is_empty());

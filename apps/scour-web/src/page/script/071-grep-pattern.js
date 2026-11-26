@@ -8,33 +8,38 @@
   const PIECE_HEAD = { word: "", phrase: "exact phrase", or: "either", not: "without", similar: "similar" };
 
   /* A `~` that makes a term forgiving: at a term's start, after `!`, `;`,
-     `|`, `(` or a space, and followed by a letter of the word. */
+     `|`, `(` or a space, and followed by a letter of the word or nothing yet. */
   function patternTildeAt(chars, i, start) {
     const before = i === start || "!;|(".includes(chars[i - 1]) || /\s/u.test(chars[i - 1]);
     const next = chars[i + 1];
-    return before && next !== undefined && !/\s/u.test(next) && !'";|)~'.includes(next);
+    return before && (next === undefined || (!/\s/u.test(next) && !'";|)~'.includes(next)));
   }
 
-  /* The alternatives of the piece at [start, end), each without its operators. */
+  /* The alternatives of the piece at [start, end), each without its
+     operators, and a hole (start === end) where the last one, or the only
+     one, is not written yet: after `!`, `~`, a trailing `;`, between quotes. */
   function patternAlts(chars, start, end) {
     const out = [];
-    const close = (a, b) => {
+    const close = (a, b, last, seps) => {
       let similar = false;
       while (a < b && (/\s/u.test(chars[a]) || "(!~".includes(chars[a]))) {
         similar = similar || (chars[a] === "~" && patternTildeAt(chars, a, start));
         a++;
       }
       while (b > a && (/\s/u.test(chars[b - 1]) || chars[b - 1] === ")")) b--;
-      const phrase = b > a + 1 && chars[a] === '"' && chars[b - 1] === '"';
-      if (phrase) { a++; b--; }
-      if (a < b) out.push({ start: a, end: b, phrase, similar });
+      // A phrase closed, or one still being written: no quote after it.
+      const quoted = a < b && chars[a] === '"';
+      const closed = quoted && b > a + 1 && chars[b - 1] === '"';
+      const open = quoted && !closed && !chars.slice(a + 1, b).includes('"');
+      if (closed) { a++; b--; } else if (open) a++;
+      if (a < b || (last && (seps > 0 || out.length === 0))) out.push({ start: a, end: Math.max(a, b), phrase: closed || open, similar });
     };
-    let quoted = false, from = start;
+    let quoted = false, seps = 0, from = start;
     for (let i = start; i < end; i++) {
       if (chars[i] === '"') quoted = !quoted;
-      else if ((chars[i] === ";" || chars[i] === "|") && !quoted) { close(from, i); from = i + 1; }
+      else if ((chars[i] === ";" || chars[i] === "|") && !quoted) { close(from, i, false, seps); from = i + 1; seps++; }
     }
-    close(from, end);
+    close(from, end, true, seps);
     return out;
   }
 
@@ -59,7 +64,12 @@
     for (const [a, b] of tokens) {
       const t = chars.slice(a, b).join("");
       const q = t.startsWith('"');
-      if (!q && (t === "|" || t === ";")) { glue = true; if (groups.length) groups[groups.length - 1][1] = b; continue; }
+      if (!q && (t === "|" || t === ";")) {
+        glue = true;
+        // Nothing to be the other of yet: an empty "either".
+        if (groups.length) groups[groups.length - 1][1] = b; else groups.push([a, b]);
+        continue;
+      }
       if (!q && t === "!") { bang = a; continue; }
       const lead = !q && (t.startsWith("|") || t.startsWith(";"));
       const trail = !q && t.length > 1 && (t.endsWith("|") || t.endsWith(";"));
@@ -69,6 +79,8 @@
       else groups.push([from, b]);
       glue = trail;
     }
+    // A `!` with no word after it yet: an empty "without".
+    if (bang !== null && (!groups.length || groups[groups.length - 1][1] <= bang)) groups.push([bang, bang + 1]);
     return groups.map(([a, b]) => {
       const ops = [];
       let q = false, or = false, not = false, phrase = false, similar = false;
@@ -89,6 +101,20 @@
   function patternPieceAt(pieces, caret) {
     const k = pieces.findIndex((p) => p.start <= caret && caret <= p.end);
     return k < 0 ? null : k;
+  }
+
+  /* Written but holding no word yet: every alternative a hole. */
+  function patternEmpty(p) {
+    return p.alts.every((a) => a.start === a.end);
+  }
+
+  /* The hole the caret is in, as [piece, alternative], or null. */
+  function patternHoleAt(pieces, caret) {
+    for (let k = 0; k < pieces.length; k++) {
+      const j = pieces[k].alts.findIndex((a) => a.start === a.end && a.start === caret);
+      if (j >= 0) return [k, j];
+    }
+    return null;
   }
 
   /* ---- what the pill does (`pattern::edit`) ---- */
@@ -129,6 +155,47 @@
     const a = p && p.alts[alt];
     if (!a || a.phrase) return input;
     return a.similar ? patternCut(input, a.start - 1, a.start, "") : patternCut(input, a.start, a.start, "~");
+  }
+
+  /* ---- the keys that open and empty a capsule (`pattern::edit`) ---- */
+
+  /* Backspace in a hole takes the operator that opened it: an empty capsule
+     whole, an empty last alternative its `;`; just inside a phrase's opening
+     quote, both quotes go and its words stay. [text, caret], or null: an
+     ordinary backspace. */
+  function patternBackspace(input, caret) {
+    const c = Array.from(input);
+    const p = patternPieces(input);
+    const hole = patternHoleAt(p, caret);
+    if (hole) {
+      const piece = p[hole[0]];
+      if (patternEmpty(piece)) return [patternCut(input, piece.start, piece.end, ""), piece.start];
+      let sep = caret - 1;
+      while (sep >= piece.start && c[sep] !== ";" && c[sep] !== "|") sep--;
+      return sep < piece.start ? null : [patternCut(input, sep, caret, ""), sep];
+    }
+    const a = p.flatMap((x) => x.alts).find((x) => x.phrase && x.start === caret && caret > 0 && c[caret - 1] === '"');
+    if (!a) return null;
+    const close = c[a.end] === '"' ? 1 : 0;
+    return [patternCut(input, caret - 1, a.end + close, c.slice(a.start, a.end).join("")), caret - 1];
+  }
+
+  /* A space in a hole is not written; between quotes it is a letter. */
+  function patternSpace(input, caret) {
+    const p = patternPieces(input);
+    const hole = patternHoleAt(p, caret);
+    return hole && !p[hole[0]].alts[hole[1]].phrase ? [input, caret] : null;
+  }
+
+  /* A quote at a word's start writes both, the caret between; at a phrase's
+     closing quote it steps over it. */
+  function patternQuote(input, caret) {
+    const c = Array.from(input);
+    const inside = c.slice(0, caret).filter((x) => x === '"').length % 2 === 1;
+    if (inside) return c[caret] === '"' ? [input, caret + 1] : null;
+    const start = caret === 0 || /\s/u.test(c[caret - 1]) || "!;|(~".includes(c[caret - 1]);
+    const end = c[caret] === undefined || /\s/u.test(c[caret]) || c[caret] === ")";
+    return start && end ? [patternCut(input, caret, caret, '""'), caret + 1] : null;
   }
 
   /* ---- what `:` offers (`pattern::launch`) ---- */

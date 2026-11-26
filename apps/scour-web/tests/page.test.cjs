@@ -846,7 +846,7 @@ test('a content pattern is taken apart as the search takes it (pattern.rs)', () 
   assert.deepEqual(shown('~rapor'), [['~rapor', 'similar', ['~']]]);
   assert.deepEqual(shown('!~taslak ~a|b'), [['!~taslak', 'not', ['!', '~']], ['~a|b', 'or', ['~', '|']]]);
   assert.deepEqual(shown('a~b'), [['a~b', 'word', []]]);
-  assert.deepEqual(shown('~'), [['~', 'word', []]]);
+  assert.deepEqual(shown('~'), [['~', 'similar', ['~']]]);
   assert.equal(shown('"~x"')[0][1], 'phrase');
   const alts = (input) => {
     const ch = Array.from(input);
@@ -857,7 +857,32 @@ test('a content pattern is taken apart as the search takes it (pattern.rs)', () 
     [['a', false, true], ['b c', true, false]],
     [['x', false, false], ['y', false, false]],
   ]);
-  // The caret keeps its piece as letters.
+  // An operator with no word yet: a capsule with a hole.
+  assert.deepEqual(shown('!'), [['!', 'not', ['!']]]);
+  assert.deepEqual(shown('ara !'), [['ara', 'word', []], ['!', 'not', ['!']]]);
+  assert.deepEqual(shown(';'), [[';', 'or', [';']]]);
+  assert.deepEqual(shown('; x'), [['; x', 'or', [';']]]);
+  assert.deepEqual(shown('""'), [['""', 'phrase', ['"', '"']]]);
+  const holes = (input) => PJ(c.patternPieces(input)).flatMap((p, k) =>
+    p.alts.filter((a) => a.start === a.end).map((a) => [k, a.start, a.phrase, a.similar]));
+  assert.deepEqual(holes('!'), [[0, 1, false, false]]);
+  assert.deepEqual(holes('ara !'), [[1, 5, false, false]]);
+  assert.deepEqual(holes('!~'), [[0, 2, false, true]]);
+  assert.deepEqual(holes('~'), [[0, 1, false, true]]);
+  assert.deepEqual(holes('""'), [[0, 1, true, false]]);
+  assert.deepEqual(holes('!""'), [[0, 2, true, false]]);
+  assert.deepEqual(holes('"'), [[0, 1, true, false]]);
+  assert.deepEqual(holes('ara;'), [[0, 4, false, false]]);
+  assert.deepEqual(holes('ara ;'), [[0, 5, false, false]]);
+  assert.deepEqual(holes('a;;'), [[0, 3, false, false]]);
+  assert.deepEqual(holes(';x'), []);
+  assert.deepEqual(holes('a;b'), []);
+  assert.ok(c.patternEmpty(c.patternPieces('!')[0]));
+  assert.ok(!c.patternEmpty(c.patternPieces('ara;')[0]));
+  assert.deepEqual(PJ(c.patternHoleAt(c.patternPieces('x ara;'), 6)), [1, 1]);
+  assert.equal(c.patternHoleAt(c.patternPieces('x ara;'), 5), null);
+  assert.deepEqual(alts('"ab c'), [[['ab c', true, false]]]);
+  // The caret's piece.
   const p = c.patternPieces('ab cd');
   assert.equal(c.patternPieceAt(p, 0), 0);
   assert.equal(c.patternPieceAt(p, 2), 0);
@@ -881,6 +906,39 @@ test('the pill rewrites the pattern (pattern/edit.rs)', () => {
   assert.equal(c.patternToggleSimilar('!~x', 0, 0), '!x');
   assert.equal(c.patternToggleSimilar('"a b"', 0, 0), '"a b"');
   assert.ok(c.patternPieces('~a')[0].alts[0].similar);
+});
+
+test('an operator opens a capsule and backspace in its hole takes it (pattern/edit.rs)', () => {
+  const c = patternModel();
+  const b = (t, k) => PJ(c.patternBackspace(t, k));
+  assert.deepEqual(b('!', 1), ['', 0]);
+  assert.deepEqual(b('ara !', 5), ['ara ', 4]);
+  assert.deepEqual(b('!~', 2), ['', 0]);
+  assert.deepEqual(b('~', 1), ['', 0]);
+  assert.deepEqual(b('""', 1), ['', 0]);
+  assert.deepEqual(b('x !"" y', 4), ['x  y', 2]);
+  assert.deepEqual(b('ara;', 4), ['ara', 3]);
+  assert.deepEqual(b('ara ;', 5), ['ara ', 4]);
+  assert.deepEqual(b('a;~', 3), ['a', 1]);
+  assert.deepEqual(b(';', 1), ['', 0]);
+  assert.deepEqual(b('"ab c" x', 1), ['ab c x', 0]);
+  assert.deepEqual(b('"ab', 1), ['ab', 0]);
+  assert.equal(c.patternBackspace('ara', 3), null);
+  assert.equal(c.patternBackspace('!ara', 1), null);
+  assert.equal(c.patternBackspace('a;b', 2), null);
+  assert.equal(c.patternBackspace('', 0), null);
+  // A space in a hole is not written; quotes come in pairs.
+  assert.deepEqual(PJ(c.patternSpace('!', 1)), ['!', 1]);
+  assert.deepEqual(PJ(c.patternSpace('ara;', 4)), ['ara;', 4]);
+  assert.equal(c.patternSpace('""', 1), null);
+  assert.equal(c.patternSpace('ara', 3), null);
+  assert.equal(c.patternSpace('!a', 2), null);
+  assert.deepEqual(PJ(c.patternQuote('', 0)), ['""', 1]);
+  assert.deepEqual(PJ(c.patternQuote('x !', 3)), ['x !""', 4]);
+  assert.equal(c.patternQuote('x', 1), null);
+  assert.deepEqual(PJ(c.patternQuote('"ab"', 3)), ['"ab"', 4]);
+  assert.equal(c.patternQuote('"ab', 3), null);
+  assert.equal(c.patternQuote('x y', 2), null);
 });
 
 test('a colon asks, letters narrow it, and choosing writes in its place (pattern/launch.rs)', () => {
@@ -924,37 +982,39 @@ function layerLetters(html) {
   return out.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 }
 
-test('the content field draws each piece the caret is not in as its capsule', () => {
+test('the content field draws every piece as its capsule, the one being written too', () => {
   const c = patternModel();
   const text = 'icra "dava dosyası" ~rapor a|~b !taslak';
   const n = Array.from(text).length;
   const caps = (html) => [...html.matchAll(/<span class="gc gk-([\w ]+)" data-k="(\d+)"/g)].map((m) => [m[1], +m[2]]);
   const ands = (html) => (html.match(/class="art gand"/g) || []).length;
-  // Caret at the end: the last piece is letters, the rest capsules.
+  // Caret at the end: the last piece is a capsule too, ringed.
   const atEnd = c.grepLayerHtml(text, n);
-  assert.deepEqual(caps(atEnd), [['word', 0], ['phrase', 1], ['similar', 2], ['or many', 3]]);
-  assert.match(atEnd, /<span class="glive"><span class="gop not">!<\/span>taslak<\/span>$/);
-  assert.equal(ands(atEnd), 3, 'an "and" between two capsules, none beside the letters');
-  assert.match(atEnd, /<span class="gh">exact phrase<\/span><span class="gb"><span class="gw" data-alt="0">“dava dosyası”<\/span>/);
-  assert.match(atEnd, /<span class="gh">similar<\/span><span class="gb"><span class="gw" data-alt="0"><i class="gsim">≈<\/i>rapor<\/span>/);
-  assert.match(atEnd, /<span class="gh">either<\/span><span class="gb"><span class="gw" data-alt="0">a<\/span><span class="gor">or<\/span><span class="gw" data-alt="1"><i class="gsim">≈<\/i>b<\/span>/);
+  assert.deepEqual(caps(atEnd), [['word', 0], ['phrase', 1], ['similar', 2], ['or many', 3], ['not live', 4]]);
+  assert.equal(ands(atEnd), 4);
+  assert.match(atEnd, /<span class="z">&quot;<\/span><i class="art gq">“<\/i>dava dosyası<i class="art gq">”<\/i><span class="z">&quot;<\/span>/);
+  assert.match(atEnd, /data-k="2" data-a="20" data-b="26"><span class="z">~<\/span><span class="art gh">similar<\/span><span class="gb"><span class="gw" data-alt="0">rapor<\/span>/);
+  assert.match(atEnd, /<span class="art gh">either<\/span><span class="gb"><span class="gw" data-alt="0">a<\/span><span class="art gor">or<\/span><span class="gw" data-alt="1"><span class="z">\|<\/span><span class="z">~<\/span><i class="art gsim">≈<\/i>b<\/span>/);
+  assert.match(atEnd, /<span class="z">!<\/span><span class="art gh">without<\/span><span class="gb"><span class="gw" data-alt="0">taslak<\/span>/);
   assert.equal(layerLetters(atEnd), text, 'every letter once, in order');
-  // Caret inside `~rapor`: that piece is letters, its tilde coloured; `!taslak` red.
+  // The caret elsewhere moves the ring and nothing else.
   const inside = c.grepLayerHtml(text, 23);
-  assert.deepEqual(caps(inside), [['word', 0], ['phrase', 1], ['or many', 3], ['not', 4]]);
-  assert.match(inside, /<span class="glive"><span class="gop tilde">~<\/span>rapor<\/span>/);
-  assert.match(inside, /<span class="gh">without<\/span><span class="gb"><span class="gw" data-alt="0">taslak<\/span>/);
-  assert.equal(ands(inside), 2);
-  assert.equal(layerLetters(inside), text);
-  // No caret (a selection, or the field left): every piece a capsule.
-  const rest = c.grepLayerHtml(text, -1);
-  assert.equal(caps(rest).length, 5);
-  assert.equal(ands(rest), 4);
-  assert.equal(layerLetters(rest), text);
-  // `!x|y`: red, its alternatives joined by "or"; a lone tilde keeps its letters.
-  assert.match(c.grepLayerHtml('!x|y', -1), /gc gk-not many.*without.*>x<.*gor">or<.*>y</);
-  assert.match(c.grepLayerHtml('~', -1), /<span class="gw">~<\/span>/);
-  assert.equal(layerLetters(c.grepLayerHtml('a  <b> "c', 2)), 'a  <b> "c');
+  assert.deepEqual(caps(inside), [['word', 0], ['phrase', 1], ['similar live', 2], ['or many', 3], ['not', 4]]);
+  assert.equal(inside.replace(/ live/g, ''), atEnd.replace(/ live/g, ''));
+  assert.equal(c.grepLayerHtml(text, -1), atEnd.replace(/ live/g, ''));
+  // An operator with no word yet: its capsule, a slot where the word goes.
+  const bang = c.grepLayerHtml('ara !', 5);
+  assert.match(bang, /<span class="art gand">and<\/span><span class="z"> <\/span><span class="gc gk-not live" data-k="1" data-a="4" data-b="5"><span class="z">!<\/span><span class="art gh">without<\/span><span class="gb"><span class="gw hole" data-alt="0"><span class="art gslot" data-c="5"><\/span><\/span>/);
+  assert.equal(layerLetters(bang), 'ara !');
+  const or = c.grepLayerHtml('ara;', 4);
+  assert.match(or, /data-alt="0">ara<\/span><span class="art gor">or<\/span><span class="gw hole" data-alt="1"><span class="z">;<\/span><span class="art gslot" data-c="4">/);
+  assert.equal(layerLetters(c.grepLayerHtml('""', 1)), '""');
+  // The "and" keeps its room after a space; its word shows when the caret is there.
+  assert.match(c.grepLayerHtml('ara ', 4), /<span class="art gand">and/);
+  assert.match(c.grepLayerHtml('ara ', 1), /<span class="art gand mute">and/);
+  for (const t of ['a  <b> "c', '(a | b) c', 'x ; y ! z', '!~', 'a;;', '"ab c', '; x', 'x !"" y']) {
+    assert.equal(layerLetters(c.grepLayerHtml(t, 1)), t, t);
+  }
   assert.equal(c.grepLayerHtml('', 0), '');
 });
 

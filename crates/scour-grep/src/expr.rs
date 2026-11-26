@@ -90,8 +90,10 @@ impl Expr {
                     Some(rest) if !piece.starts_with('"') => (true, rest),
                     _ => (false, piece.as_str()),
                 };
+                // A bare `~` is a similar word not written yet: nothing.
                 let alts: Vec<Term> = split_alts(body)
                     .into_iter()
+                    .filter(|(text, quoted)| *quoted || text != "~")
                     .map(|(text, quoted)| term(&text, quoted, forgive))
                     .collect();
                 if alts.is_empty() {

@@ -48,6 +48,9 @@ pub const AND: &str = "and";
 pub const OR: &str = "or";
 
 /// One alternative of a piece: the text it looks for, operators left out.
+/// An empty one (`start == end`) is a hole: an operator written and its word
+/// not yet — after `!`, `~`, a trailing `;`/`|`, between two quotes — where
+/// a face keeps the caret inside the capsule. A hole looks for nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Alt {
     pub start: usize,
@@ -73,12 +76,35 @@ pub struct Piece {
     pub alts: Vec<Alt>,
 }
 
-/// The piece the caret stands in or at the edge of: the one a face leaves
-/// as letters while the others are capsules.
+impl Alt {
+    pub fn is_hole(&self) -> bool {
+        self.start == self.end
+    }
+}
+
+impl Piece {
+    /// Written but holding no word yet: every alternative a hole.
+    pub fn is_empty(&self) -> bool {
+        self.alts.iter().all(Alt::is_hole)
+    }
+}
+
+/// The piece the caret stands in or at the edge of: the one a face draws as
+/// being written.
 pub fn piece_at(pieces: &[Piece], caret: usize) -> Option<usize> {
     pieces
         .iter()
         .position(|p| p.start <= caret && caret <= p.end)
+}
+
+/// The hole the caret is in, as a piece and its alternative.
+pub fn hole_at(pieces: &[Piece], caret: usize) -> Option<(usize, usize)> {
+    pieces.iter().enumerate().find_map(|(k, p)| {
+        p.alts
+            .iter()
+            .position(|a| a.is_hole() && a.start == caret)
+            .map(|j| (k, j))
+    })
 }
 
 pub mod edit;
@@ -126,8 +152,10 @@ pub fn pieces(input: &str) -> Vec<Piece> {
         let quoted = t.starts_with('"');
         if !quoted && (t == "|" || t == ";") {
             glue = true;
-            if let Some(last) = groups.last_mut() {
-                last.1 = tok.1;
+            match groups.last_mut() {
+                Some(last) => last.1 = tok.1,
+                // Nothing to be the other of yet: an empty "either".
+                None => groups.push(tok),
             }
             continue;
         }
@@ -143,6 +171,12 @@ pub fn pieces(input: &str) -> Vec<Piece> {
             _ => groups.push((from, tok.1)),
         }
         glue = trail;
+    }
+    // A `!` with no word after it yet: an empty "without".
+    if let Some(b) = bang
+        && groups.last().is_none_or(|g| g.1 <= b)
+    {
+        groups.push((b, b + 1));
     }
     groups
         .into_iter()
@@ -196,22 +230,21 @@ pub fn pieces(input: &str) -> Vec<Piece> {
 }
 
 /// A `~` that makes a term forgiving: at a term's start, after `!`, `;`, `|`,
-/// `(` or a space, and followed by a letter of the word.
+/// `(` or a space, and followed by a letter of the word or by nothing yet.
 fn tilde_at(chars: &[char], i: usize, start: usize) -> bool {
     let before =
         i == start || matches!(chars[i - 1], '!' | ';' | '|' | '(') || chars[i - 1].is_whitespace();
     let after = chars
         .get(i + 1)
-        .is_some_and(|c| !c.is_whitespace() && !matches!(c, '"' | ';' | '|' | ')' | '~'));
+        .is_none_or(|c| !c.is_whitespace() && !matches!(c, '"' | ';' | '|' | ')' | '~'));
     before && after
 }
 
-/// The alternatives of the piece at `start..end`, each without its operators.
+/// The alternatives of the piece at `start..end`, each without its operators,
+/// and a hole where the last one, or the only one, is not written yet.
 fn alts(chars: &[char], start: usize, end: usize) -> Vec<Alt> {
     let mut out = Vec::new();
-    let mut quotes = false;
-    let mut from = start;
-    let close = |a: usize, b: usize, out: &mut Vec<Alt>| {
+    let close = |a: usize, b: usize, last: bool, seps: usize, out: &mut Vec<Alt>| {
         let (mut a, mut b) = (a, b);
         let mut similar = false;
         while a < b && (chars[a].is_whitespace() || matches!(chars[a], '(' | '!' | '~')) {
@@ -221,28 +254,38 @@ fn alts(chars: &[char], start: usize, end: usize) -> Vec<Alt> {
         while b > a && (chars[b - 1].is_whitespace() || chars[b - 1] == ')') {
             b -= 1;
         }
-        let phrase = b > a + 1 && chars[a] == '"' && chars[b - 1] == '"';
-        let (a, b) = if phrase { (a + 1, b - 1) } else { (a, b) };
-        if a < b {
+        // A phrase closed, or one still being written: no quote after it.
+        let quoted = a < b && chars[a] == '"';
+        let closed = quoted && b > a + 1 && chars[b - 1] == '"';
+        let open = quoted && !closed && !chars[a + 1..b].contains(&'"');
+        let phrase = closed || open;
+        let (a, b) = match (closed, open) {
+            (true, _) => (a + 1, b - 1),
+            (_, true) => (a + 1, b),
+            _ => (a, b),
+        };
+        if a < b || (last && (seps > 0 || out.is_empty())) {
             out.push(Alt {
                 start: a,
-                end: b,
+                end: b.max(a),
                 phrase,
                 similar,
             });
         }
     };
+    let (mut quotes, mut seps, mut from) = (false, 0usize, start);
     for (i, &c) in chars.iter().enumerate().take(end).skip(start) {
         match c {
             '"' => quotes = !quotes,
             ';' | '|' if !quotes => {
-                close(from, i, &mut out);
+                close(from, i, false, seps, &mut out);
                 from = i + 1;
+                seps += 1;
             }
             _ => {}
         }
     }
-    close(from, end, &mut out);
+    close(from, end, true, seps, &mut out);
     out
 }
 
@@ -312,9 +355,10 @@ mod tests {
                 ("~a|b".into(), Or, vec!['~', '|']),
             ]
         );
-        // Not a word's start, or nothing after it: a tilde as text.
+        // Not a word's start: a tilde as text. Nothing after it yet: a
+        // similar word still to be written.
         assert_eq!(shown("a~b"), vec![("a~b".into(), Word, vec![])]);
-        assert_eq!(shown("~"), vec![("~".into(), Word, vec![])]);
+        assert_eq!(shown("~"), vec![("~".into(), Similar, vec!['~'])]);
         assert_eq!(shown(r#""~x""#)[0].1, Phrase);
         let s = |t: &str, p: bool, m: bool| (t.to_string(), p, m);
         assert_eq!(
@@ -325,6 +369,56 @@ mod tests {
                 vec![s("x", false, false), s("y", false, false)],
             ]
         );
+    }
+
+    /// Each hole as (piece, its column, phrase, similar).
+    fn holes(input: &str) -> Vec<(usize, usize, bool, bool)> {
+        pieces(input)
+            .iter()
+            .enumerate()
+            .flat_map(|(k, p)| {
+                p.alts
+                    .iter()
+                    .filter(|a| a.is_hole())
+                    .map(move |a| (k, a.start, a.phrase, a.similar))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_operator_with_no_word_yet_is_a_capsule_with_a_hole() {
+        use PieceKind::*;
+        // A lone `!`, `;` or `~`, and two quotes, each a piece of its own.
+        assert_eq!(shown("!"), vec![("!".into(), Not, vec!['!'])]);
+        assert_eq!(
+            shown("ara !"),
+            vec![("ara".into(), Word, vec![]), ("!".into(), Not, vec!['!'])]
+        );
+        assert_eq!(shown(";"), vec![(";".into(), Or, vec![';'])]);
+        assert_eq!(shown("; x"), vec![("; x".into(), Or, vec![';'])]);
+        assert_eq!(
+            shown(r#""""#),
+            vec![(r#""""#.into(), Phrase, vec!['"', '"'])]
+        );
+        assert_eq!(holes("!"), vec![(0, 1, false, false)]);
+        assert_eq!(holes("ara !"), vec![(1, 5, false, false)]);
+        assert_eq!(holes("!~"), vec![(0, 2, false, true)]);
+        assert_eq!(holes("~"), vec![(0, 1, false, true)]);
+        assert_eq!(holes(r#""""#), vec![(0, 1, true, false)]);
+        assert_eq!(holes(r#"!"""#), vec![(0, 2, true, false)]);
+        assert_eq!(holes("\""), vec![(0, 1, true, false)]);
+        // After the last `;`, not before the first: "a or …", and `;x` is x.
+        assert_eq!(holes("ara;"), vec![(0, 4, false, false)]);
+        assert_eq!(holes("ara ;"), vec![(0, 5, false, false)]);
+        assert_eq!(holes("a;;"), vec![(0, 3, false, false)]);
+        assert_eq!(holes(";x"), vec![]);
+        assert_eq!(holes("a;b"), vec![]);
+        assert!(pieces("!").first().is_some_and(Piece::is_empty));
+        assert!(!pieces("ara;").first().is_some_and(Piece::is_empty));
+        assert_eq!(hole_at(&pieces("x ara;"), 6), Some((1, 1)));
+        assert_eq!(hole_at(&pieces("x ara;"), 5), None);
+        // A phrase still being written reads as one.
+        assert_eq!(alts("\"ab c"), vec![vec![("ab c".into(), true, false)]]);
     }
 
     #[test]

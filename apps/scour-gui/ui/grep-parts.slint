@@ -1,12 +1,11 @@
-// The content field's drawing: its capsules, the letters of the piece being
-// written, the pill over a capsule and what `:` offers. Rust places every
-// part (`grep_lay.rs`); the invisible input under it holds the text.
+// The content field's drawing: its capsules — the one being written too —
+// the pill over a capsule and what `:` offers. Rust places every part
+// (`grep_lay.rs`); the invisible input under it holds the text.
 
 import { Theme, Fonts } from "theme.slint";
 import { PairButton } from "widgets.slint";
 
-/// Letters drawn as typed: `role` 0 plain, 1 `|` `;` `(` `)`, 2 `!`, 3 a
-/// quote, 4 `~`.
+/// Letters drawn as typed, outside capsules: a regex, hex. `role` 0.
 export struct GrepRun {
     text: string,
     x: length,
@@ -14,17 +13,18 @@ export struct GrepRun {
 }
 
 /// A piece of the pattern drawn as a capsule; `hw` is its head's width,
-/// nought for a plain word.
+/// nought for a plain word; `live`, the caret is in it.
 export struct GrepCap {
     x: length,
     w: length,
     hw: length,
     head: string,
     not: bool,
+    live: bool,
 }
 
 /// What a capsule holds: 0 an inner capsule's ground, 1 a word, 2 the quiet
-/// "or" / "and", 3 a mark (≈, quotes).
+/// "or" / "and", 3 a mark (≈, quotes), 4 the room of a word not written yet.
 export struct GrepBit {
     x: length,
     w: length,
@@ -53,6 +53,8 @@ export component GrepInk inherits Rectangle {
     in property <[GrepSel]> sels;
     in property <int> hov: -1;
     in property <length> shift;
+    // The field has the keyboard: the capsule being written is ringed.
+    in property <bool> focused;
 
     for c[i] in root.caps: Rectangle {
         x: c.x - root.shift;
@@ -60,10 +62,11 @@ export component GrepInk inherits Rectangle {
         width: c.w;
         height: 24px;
         border-radius: 6px;
-        border-width: 1px;
+        property <bool> writing: c.live && root.focused;
+        border-width: self.writing ? 2px : 1px;
         property <brush> ring: c.not ? Theme.cap-neg-ring : Theme.cap-read-ring;
         background: c.not ? Theme.cap-neg : Theme.cap-read;
-        border-color: i == root.hov ? Theme.ink-3 : self.ring;
+        border-color: self.writing ? Theme.focus : i == root.hov ? Theme.ink-3 : self.ring;
         if c.hw > 0: Rectangle {
             x: 0px;
             width: c.hw;
@@ -98,7 +101,15 @@ export component GrepInk inherits Rectangle {
             background: Theme.panel-2;
             opacity: 0.75;
         }
-        if b.kind != 0: Text {
+        if b.kind == 4: Rectangle {
+            y: (root.height - 16px) / 2;
+            height: 16px;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: Theme.ink-3;
+            opacity: 0.45;
+        }
+        if b.kind != 0 && b.kind != 4: Text {
             height: root.height;
             text: b.text;
             font-family: Fonts.mono;
@@ -123,11 +134,9 @@ export component GrepInk inherits Rectangle {
         text: r.text;
         font-family: Fonts.mono;
         font-size: 14px;
-        font-weight: r.role == 0 ? 500 : 600;
+        font-weight: 500;
         vertical-alignment: center;
-        color: r.role == 2 ? Theme.q-not
-            : r.role == 3 ? Theme.q-glob
-            : r.role == 1 || r.role == 4 ? Theme.q-key : Theme.ink;
+        color: Theme.ink;
     }
 }
 
