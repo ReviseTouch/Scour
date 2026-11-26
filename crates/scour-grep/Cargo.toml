@@ -30,3 +30,6 @@ windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"
+# The name query's rule of how many mistakes a word is forgiven, for the
+# tests and the bench; the library is handed it by its caller.
+scour-core = { workspace = true }

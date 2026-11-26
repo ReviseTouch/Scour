@@ -1254,6 +1254,25 @@ many pieces that its own record holds an attribute list, which the lane now
 follows (`mft::mft_runs`). **Not yet measured on C:**, so raw reading stays
 off by default on a solid disk.
 
+## Content: `~word`, a letter off (2026-11-26)
+
+`target/release/examples/scan --expr PATTERN < LIST` (scour-grep), warm cache,
+plain and `~` alternated A B A B A B; seconds include compiling the pattern.
+
+| list | plain s / cpu | `~` s / cpu | wall / cpu |
+|---|---|---|---|
+| source, 20k files, 226 MB, `rapor` | 0.016 / 0.13 | 0.045 / 0.39 | 2.8× / 2.9× |
+| source, `muhasebeciler` | 0.016 / 0.13 | 0.059 / 0.41 | 3.6× / 3.1× |
+| docx, `muhasebeciler` | 0.034 / 0.26 | 0.057 / 0.33 | 1.7× / 1.3× |
+| odt, `muhasebeciler` | 0.013 / 0.11 | 0.036 / 0.17 | 2.7× / 1.55× |
+| mixed, 30,690 files, 2.5 GB, `muhasebeciler` | 0.60 / 5.9 | 0.79 / 7.6 | 1.3× / 1.3× |
+
+The literal prefilter (k+1 pieces of the word, one of which every misspelling
+keeps) took `~dilekçeler` on source from 0.050 s / 0.43 cpu to 0.031 / 0.23.
+Compiling the pattern: 3 ms at 5 letters, 6 at 10, 21 at 11, 43 at 20, 209 at
+64; most of the gap on short runs. Source code stays near 3× for long words:
+their pieces are in nearly every file. Not tried: a per-window prefilter.
+
 ## Reproducing
 
 ```sh

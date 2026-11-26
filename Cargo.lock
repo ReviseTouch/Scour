@@ -5548,6 +5548,7 @@ dependencies = [
  "libc",
  "memchr",
  "regex",
+ "scour-core",
  "scour-extract",
  "surefoot",
  "tempfile",

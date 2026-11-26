@@ -1,9 +1,10 @@
-//! Boolean content expressions (`a;b !c`, `a | b !c`, `"exact phrase" !skip`)
-//! evaluated in minimal passes over candidate files.
+//! Boolean content expressions (`a;b !c`, `a | b !c`, `"exact phrase" !skip`,
+//! `~similar`) evaluated in minimal passes over candidate files.
 
 use crate::budget::Budget;
 use crate::ground::Ground;
-use crate::pattern::{BadPattern, Needle, Pattern};
+use crate::near::Forgive;
+use crate::pattern::{BadPattern, Needle, Pattern, Term};
 use std::sync::Arc;
 
 use crate::scan::{Enter, File, Options, Outcome, Scanner};
@@ -18,31 +19,56 @@ pub struct Expr {
 }
 
 impl Expr {
-    /// Parse `needle`. `Needle::Text` supports `;` / `|` (OR), whitespace (AND),
-    /// `!term` (exclude file), and `"..."` (literal phrase).
+    /// [`Expr::forgiving`] with no mistake forgiven: `~word` is the word.
     pub fn new(needle: &Needle, exact_case: bool) -> Result<Expr, BadPattern> {
+        Self::forgiving(needle, exact_case, |_| 0)
+    }
+
+    /// Parse `needle`. `Needle::Text` supports `;` / `|` (OR), whitespace (AND),
+    /// `!term` (exclude file), `"..."` (literal phrase), and `~word` (the word,
+    /// or as many mistakes from it as `forgive` allows; `\~` or `"~"` is the
+    /// tilde itself).
+    pub fn forgiving(
+        needle: &Needle,
+        exact_case: bool,
+        forgive: Forgive,
+    ) -> Result<Expr, BadPattern> {
         match needle {
             Needle::Regex(_) | Needle::Bytes(_) | Needle::Wild { .. } => Ok(Expr {
                 must: vec![Pattern::new(needle, exact_case)?],
                 forbid: None,
             }),
-            Needle::Text(raw) => Self::parse_text(raw, exact_case),
+            Needle::Text(raw) => Self::parse_text(raw, exact_case, forgive),
         }
     }
 
+    /// Each piece as `~word` and `\~` read it; nothing else in it is syntax.
     pub fn from_clauses(
         must_clauses: &[Vec<String>],
         forbid_terms: &[String],
         exact_case: bool,
+        forgive: Forgive,
+    ) -> Result<Expr, BadPattern> {
+        let read = |pieces: &[String]| -> Vec<Term> {
+            pieces.iter().map(|p| term(p, false, forgive)).collect()
+        };
+        let must: Vec<Vec<Term>> = must_clauses.iter().map(|c| read(c)).collect();
+        Self::from_terms(&must, &read(forbid_terms), exact_case)
+    }
+
+    fn from_terms(
+        must_clauses: &[Vec<Term>],
+        forbid_terms: &[Term],
+        exact_case: bool,
     ) -> Result<Expr, BadPattern> {
         let mut must = Vec::with_capacity(must_clauses.len());
         for clause in must_clauses {
-            must.push(Pattern::any_text(clause, exact_case)?);
+            must.push(Pattern::any_term(clause, exact_case)?);
         }
         let forbid = if forbid_terms.is_empty() {
             None
         } else {
-            Some(Pattern::any_text(forbid_terms, exact_case)?)
+            Some(Pattern::any_term(forbid_terms, exact_case)?)
         };
         if must.is_empty() && forbid.is_none() {
             return Err(BadPattern::Empty);
@@ -50,13 +76,13 @@ impl Expr {
         Ok(Expr { must, forbid })
     }
 
-    fn parse_text(input: &str, exact_case: bool) -> Result<Expr, BadPattern> {
+    fn parse_text(input: &str, exact_case: bool, forgive: Forgive) -> Result<Expr, BadPattern> {
         if input.is_empty() {
             return Err(BadPattern::Empty);
         }
         let tokens = split_clauses(input);
-        let mut must_clauses: Vec<Vec<String>> = Vec::new();
-        let mut forbid_terms: Vec<String> = Vec::new();
+        let mut must_clauses: Vec<Vec<Term>> = Vec::new();
+        let mut forbid_terms: Vec<Term> = Vec::new();
 
         for tok in tokens {
             for piece in split_inline_bangs(&tok) {
@@ -64,7 +90,10 @@ impl Expr {
                     Some(rest) if !piece.starts_with('"') => (true, rest),
                     _ => (false, piece.as_str()),
                 };
-                let alts = split_alts(body);
+                let alts: Vec<Term> = split_alts(body)
+                    .into_iter()
+                    .map(|(text, quoted)| term(&text, quoted, forgive))
+                    .collect();
                 if alts.is_empty() {
                     continue;
                 }
@@ -75,7 +104,7 @@ impl Expr {
                 }
             }
         }
-        Self::from_clauses(&must_clauses, &forbid_terms, exact_case)
+        Self::from_terms(&must_clauses, &forbid_terms, exact_case)
     }
 
     /// Evaluate the expression across `files`, reading surviving candidates only.
@@ -108,12 +137,7 @@ impl Expr {
                 let mut marks: Vec<(usize, usize)> = self
                     .must
                     .iter()
-                    .flat_map(|p| {
-                        p.reading(crate::excerpt::Kind::Text)
-                            .find_iter(hit.text.as_bytes())
-                    })
-                    .filter(|m| !m.is_empty())
-                    .map(|m| (m.start(), m.end()))
+                    .flat_map(|p| p.finds(crate::excerpt::Kind::Text, hit.text.as_bytes()))
                     .collect();
                 marks.push((hit.at.0 as usize, (hit.at.0 + hit.at.1) as usize));
                 marks.sort_unstable();
@@ -347,32 +371,70 @@ fn split_inline_bangs(tok: &str) -> Vec<String> {
     out
 }
 
-/// Split OR alternatives on unquoted `;` or `|`, unquoting each piece.
-fn split_alts(body: &str) -> Vec<String> {
+/// Split OR alternatives on unquoted `;` or `|`, unquoting each piece and
+/// trimming the blanks outside quotes at its ends; with each, whether its
+/// first character was quoted.
+fn split_alts(body: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut cur = String::new();
+    // How much of `cur` stays when the piece ends: up to its last character
+    // that is neither an unquoted blank nor nothing.
+    let mut keep = 0usize;
     let mut in_quotes = false;
+    let mut quoted = None;
     for c in body.chars() {
         match c {
-            '"' => in_quotes = !in_quotes,
+            '"' => {
+                in_quotes = !in_quotes;
+                keep = cur.len();
+            }
             ';' | '|' if !in_quotes => {
-                let s = cur.trim();
-                if !s.is_empty() || body.contains('"') {
+                cur.truncate(keep);
+                if !cur.is_empty() || body.contains('"') {
                     let v = std::mem::take(&mut cur);
                     if !v.is_empty() {
-                        out.push(v);
+                        out.push((v, quoted.unwrap_or(false)));
                     }
                 } else {
                     cur.clear();
                 }
+                (keep, quoted) = (0, None);
             }
-            c => cur.push(c),
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    cur.push(c);
+                }
+            }
+            c => {
+                quoted.get_or_insert(in_quotes);
+                cur.push(c);
+                keep = cur.len();
+            }
         }
     }
+    cur.truncate(keep);
     if !cur.is_empty() {
-        out.push(cur);
+        out.push((cur, quoted.unwrap_or(false)));
     }
     out
+}
+
+/// One alternative as typed: `~word` is forgiven what `forgive` says a word
+/// that long is, `\~` is a tilde, and a quoted tilde is only a tilde.
+fn term(text: &str, quoted: bool, forgive: Forgive) -> Term {
+    if quoted {
+        return Term::Plain(text.to_owned());
+    }
+    if let Some(tilde) = text.strip_prefix('\\').filter(|t| t.starts_with('~')) {
+        return Term::Plain(tilde.to_owned());
+    }
+    match text.strip_prefix('~').filter(|w| !w.is_empty()) {
+        Some(word) => match forgive(word) {
+            0 => Term::Plain(word.to_owned()),
+            edits => Term::Near(word.to_owned(), edits),
+        },
+        None => Term::Plain(text.to_owned()),
+    }
 }
 
 #[cfg(test)]

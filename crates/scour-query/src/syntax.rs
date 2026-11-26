@@ -54,6 +54,7 @@ indexes paths, so a path term is a scan of them.
 | `dc:2026-01-31` | created on that day |
 | `da:>2026-01-01` | accessed after that day |
 | `content:invoice` | the file's contents hold this text; the files the rest of the query names are read, so narrow it |
+| `content:~invoice` | the contents hold this word or one a letter off, as `fuzzy:` forgives it; `content:\~x` is a tilde |
 
 ## What the filesystem knows
 

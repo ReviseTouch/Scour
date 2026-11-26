@@ -177,6 +177,10 @@ fn every_documented_example_still_works() {
             Match::Time(TimeField::Accessed, Cmp::Gt, 1_767_225_600 + 86_399),
         ),
         ("content:invoice", Match::ContentContains("invoice".into())),
+        (
+            "content:~invoice",
+            Match::ContentContains("~invoice".into()),
+        ),
     ];
     for (input, expected) in claims {
         assert!(SYNTAX.contains(input), "{input:?} is documented nowhere");

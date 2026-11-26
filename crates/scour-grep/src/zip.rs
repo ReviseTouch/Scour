@@ -462,19 +462,11 @@ fn collect_in_chunk(
     opts: &Options,
     tally: &mut Tally,
 ) {
-    let regex = pattern.reading(kind);
     let (mut counted_to, mut nl_count) = (0usize, lines_before);
-    for found in regex.find_iter(hay) {
-        if found.start() >= cut && !eof {
+    for (start, end) in pattern.finds(kind, hay) {
+        if start >= cut && !eof {
             break;
         }
-        if found.is_empty() {
-            continue;
-        }
-        let (start, end) = match kind {
-            Kind::Binary => pattern.settled(hay, found.start(), found.end()),
-            _ => (found.start(), found.end()),
-        };
         let line = if kind == Kind::Text {
             nl_count += memchr_iter(b'\n', &hay[counted_to..start]).count() as u64;
             counted_to = start;

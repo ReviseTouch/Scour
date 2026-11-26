@@ -90,6 +90,9 @@ pub struct FacetArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GrepArgs {
     /// What to look for in the files: text, unless `regex` or `hex` says otherwise.
+    /// As text, every word must be in the file; 'a|b' is either, '!a' not in it,
+    /// '"a b"' as written, and '~word' the word or one a letter wrong, missing,
+    /// extra or swapped (in a word of five letters or more; two past ten).
     pub pattern: String,
     /// Which files to read, in the query language: 'ext:rs /Projeler/',
     /// 'kind:config dm:thisweek'. Narrow it — an empty query reads everything.

@@ -2,6 +2,7 @@
 //! the files that keep it that way.
 
 use std::fmt::Write as _;
+use std::sync::{Arc, OnceLock};
 
 use regex::bytes::{Regex, RegexBuilder};
 
@@ -87,6 +88,30 @@ pub struct Pattern {
     raw_bytes: bool,
     /// Matches only at a file's first byte.
     at_start: bool,
+    /// Each alternative alone, anchored at both ends, when a misspelt find
+    /// carries the character before it that says a word begins there.
+    bodies: Option<Arc<Bodies>>,
+    /// What a buffer must hold for a misspelling to be in it: the expression
+    /// itself has no literal to look for first.
+    pieces: Option<Arc<Pattern>>,
+}
+
+/// One alternative of a text pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Term {
+    /// These characters, as they are.
+    Plain(String),
+    /// This word, or one `u8` mistakes from it where a word begins.
+    Near(String, u8),
+}
+
+/// Built at the first find: as long to build as the pattern itself, and
+/// most patterns find nothing.
+#[derive(Debug)]
+struct Bodies {
+    /// Text, little- and big-endian UTF-16, and either.
+    spelled: [String; 4],
+    built: OnceLock<Option<[Regex; 4]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +123,7 @@ struct Wide {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Encoding {
+pub(crate) enum Encoding {
     /// Windows' Turkish code page, for text files that are not UTF-8.
     Cp1254,
     Utf8,
@@ -120,6 +145,8 @@ impl Pattern {
                 wide: None,
                 raw_bytes: true,
                 at_start: false,
+                bodies: None,
+                pieces: None,
             }),
             Needle::Wild { bytes, at_start } => {
                 let mut expr = String::from(if *at_start { "\\A" } else { "" });
@@ -134,6 +161,8 @@ impl Pattern {
                     wide: None,
                     raw_bytes: true,
                     at_start: *at_start,
+                    bodies: None,
+                    pieces: None,
                 })
             }
             Needle::Regex(text) => RegexBuilder::new(text)
@@ -145,6 +174,8 @@ impl Pattern {
                     wide: None,
                     raw_bytes: false,
                     at_start: false,
+                    bodies: None,
+                    pieces: None,
                 })
                 .map_err(|e| BadPattern::Regex(e.to_string())),
         }
@@ -152,18 +183,26 @@ impl Pattern {
 
     /// One compiled DFA matching any of `alts` (`a;b` / `a|b`) in a single pass.
     pub fn any_text(alts: &[String], exact_case: bool) -> Result<Pattern, BadPattern> {
-        let non_empty: Vec<&str> = alts
-            .iter()
-            .map(String::as_str)
-            .filter(|s| !s.is_empty())
-            .collect();
-        if non_empty.is_empty() {
+        let terms: Vec<Term> = alts.iter().map(|t| Term::Plain(t.clone())).collect();
+        Self::any_term(&terms, exact_case)
+    }
+
+    pub(crate) fn any_term(alts: &[Term], exact_case: bool) -> Result<Pattern, BadPattern> {
+        let alts: Vec<&Term> = alts.iter().filter(|t| !t.text().is_empty()).collect();
+        if alts.is_empty() {
             return Err(BadPattern::Empty);
         }
-        let join_enc = |enc: Encoding| -> Option<String> {
-            let spelled: Vec<String> = non_empty
+        let near = alts.iter().any(|t| matches!(t, Term::Near(..)));
+        let join_enc = |enc: Encoding, body: bool| -> Option<String> {
+            let spelled: Vec<String> = alts
                 .iter()
-                .filter_map(|t| spelled(t, enc, exact_case))
+                .filter_map(|t| match t {
+                    Term::Plain(text) => spelled(text, enc, exact_case),
+                    Term::Near(word, edits) => {
+                        let it = crate::near::Near::new(word, *edits, enc, exact_case)?;
+                        Some(if body { it.body() } else { it.find() })
+                    }
+                })
                 .collect();
             match spelled.as_slice() {
                 [] => None,
@@ -176,23 +215,55 @@ impl Pattern {
                 ),
             }
         };
-        let utf8 = join_enc(Encoding::Utf8).ok_or(BadPattern::Empty)?;
-        let le = join_enc(Encoding::Utf16Le).ok_or(BadPattern::Empty)?;
-        let be = join_enc(Encoding::Utf16Be).ok_or(BadPattern::Empty)?;
-        // Only when it differs: an ASCII needle is the same bytes in 1254.
-        let narrow = match join_enc(Encoding::Cp1254) {
-            Some(legacy) if legacy != utf8 => format!("(?:{utf8})|(?:{legacy})"),
-            _ => utf8.clone(),
+        let readings = |body: bool| -> Result<[String; 4], BadPattern> {
+            let utf8 = join_enc(Encoding::Utf8, body).ok_or(BadPattern::Empty)?;
+            let le = join_enc(Encoding::Utf16Le, body).ok_or(BadPattern::Empty)?;
+            let be = join_enc(Encoding::Utf16Be, body).ok_or(BadPattern::Empty)?;
+            // Only when it differs: an ASCII needle is the same bytes in 1254.
+            let narrow = match join_enc(Encoding::Cp1254, body) {
+                Some(legacy) if legacy != utf8 => format!("(?:{utf8})|(?:{legacy})"),
+                _ => utf8.clone(),
+            };
+            let any = format!("(?:{narrow})|(?:{le})|(?:{be})");
+            Ok([narrow, le, be, any])
+        };
+        let [narrow, le, be, any] = readings(false)?;
+        let pieces = if near {
+            let plain: Option<Vec<Term>> = alts
+                .iter()
+                .map(|t| match t {
+                    Term::Plain(text) => Some(vec![Term::Plain(text.clone())]),
+                    Term::Near(word, edits) => crate::near::pieces(word, *edits)
+                        .map(|p| p.into_iter().map(Term::Plain).collect()),
+                })
+                .collect::<Option<Vec<Vec<Term>>>>()
+                .map(|all| all.concat());
+            match plain {
+                Some(plain) => Some(Arc::new(Self::any_term(&plain, exact_case)?)),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let bodies = if near {
+            Some(Arc::new(Bodies {
+                spelled: readings(true)?,
+                built: OnceLock::new(),
+            }))
+        } else {
+            None
         };
         Ok(Pattern {
             wide: Some(Wide {
-                any: raw(&format!("(?:{narrow})|(?:{le})|(?:{be})"))?,
+                any: raw(&any)?,
                 le: raw(&le)?,
                 be: raw(&be)?,
             }),
             narrow: raw(&narrow)?,
             raw_bytes: false,
             at_start: false,
+            bodies,
+            pieces,
         })
     }
 
@@ -227,6 +298,71 @@ impl Pattern {
             _ => (start, end),
         }
     }
+
+    /// The span of every find in `hay` read as `kind`, in order.
+    pub(crate) fn finds<'a>(
+        &'a self,
+        kind: Kind,
+        hay: &'a [u8],
+    ) -> impl Iterator<Item = (usize, usize)> + 'a {
+        let held = self
+            .pieces
+            .as_ref()
+            .is_none_or(|p| p.reading(kind).is_match(hay));
+        self.reading(kind)
+            .find_iter(if held { hay } else { &[] })
+            .filter(|m| !m.is_empty())
+            .map(move |m| {
+                let (start, end) = match kind {
+                    Kind::Binary => self.settled(hay, m.start(), m.end()),
+                    _ => (m.start(), m.end()),
+                };
+                (self.word_begun(kind, hay, start, end), end)
+            })
+    }
+
+    /// A misspelt find begins with the character before the word: stepped
+    /// over, so the span is the word alone.
+    fn word_begun(&self, kind: Kind, hay: &[u8], start: usize, end: usize) -> usize {
+        let Some(bodies) = &self.bodies else {
+            return start;
+        };
+        let built = bodies.built.get_or_init(|| {
+            let whole = |e: &String| raw(&format!("\\A(?:{e})\\z")).ok();
+            let [narrow, le, be, any] = &bodies.spelled;
+            Some([whole(narrow)?, whole(le)?, whole(be)?, whole(any)?])
+        });
+        let Some([narrow, le, be, any]) = built else {
+            return start;
+        };
+        let body = match kind {
+            Kind::Text => narrow,
+            Kind::Wide(false) => le,
+            Kind::Wide(true) => be,
+            Kind::Binary => any,
+        };
+        if body.is_match(&hay[start..end]) {
+            return start;
+        }
+        let widths: &[usize] = match kind {
+            Kind::Text => &[1, 2, 3, 4],
+            Kind::Wide(_) => &[2],
+            Kind::Binary => &[2, 1, 3, 4],
+        };
+        widths
+            .iter()
+            .map(|w| start + w)
+            .find(|&from| from < end && body.is_match(&hay[from..end]))
+            .unwrap_or(start)
+    }
+}
+
+impl Term {
+    fn text(&self) -> &str {
+        match self {
+            Term::Plain(text) | Term::Near(text, _) => text,
+        }
+    }
 }
 
 /// A byte-for-byte expression: no Unicode classes, `\xNN` is one byte.
@@ -250,50 +386,54 @@ fn escaped(bytes: &[u8]) -> String {
 fn spelled(text: &str, encoding: Encoding, exact_case: bool) -> Option<String> {
     let mut out = String::new();
     for c in text.chars() {
-        // A space in a phrase is any run of blanks and line breaks: a PDF's
-        // text breaks lines mid-phrase (15 % of phrases in 300 court PDFs).
-        match (c, encoding) {
-            // Tab, line breaks, form feed, the no-break and the typographic spaces.
-            (' ', Encoding::Utf8) => {
-                out.push_str("(?:[\\t\\n\\x0B\\x0C\\r ]|\\xC2\\xA0|\\xE2\\x80[\\x80-\\x8A\\xAF])+");
-                continue;
-            }
-            (' ', Encoding::Cp1254) => {
-                out.push_str("[\\t\\n\\x0B\\x0C\\r \\xA0]+");
-                continue;
-            }
-            _ => {}
-        }
-        let forms = if exact_case { vec![c] } else { cases(c) };
-        let mut ways: Vec<Vec<u8>> = Vec::new();
-        for form in forms {
-            ways.extend(encoded(form, encoding));
-            if encoding != Encoding::Cp1254
-                && let Some(nfd) = scour_extract::decomposed(form)
-            {
-                let mut bytes = Vec::new();
-                for part in nfd.chars() {
-                    bytes.extend(encoded(part, encoding)?);
-                }
-                ways.push(bytes);
-            }
-        }
-        match ways.as_slice() {
-            [] => return None,
-            [one] => out.push_str(&escaped(one)),
-            many => {
-                out.push_str("(?:");
-                for (i, way) in many.iter().enumerate() {
-                    if i > 0 {
-                        out.push('|');
-                    }
-                    out.push_str(&escaped(way));
-                }
-                out.push(')');
-            }
-        }
+        out.push_str(&atom(c, encoding, exact_case)?);
     }
     Some(out)
+}
+
+/// One character of [`spelled`]. None when the encoding cannot write it.
+pub(crate) fn atom(c: char, encoding: Encoding, exact_case: bool) -> Option<String> {
+    // A space in a phrase is any run of blanks and line breaks: a PDF's
+    // text breaks lines mid-phrase (15 % of phrases in 300 court PDFs).
+    match (c, encoding) {
+        // Tab, line breaks, form feed, the no-break and the typographic spaces.
+        (' ', Encoding::Utf8) => {
+            return Some(
+                "(?:[\\t\\n\\x0B\\x0C\\r ]|\\xC2\\xA0|\\xE2\\x80[\\x80-\\x8A\\xAF])+".into(),
+            );
+        }
+        (' ', Encoding::Cp1254) => return Some("[\\t\\n\\x0B\\x0C\\r \\xA0]+".into()),
+        _ => {}
+    }
+    let forms = if exact_case { vec![c] } else { cases(c) };
+    let mut ways: Vec<Vec<u8>> = Vec::new();
+    for form in forms {
+        ways.extend(encoded(form, encoding));
+        if encoding != Encoding::Cp1254
+            && let Some(nfd) = scour_extract::decomposed(form)
+        {
+            let mut bytes = Vec::new();
+            for part in nfd.chars() {
+                bytes.extend(encoded(part, encoding)?);
+            }
+            ways.push(bytes);
+        }
+    }
+    Some(match ways.as_slice() {
+        [] => return None,
+        [one] => escaped(one),
+        many => {
+            let mut out = String::from("(?:");
+            for (i, way) in many.iter().enumerate() {
+                if i > 0 {
+                    out.push('|');
+                }
+                out.push_str(&escaped(way));
+            }
+            out.push(')');
+            out
+        }
+    })
 }
 
 /// The ways one character is written when case is set aside. `i`, `I`, `İ`

@@ -129,7 +129,8 @@ enum Command {
     /// `scour grep TODO ext:rs /Projeler/` reads the newest first and stops at
     /// `-n` files, a gigabyte or ten seconds; `--from` goes on where it stopped.
     Grep {
-        /// What to look for.
+        /// What to look for: every word, `a|b` either, `!a` not in the file,
+        /// `"a b"` as written, `~word` the word or one a letter off.
         pattern: String,
         /// Which files, in the query language. Left out: every file indexed.
         query: Vec<String>,

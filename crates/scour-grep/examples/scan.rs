@@ -2,7 +2,9 @@
 //! reading them cost. For measuring: `scour -n 100000 'ext:rs' | …`.
 //!
 //!     cargo run --release -p scour-grep --example scan -- \
-//!         [--binary] [--regex | --hex] [--cold] [--list] [--quiet] NEEDLE
+//!         [--binary] [--regex | --hex | --expr] [--cold] [--list] [--quiet] NEEDLE
+//!
+//! `--expr` reads the needle as a content pattern does: `;`, `!`, `~word`.
 //!
 //! `--cold` asks the kernel to drop each file from the page cache first; a
 //! file it would not drop is counted, so a "cold" run says how cold it was.
@@ -10,7 +12,7 @@
 use std::io::BufRead as _;
 use std::time::Instant;
 
-use scour_grep::{Budget, File, Ground, Needle, Options, Outcome, Pattern, Scanner, Skip};
+use scour_grep::{Budget, Expr, File, Ground, Needle, Options, Outcome, Pattern, Scanner, Skip};
 
 struct Args {
     binary: bool,
@@ -19,6 +21,7 @@ struct Args {
     /// The paths with a find and the line of the first, on standard error.
     list: bool,
     cold: bool,
+    expr: bool,
     needle: Needle,
 }
 
@@ -30,13 +33,14 @@ fn args() -> Args {
             .map(|i| rest.remove(i))
             .is_some()
     };
-    let (binary, cold, regex, hex, list, quiet) = (
+    let (binary, cold, regex, hex, list, quiet, expr) = (
         flag("--binary"),
         flag("--cold"),
         flag("--regex"),
         flag("--hex"),
         flag("--list"),
         flag("--quiet"),
+        flag("--expr"),
     );
     let Some(text) = rest.pop() else {
         eprintln!("usage: scan [--binary] [--regex | --hex] [--cold] NEEDLE < paths");
@@ -55,6 +59,7 @@ fn args() -> Args {
         quiet,
         list,
         cold,
+        expr,
         needle,
     }
 }
@@ -73,7 +78,6 @@ fn main() {
         })
         .collect();
     let kept = if args.cold { drop_cached(&files) } else { 0 };
-    let pattern = Pattern::new(&args.needle, false).expect("a needle");
     // One root a top-level directory: enough to tell this machine's disks apart.
     let mut roots: Vec<_> = files
         .iter()
@@ -100,7 +104,7 @@ fn main() {
             surefoot::probe::medium_of(root)
         );
     }
-    let scanner = Scanner::new(pattern, options, Ground::probe(&roots));
+    let ground = Ground::probe(&roots);
     // `SCAN_RATE_MIB` paces the reading, as `rate_mib` does a service's.
     let pace = std::env::var("SCAN_RATE_MIB")
         .ok()
@@ -108,7 +112,14 @@ fn main() {
         .unwrap_or(0);
     let budget = Budget::unlimited().paced(pace << 20);
     let (began, cpu_before) = (Instant::now(), usage());
-    let outcomes = scanner.scan(&files, &budget);
+    let outcomes = if args.expr {
+        Expr::forgiving(&args.needle, false, scour_core::mistakes_allowed)
+            .expect("a pattern")
+            .scan(&options, &ground, None, None, &files, &budget)
+    } else {
+        let pattern = Pattern::new(&args.needle, false).expect("a needle");
+        Scanner::new(pattern, options, ground).scan(&files, &budget)
+    };
     let took = began.elapsed().as_secs_f64();
     let (cpu_after, peak_kib) = (usage(), peak_rss_kib());
     let count = |want: &dyn Fn(&Outcome) -> bool| outcomes.iter().filter(|o| want(o)).count();

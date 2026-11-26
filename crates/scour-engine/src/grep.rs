@@ -85,10 +85,12 @@ pub(crate) fn run(
     texts: Option<Arc<dyn Texts>>,
 ) -> Result<Grepped> {
     let began = Instant::now();
-    let expr = Expr::new(&ask.needle, ask.exact_case).map_err(|e| Error::QuerySyntax {
-        at: 0,
-        expected: e.to_string(),
-    })?;
+    let expr = Expr::forgiving(&ask.needle, ask.exact_case, scour_core::mistakes_allowed).map_err(
+        |e| Error::QuerySyntax {
+            at: 0,
+            expected: e.to_string(),
+        },
+    )?;
     let mut options = Options {
         binary: ask.binary,
         markup: ask.markup,

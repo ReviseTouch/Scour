@@ -20,6 +20,16 @@ fn the_faces_draw_a_pattern_as_the_search_reads_it() {
         "!y !z w",
         r#""a b";c !"d e""#,
         "ş;ç ğ",
+        "~rapor",
+        "~rapor|dilekçe",
+        "!~taslak",
+        "x !~y",
+        "(a | ~rapor) c",
+        r#""~x""#,
+        r"\~x",
+        "~",
+        "~|x",
+        r#"~"iş kazası""#,
     ] {
         let expr = Expr::new(&Needle::Text(pattern.into()), false).expect(pattern);
         let drawn = pieces(pattern);

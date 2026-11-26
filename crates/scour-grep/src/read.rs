@@ -171,20 +171,12 @@ impl Reader {
             if kind == Kind::Binary && !opts.binary && !pattern.is_raw_bytes() {
                 return Some((Outcome::Skipped(Skip::Binary), total));
             }
-            let regex = pattern.reading(kind);
             let cut = if eof { filled } else { seam(hay, kind) };
-            for found in regex.find_iter(hay) {
+            for (start, end) in pattern.finds(kind, hay) {
                 // Past the seam it is found again, whole, in the next read.
-                if found.start() >= cut && !eof {
+                if start >= cut && !eof {
                     break;
                 }
-                if found.is_empty() {
-                    continue;
-                }
-                let (start, end) = match kind {
-                    Kind::Binary => pattern.settled(hay, found.start(), found.end()),
-                    _ => (found.start(), found.end()),
-                };
                 let line = (kind == Kind::Text).then(|| lines.at(path, whole, base, hay, start));
                 // A second find on a line already shown is the same line again.
                 if line.is_some() && hits.last().is_some_and(|last: &Hit| last.line == line) {

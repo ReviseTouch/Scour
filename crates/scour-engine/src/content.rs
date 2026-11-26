@@ -318,13 +318,16 @@ impl Contents {
     /// `Ok(true)` when every candidate was read.
     fn read_on(&self, reading: &Reading, lent: &Lent) -> Result<bool> {
         let ground = Ground::probe(lent.roots.iter().map(|r| scour_core::path::to_path(r)));
-        let expr =
-            Expr::from_clauses(&reading.plan.must, &reading.plan.forbid, false).map_err(|e| {
-                Error::QuerySyntax {
-                    at: 0,
-                    expected: e.to_string(),
-                }
-            })?;
+        let expr = Expr::from_clauses(
+            &reading.plan.must,
+            &reading.plan.forbid,
+            false,
+            scour_core::mistakes_allowed,
+        )
+        .map_err(|e| Error::QuerySyntax {
+            at: 0,
+            expected: e.to_string(),
+        })?;
         let mut options = Options {
             hits_per_file: FOUND_PER_FILE,
             ..Options::default()

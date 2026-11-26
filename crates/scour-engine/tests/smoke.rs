@@ -2345,6 +2345,13 @@ fn grep_reads_what_the_query_names_and_says_where_it_stopped() {
     let none = f.engine.grep("ext:rs", &ask, None).expect("grep");
     assert_eq!((none.files.len(), none.scanned, none.next), (0, 20, None));
 
+    // `~` forgives what `fuzzy:` forgives a word that long: here two letters swapped.
+    ask.needle = scour_grep::Needle::Text("~needel".into());
+    ask.exact_case = false;
+    let near = f.engine.grep("ext:rs", &ask, None).expect("grep");
+    assert_eq!(near.files.len(), 20);
+    assert_eq!(near.files[0].hits[0].marks, [(4, 6)]);
+
     ask.needle = scour_grep::Needle::Regex("(".into());
     assert!(matches!(
         f.engine.grep("", &ask, None),
@@ -2435,6 +2442,9 @@ fn a_content_term_is_answered_by_reading_the_files_the_rest_names() {
     assert!(both.hits.iter().all(|hit| hit.found.len() == 1));
     settle(&f, |_| !ask("content:iğne content:gamma").capped);
     assert_eq!(ask("content:iğne content:gamma").total, 0);
+    // A similar word, forgiven by the rule a name's `fuzzy:` keeps.
+    settle(&f, |_| !ask("ext:rs content:~alpah").capped);
+    assert_eq!(ask("ext:rs content:~alpah").total, 30);
 
     // What the reading cannot answer is still refused, and facets are the candidates'.
     let refused = f
