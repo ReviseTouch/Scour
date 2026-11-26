@@ -3166,3 +3166,159 @@ msgstr "büyük harfler yazıldığı gibi"
 
 msgid "in the content field: choose a piece · ~ ! Del change it"
 msgstr "içerik alanında: bir parça seç · ~ ! Del ile değiştir"
+
+msgid "{n} entries · parts: {parts}"
+msgstr "{n} kayıt · {parts} parça"
+
+msgid "The oldest has been running for {u}."
+msgstr "En eskisi {u} süredir açık."
+
+msgid "Start over…"
+msgstr "Baştan kur…"
+
+msgid "The index is emptied and every source is walked again. That takes a few minutes, and searches find less until it is done. Settings, rules and tabs stay."
+msgstr "İndeks silinir ve bütün kaynaklar baştan taranır. Birkaç dakika sürer; bitene dek aramalar daha az şey bulur. Ayarlar, kurallar ve sekmeler kalır."
+
+msgid "Empty and walk again"
+msgstr "Sil ve baştan tara"
+
+msgid "The index was emptied; the walk has started."
+msgstr "İndeks silindi, tarama başladı."
+
+msgid "Document texts"
+msgstr "Belge metinleri"
+
+msgid "{n} documents · up to {limit}"
+msgstr "{n} belge · en çok {limit}"
+
+msgid "Empty…"
+msgstr "Boşalt…"
+
+msgid "Text read out of PDF and Office documents is deleted. Content search is slower until it has read them again."
+msgstr "PDF ve Office belgelerinden çıkarılan metinler silinir. İçerik araması onları yeniden okuyana dek yavaşlar."
+
+msgid "Empty it"
+msgstr "Boşalt"
+
+msgid "Document texts emptied."
+msgstr "Belge metinleri boşaltıldı."
+
+msgid "Previews"
+msgstr "Önizlemeler"
+
+msgid "documents turned into PDF"
+msgstr "PDF'e çevrilmiş belgeler"
+
+msgid "Previews are deleted; each is made again the first time its document is looked at."
+msgstr "Önizlemeler silinir; her biri belgesine ilk bakılışta yeniden yapılır."
+
+msgid "Previews emptied."
+msgstr "Önizlemeler boşaltıldı."
+
+msgid "Page window's profile"
+msgstr "Sayfa penceresinin profili"
+
+msgid "its browser's data"
+msgstr "tarayıcısının verisi"
+
+msgid "The page window's own browser data is deleted: its cache and its window size."
+msgstr "Sayfa penceresinin kendi tarayıcı verisi silinir: önbelleği ve pencere boyutu."
+
+msgid "Profile emptied."
+msgstr "Profil boşaltıldı."
+
+msgid "Settings and logs"
+msgstr "Ayarlar ve günlükler"
+
+msgid "kept"
+msgstr "silinmez"
+
+msgid "Open folder"
+msgstr "Klasörü aç"
+
+msgid "Unsorted rows"
+msgstr "Sırasız kayıtlar"
+
+msgid "Put in order…"
+msgstr "Sıraya koy…"
+
+msgid "{n} rows are put in order. It takes about a minute and makes the index smaller; searches are not measurably faster for it."
+msgstr "{n} kayıt sıraya konur. Yaklaşık bir dakika sürer ve indeksi küçültür; aramalar bundan ölçülebilir biçimde hızlanmaz."
+
+msgid "Put in order"
+msgstr "Sıraya koy"
+
+msgid "Putting the rows in order."
+msgstr "Kayıtlar sıraya konuyor."
+
+msgid "Restart the service"
+msgstr "Servisi yeniden başlat"
+
+msgid "Restarting…"
+msgstr "Yeniden başlatılıyor…"
+
+msgid "Close the page window first: its browser is using this profile."
+msgstr "Önce sayfa penceresini kapat: tarayıcısı bu profili kullanıyor."
+
+msgid "Page bridge"
+msgstr "Sayfa köprüsü"
+
+msgid "MCP servers"
+msgstr "MCP sunucuları"
+
+msgid "Document reader"
+msgstr "Belge okuyucu"
+
+msgid "Every open Claude session starts one of its own."
+msgstr "Her açık Claude oturumu kendi sürecini başlatır."
+
+msgid "Scour on this machine"
+msgstr "Scour bu makinede"
+
+msgid "Memory"
+msgstr "Bellek"
+
+msgid "Processor"
+msgstr "İşlemci"
+
+msgid "Running"
+msgstr "Açık olanlar"
+
+msgid "Service"
+msgstr "Servis"
+
+msgid "at most {n} since it started"
+msgstr "açıldığından beri en çok {n}"
+
+msgid "{used} of {total} in use"
+msgstr "kullanımda {used} / {total}"
+
+msgid "other programs"
+msgstr "öbür programlar"
+
+msgid "{n}% of one core"
+msgstr "tek çekirdeğin %{n} kadarı"
+
+msgid "machine {n}% busy · {t} threads · load {l}"
+msgstr "makine %{n} meşgul · {t} iş parçacığı · yük {l}"
+
+msgid "Service running · version {v} · up {u}"
+msgstr "Servis çalışıyor · sürüm {v} · {u} süredir açık"
+
+msgid "What Scour keeps on this machine"
+msgstr "Scour'un bu makinede tuttukları"
+
+msgid "this system does not say"
+msgstr "bu sistem söylemiyor"
+
+msgid "{a} s"
+msgstr "{a} sn"
+
+msgid "{a} min {b} s"
+msgstr "{a} dk {b} sn"
+
+msgid "{a} h {b} min"
+msgstr "{a} sa {b} dk"
+
+msgid "{a} d {b} h"
+msgstr "{a} gün {b} sa"
