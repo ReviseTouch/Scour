@@ -29,6 +29,17 @@
     white-space: nowrap;
     overflow: hidden;
   }
+  /* A folder: each step its own chip, a quiet `›` between. */
+  .qshadow .term.cap.place .pgrp { display: inline-flex; align-items: center; flex: none; gap: 0; }
+  .qshadow .term.cap.place .pgrp > .cs { font-style: normal; font: 500 11px/1 var(--sans); color: var(--ink-3); padding: 0 3px; }
+  /* On one disk, the header ends in that disk's state, as its tile says it. */
+  .qshadow .term.cap.place .head-art .hst { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+  .qshadow .term.cap.place .head-art .hst.live { background: var(--t0); }
+  .qshadow .term.cap.place .head-art .hst.polled { background: var(--t3); }
+  .qshadow .term.cap.place .head-art .hst.asking { background: var(--q-bad); }
+  .qshadow .term.cap.place .head-art .hst.walking { background: var(--focus); }
+  .qshadow .term.cap.place .head-art .hst.partly { background: none; box-shadow: inset 0 0 0 1.5px var(--t3); }
+  .qshadow .term.cap.place .head-art .hst.off { background: none; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
   .qshadow .term.cap:is(.place, .list) .pv .pdot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
   .qshadow .term.cap:is(.place, .list) .pv .cr { font-weight: 500; color: var(--ink-2); }
   .qshadow .term.cap:is(.place, .list) .pv .cs { font-style: normal; font-weight: 500; color: var(--ink-3); margin: 0 -1px; }

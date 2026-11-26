@@ -75,9 +75,18 @@ fn fold_groups(qb: &mut QueryBar, text: &str, d: &Dress) -> Vec<Drawn> {
         .filter_map(|p| {
             // An exclusion's header holds its `!` too.
             let not = text[p.start..].starts_with('!');
-            let (head_w, _) = head(qb, d, "under", 6 + usize::from(not), not);
+            let (mut head_w, _) = head(qb, d, "under", 6 + usize::from(not), not);
+            // On one disk, the header is that disk's picture and its state's dot.
+            let disk = p.disk().filter(|_| !not && !d.words).map(|k| &tiles[k]);
+            if disk.is_some() {
+                head_w += crate::qbar::HEAD_DOT;
+            }
             let mut m = |s: &str, face: i32| width_of(qb, s, face);
-            qgroup::fit(text, p, room, head_w, d.adv, &mut m)
+            let mut g = qgroup::fit(text, p, room, head_w, d.adv, &mut m)?;
+            if let Some(t) = disk {
+                (g.disk, g.shown) = (t.kind, t.shown.as_str());
+            }
+            Some(g)
         })
         .collect();
     for t in crate::qlist::lists(text, d.caret) {
@@ -147,6 +156,8 @@ fn group_cap(qb: &mut QueryBar, d: &Dress, text: &str, g: &Drawn, small: f32) ->
         first: true,
         last: true,
         group: true,
+        disk: g.disk.into(),
+        shown: g.shown.into(),
         ..Cap::default()
     };
     let unwritten = Dress {
@@ -201,7 +212,7 @@ fn bits(qb: &mut QueryBar, text: &str, groups: &[Drawn], laid: &[Laid]) -> Vec<Q
             bold: b.bold,
             dim: b.dim,
             disk: b.disk.into(),
-            struck: b.kind == 1 && g.head.not,
+            struck: (b.kind == 0 || b.kind == 1) && g.head.not,
         }));
         zones.extend(g.zones.iter().map(|&(x0, x1, aim)| Zone {
             line: l.line,

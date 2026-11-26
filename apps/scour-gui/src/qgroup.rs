@@ -71,6 +71,10 @@ pub struct Drawn {
     pub zones: Vec<(f32, f32, Aim)>,
     /// Byte ranges drawn as letters: the value of a member being edited.
     pub letters: Vec<(usize, usize)>,
+    /// The one disk its parts lie on, as the header shows it: its kind and
+    /// its tile's state (`Shown::as_str`). Empty for several, or none.
+    pub disk: &'static str,
+    pub shown: &'static str,
 }
 
 /// How many parts the "+N" stands for, as drawn; 0 without one.
@@ -114,10 +118,11 @@ fn part_w(text: &str, p: &CapPart, adv: f32, m: &mut dyn FnMut(&str, i32) -> f32
     if p.spot.tile.is_some() || p.crumbs.is_empty() {
         return PAD + DOT + DOT_GAP + m(&p.spot.name, PART_BOLD) + PAD;
     }
+    // Each step its own chip, a `›` between.
     let n = p.crumbs.len();
-    let mut w = 2.0 * PAD + (n - 1) as f32 * (m("›", PART) + 2.0 * CRUMB_GAP);
+    let mut w = (n - 1) as f32 * (m("›", PART) + 2.0 * CRUMB_GAP);
     for (i, c) in p.crumbs.iter().enumerate() {
-        w += m(&c.label, if i + 1 == n { PART_BOLD } else { PART });
+        w += 2.0 * PAD + m(&c.label, if i + 1 == n { PART_BOLD } else { PART });
     }
     w
 }
@@ -135,23 +140,24 @@ fn part_bits(p: &CapPart, x: f32, w: f32, m: &mut dyn FnMut(&str, i32) -> f32) -
     if p.raw {
         return vec![bit(x, w, 4)];
     }
-    let mut out = vec![bit(x, w, 0)];
     let words = |at: f32, s: &str, bold: bool, dim: i32, m: &mut dyn FnMut(&str, i32) -> f32| Bit {
         text: s.to_string(),
         bold,
         dim,
         ..bit(at, m(s, if bold { PART_BOLD } else { PART }), 1)
     };
-    let mut at = x + PAD;
     if p.spot.tile.is_some() || p.crumbs.is_empty() {
+        let mut out = vec![bit(x, w, 0)];
         out.push(Bit {
             disk: p.spot.kind.unwrap_or("fixed"),
-            ..bit(at, DOT, 2)
+            ..bit(x + PAD, DOT, 2)
         });
-        at += DOT + DOT_GAP;
-        out.push(words(at, &p.spot.name, true, 0, m));
+        out.push(words(x + PAD + DOT + DOT_GAP, &p.spot.name, true, 0, m));
         return out;
     }
+    // A folder: each step a chip of its own, the last one bold.
+    let mut out = Vec::new();
+    let mut at = x;
     let n = p.crumbs.len();
     for (i, c) in p.crumbs.iter().enumerate() {
         if i > 0 {
@@ -161,8 +167,9 @@ fn part_bits(p: &CapPart, x: f32, w: f32, m: &mut dyn FnMut(&str, i32) -> f32) -
             out.push(s);
         }
         let last = i + 1 == n;
-        let b = words(at, &c.label, last, if last { 0 } else { 1 }, m);
-        at += b.w;
+        let b = words(at + PAD, &c.label, last, 0, m);
+        out.push(bit(at, b.w + 2.0 * PAD, 0));
+        at += b.w + 2.0 * PAD;
         out.push(b);
     }
     out
@@ -176,22 +183,20 @@ enum Slot {
     Block(usize),
 }
 
-/// A "+n" chip at `x`; how wide.
+/// A "+n" at `x`, quiet and without a chip of its own; how wide.
 fn plus(bits: &mut Vec<Bit>, x: f32, n: usize, m: &mut dyn FnMut(&str, i32) -> f32) -> f32 {
     let label = format!("+{n}");
     let lw = m(&label, PART_BOLD);
-    let bit = |x: f32, w: f32, kind: i32, text: String, bold: bool| Bit {
-        x,
-        w,
-        kind,
-        text,
-        bold,
-        dim: 1,
+    bits.push(Bit {
+        x: x + PAD / 2.0,
+        w: lw,
+        kind: 1,
+        text: label,
+        bold: true,
+        dim: 2,
         disk: "",
-    };
-    bits.push(bit(x, lw + 2.0 * PAD, 0, String::new(), false));
-    bits.push(bit(x + PAD, lw, 1, label, true));
-    lw + 2.0 * PAD
+    });
+    lw + PAD
 }
 
 /// One fold of the group laid out from `head_w`, the header's width.
@@ -314,6 +319,8 @@ pub fn lay(
         bits,
         zones,
         letters,
+        disk: "",
+        shown: "",
     }
 }
 

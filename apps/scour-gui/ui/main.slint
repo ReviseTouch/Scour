@@ -22,7 +22,7 @@ import { DashedBox } from "frames.slint";
 import { TimePanel, TypePanel, SizePanel } from "panels.slint";
 import { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook } from "panel-types.slint";
 export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
-import { ScopeChip, DiskInk } from "place-parts.slint";
+import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
@@ -1530,14 +1530,15 @@ export component MainWindow inherits Window {
                         width: b.w;
                         height: root.q-pitch;
                         visible: b.line >= root.q-first && b.line < root.q-first + root.q-shown;
+                        // A part's chip: the panel's ground sunk into the
+                        // capsule's tint, inside a hairline of its ring.
                         if b.kind == 0 || b.kind == 4: Rectangle {
-                            y: 7px;
-                            height: parent.height - 14px;
-                            border-radius: 6px;
-                            background: b.kind == 4 ? Theme.panel : Theme.panel-2;
-                            opacity: b.kind == 4 ? 1 : 0.7;
-                            border-width: b.kind == 4 && input.has-focus ? 1.5px : 0px;
-                            border-color: Theme.focus;
+                            y: 6px;
+                            height: parent.height - 12px;
+                            border-radius: 5px;
+                            background: Theme.panel;
+                            border-width: b.kind == 4 ? (input.has-focus ? 1.5px : 0px) : 1px;
+                            border-color: b.kind == 4 ? Theme.focus : b.struck ? Theme.cap-neg-ring : Theme.cap-ring;
                         }
                         if b.kind == 1: Text {
                             y: 0px;
@@ -1682,7 +1683,15 @@ export component MainWindow inherits Window {
                                 font-weight: 700;
                                 vertical-alignment: center;
                             }
-                            VerticalLayout {
+                            // A place group on one disk wears that disk's picture.
+                            if c.disk != "": VerticalLayout {
+                                alignment: center;
+                                DiskIcon {
+                                    kind: c.disk;
+                                    colorize: cap-head.ink;
+                                }
+                            }
+                            if c.disk == "": VerticalLayout {
                                 alignment: center;
                                 Image {
                                     width: 16px;
@@ -1703,6 +1712,16 @@ export component MainWindow inherits Window {
                                 font-size: 12px;
                                 font-weight: 600;
                                 vertical-alignment: center;
+                            }
+                            // That disk's state, as its tile in the place panel says it.
+                            if c.disk != "": VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 7px;
+                                    height: 7px;
+                                    border-radius: 3.5px;
+                                    background: DiskInk.state(c.shown);
+                                }
                             }
                         }
                     }

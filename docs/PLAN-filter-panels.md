@@ -18,7 +18,7 @@ lint, every test, 34 crates on three more targets.
 | B place panel | strip, tiles with state and count, Add / Exclude, "Searching in:", in three faces; `seen` filled for config sources; `/` browsable | a disk being asked about was drawn from fixtures only: nobody plugged a stick in |
 | C scope chip | page and window, fixed width; dots only under 700 px on the page | the terminal keeps its status line |
 | D time, type, size | presets with counts, four scales, Between / Before / After, kind and extension in one panel, in three faces | no size histogram (no size facet) |
-| E capsules | one Location capsule for a group, labelled inner chips, `+N`, one red capsule for exclusions, the pill's effect, the mark on a capsule that emptied the list, a frame round an OR run | the `|` stays a `|` inside its frame; the terminal has no pill |
+| E capsules | one Location capsule for a group, labelled inner chips, `+N`, one red capsule for exclusions, the pill's effect, the mark on a capsule that emptied the list, a frame round an OR run; on 2026-11-26 the mock's look: every chip the panel's ground in a hairline of the ring, a folder's steps each a chip from its disk's name ("Depo › PROJELER › Scour"), a quiet `+N`, and a group on one disk headed by that disk's picture and state dot (page and window) | the `|` stays a `|` inside its frame; the terminal has no pill |
 | G | — | none started; each is its own question (§7) |
 
 **Fixed on the way, in the language and the service:** a closed date range

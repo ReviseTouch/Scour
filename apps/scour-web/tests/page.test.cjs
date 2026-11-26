@@ -1082,7 +1082,7 @@ function placeModel() {
   return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeReplace, placeRuns, placeRunOf,
     placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, scopeSays, STRIP_FLOOR, DISK_KINDS, quotedPath,
     placeTermAt, placeAddAt, placeAddWith, placeExclude, placeSettle, placeAt, withoutPlaces, spots, spotRemove,
-    chipLabel, chipDots, tileHeld, tileLit, crumbs, placeCapsAt, exclusionCaps, capPartAt, capFold,
+    chipLabel, chipDots, tileHeld, tileLit, crumbs, crumbsOn, tileOf, capDisk, placeCapsAt, exclusionCaps, capPartAt, capFold,
     capStops, capStep, capBlocks, opensByItself, editedTerm, caretResting, caretEditing,
     negatePlaces, unnegatePlaces, exclusionBlocks })`, c);
 }
@@ -1497,16 +1497,28 @@ test('a run of under: terms is one capsule of parts (lens/capsule_tests.rs)', ()
   // folders_are_crumbs_in_tilde_form
   q = 'under:~/Projeler/Scour|under:"/mnt/depo/My Docs"|under:/ rapor';
   const f = caps(q, null)[0];
-  assert.deepEqual(capSaid(f), ['~ › Projeler › Scour', '/ › mnt › depo › My Docs', '/']);
+  assert.deepEqual(capSaid(f), ['~ › Projeler › Scour', 'Depo › My Docs', '/']);
   assert.deepEqual(J(f.parts[0].crumbs[2]), { label: 'Scour', path: '/home/hasan/Projeler/Scour' });
   assert.equal(f.parts[0].crumbs[0].path, H);
+  assert.deepEqual(J(f.parts[1].crumbs[0]), { label: 'Depo', path: '/mnt/depo' });
+  assert.deepEqual(J(f.parts.map((p) => p.disk === null ? null : tiles[p.disk].name)), ['CACHY', 'Depo', 'CACHY']);
+  assert.equal(M.capDisk(f), null, 'three parts on two disks');
+  // a_capsule_on_one_disk_names_it_and_a_folder_from_root_its_disk
+  let one = caps('under:/mnt/depo/PROJELER/Scour rapor', null)[0];
+  assert.deepEqual(capSaid(one), ['Depo › PROJELER › Scour']);
+  assert.equal(tiles[M.capDisk(one)].name, 'Depo');
+  one = caps('under:/srv/www|under:~/x', null)[0];
+  assert.deepEqual(capSaid(one), ['CACHY › srv › www', '~ › x']);
+  assert.equal(tiles[M.capDisk(one)].name, 'CACHY');
+  one = caps('under:/mnt/depo/a|under:', null)[0];
+  assert.equal(tiles[M.capDisk(one)].name, 'Depo', 'an empty member keeps the header');
   // a_mixed_or_negated_run_is_not_one_capsule
   assert.deepEqual(J(caps('under:/a|ext:pdf', null)), []);
   assert.deepEqual(J(caps('!under:/a|under:/b', null)), []);
   assert.deepEqual(J(caps('under:/a|parent:/b', null)), []);
   c = caps('under:/a !under:/b under:/mnt/depo|under:/c', null);
   assert.deepEqual(J(c.map((x) => [x.start, x.end])), [[0, 8], [19, 43]]);
-  assert.deepEqual(capSaid(c[1]), ['Depo', '/ › c']);
+  assert.deepEqual(capSaid(c[1]), ['Depo', 'CACHY › c']);
   // an_empty_member_is_raw
   const e = caps('rapor under:/mnt/depo|under:', null)[0];
   assert.deepEqual(capSaid(e), ['Depo', '[1]']);
@@ -1527,7 +1539,7 @@ test('a resting caret leaves a disk whole, an edited member comes apart (lens/ca
   assert.deepEqual(at(q, M.caretResting(0)), ['CACHY', 'Depo']);
   // a_member_being_edited_is_raw_and_its_tile_comes_apart
   const tilde = q.indexOf('~');
-  const apart = ['/ › etc', '[1]', '/ › opt', '/ › usr', '/ › var', 'Depo'];
+  const apart = ['CACHY › etc', '[1]', 'CACHY › opt', 'CACHY › usr', 'CACHY › var', 'Depo'];
   assert.deepEqual(at(q, M.caretResting(tilde)), apart, 'strictly inside, however it got there');
   assert.deepEqual(at(q, M.caretEditing(tilde + 1)), apart);
   assert.deepEqual(at(q, M.caretEditing(q.length)), ['CACHY', '[1]']);
@@ -1771,6 +1783,7 @@ function capContext(value, caret) {
   vm.runInContext(section('  function capHint(raw) {', '\n  /* A filter with nothing after'), c);
   vm.runInContext(section('  function capHeadOf(text, a, b) {', '\n  /* The canonical name'), c);
   vm.runInContext(section('  /* ---------------- the place capsule', '\n  /* Whether a row'), c);
+  vm.runInContext(section('  const DISK_ART = {', '\n\n  /* A place lens opens'), c);
   const disk = (id, label, kind, roots, state) => ({ volume: { id, label, kind, fs: 'fs', roots, size: 1 }, state, seen: {} });
   c.PLACE_DISKS = [disk('cachy', 'CACHY', 'system', ['/'], 'manual'), disk('depo', 'Depo', 'fixed', ['/mnt/depo'], 'configured')];
   c.PLACE_SOURCES = [{ name: 'home', roots: [PLACE_HOME] }, { name: 'sistem', roots: ['/usr', '/etc', '/opt', '/var'] },
@@ -1801,7 +1814,9 @@ test('the Location capsule keeps every letter of its run, and says the disks and
   assert.equal(lettersOf(html), run, 'the run, letter for letter, in order');
   assert.match(html, /class="art pv"[^>]*><i class="pdot" style="background:var\(--disk-system\)"><\/i>CACHY<\/span>/);
   assert.match(html, />Depo<\/span>/);
-  assert.match(html, /~<\/span><i class="cs">›<\/i><span class="cr">Projeler<\/span><i class="cs">›<\/i><b>Scour<\/b>/);
+  assert.match(html, /<span class="pv">~<\/span><i class="cs">›<\/i><span class="pv">Projeler<\/span><i class="cs">›<\/i><span class="pv"><b>Scour<\/b><\/span>/,
+    'each step its own chip');
+  assert.doesNotMatch(html, /class="hst/, 'on several disks the header is a folder, with no state');
   assert.equal((html.match(/class="art psep"/g) || []).length, 2, 'a quiet · between the parts');
   assert.equal((html.match(/class="term cap/g) || []).length, 1, 'one capsule');
   // Folded: the letters stay, the rest is "+N".
@@ -1818,6 +1833,14 @@ test('the Location capsule keeps every letter of its run, and says the disks and
   assert.match(raw, /<span class="pw" data-k="\d" data-hint="which folder\?"><span class="r-value">~<\/span><\/span>/);
   assert.match(raw, /<b>etc<\/b>/, 'editing a root takes its disk apart, as the model says');
   assert.match(raw, />Depo<\/span>/);
+  // On one disk: steps from the disk's name, and the header that disk's
+  // picture with its state after the name.
+  const one = capContext('rapor under:/mnt/depo/PROJELER/Scour', null);
+  const [oc] = vm.runInContext('placeCapsDrawn(q.value, null)', one);
+  const oh = one.placeCapHtml(one.q.value, oc, -1);
+  assert.match(oh, /<span class="nm">Location<\/span><i class="hst [a-z]+"><\/i>/);
+  assert.match(oh, /<span class="pv">Depo<\/span><i class="cs">›<\/i><span class="pv">PROJELER<\/span><i class="cs">›<\/i><span class="pv"><b>Scour<\/b><\/span>/);
+  assert.doesNotMatch(oh, /M2\.5 13V5\.5/, 'not the folder');
 });
 
 test('Backspace and Delete at a collapsed part take the whole part; typing there starts a word after', () => {

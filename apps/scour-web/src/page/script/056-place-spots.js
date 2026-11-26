@@ -97,6 +97,41 @@
     return out;
   }
 
+  /* `lens::tile_of`: the tile `path` lies on, by its index — the one with the
+     longest root above it. */
+  function tileOf(path, tiles) {
+    let best = null, len = -1;
+    tiles.forEach((t, k) => {
+      const r = untrailed(t.root || "");
+      if (t.root && liesUnder(path, t.root) && r.length > len) { best = k; len = r.length; }
+    });
+    return best;
+  }
+
+  /* `lens::crumbs_on`: the steps as a capsule shows them, and the disk they
+     lie on — from `~` inside `home`, from the disk's name below its root
+     ("Depo › PROJELER"), else from `/`. `/` itself stays `/`. */
+  function crumbsOn(path, home, tiles) {
+    const disk = tileOf(path, tiles);
+    const inHome = !!home && homeIn(home, path).startsWith("~");
+    if (disk === null || inHome || path.replace(/\/+$/, "") === "") return [crumbs(path, home), disk];
+    const root = tiles[disk].root.replace(/\/+$/, "");
+    const out = [{ label: tiles[disk].name, path: root || "/" }];
+    let at = root;
+    for (const seg of path.slice(root.length).split("/").filter(Boolean)) {
+      at += "/" + seg;
+      out.push({ label: seg, path: at });
+    }
+    return [out, disk];
+  }
+
+  /* `PlaceCap::disk`: the one disk its parts lie on, or null — several, or
+     none known; a part on no disk does not count. */
+  function capDisk(cap) {
+    const on = cap.parts.map((p) => p.disk).filter((d) => d !== null);
+    return on.length && on.every((d) => d === on[0]) ? on[0] : null;
+  }
+
   /* `lens::place_caps_at`: every run made only of positive `under:` terms as
      one capsule of parts, every part shown. `caret` is a `Caret`, or null. */
   function placeCapsAt(text, home, tiles, caret) {
@@ -113,12 +148,14 @@
     const held = members.map((t) => ({ path: placeNorm(home, t.value), term: t }));
     const parts = placeGather(held, home, tiles, not, (t) => isEdited(t, caret)).map((spot) => {
       const empty = spot.tile === null && spot.terms[0].value === "";
+      const [steps, disk] = spot.tile !== null ? [[], spot.tile] : empty ? [[], null] : crumbsOn(spot.paths[0], home, tiles);
       return {
         spot,
-        crumbs: spot.tile === null && !empty ? crumbs(spot.paths[0], home) : [],
+        crumbs: steps,
         raw: spot.tile === null && isEdited(spot.terms[0], caret),
         caret: !!caret && spot.terms.some((t) => t.start < caret.at && caret.at <= t.end),
         shown: true,
+        disk,
       };
     });
     return { start: members[0].start, end: members[members.length - 1].end, parts, hidden: 0 };

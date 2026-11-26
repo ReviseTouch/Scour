@@ -101,7 +101,10 @@ fn chip(
     m: &mut dyn FnMut(&str, i32) -> f32,
 ) -> f32 {
     let lw = m(label, PART_BOLD);
-    bits.push(bit(x, lw + 2.0 * PAD, 0));
+    // A "+n" is quiet words, a value a chip: as the main bar's place group.
+    if dim == 0 {
+        bits.push(bit(x, lw + 2.0 * PAD, 0));
+    }
     bits.push(Bit {
         text: label.to_string(),
         bold: true,
@@ -138,7 +141,7 @@ pub fn lay(
     if n > shown {
         bits.push(bit(x + SEP / 2.0 - 1.5, 3.0, 3));
         x += SEP;
-        let w = chip(&mut bits, x, &format!("+{}", n - shown), 1, m);
+        let w = chip(&mut bits, x, &format!("+{}", n - shown), 2, m);
         slots.push((x, x + w));
         x += w;
     }
@@ -181,6 +184,8 @@ pub fn lay(
         bits,
         zones,
         letters: Vec::new(),
+        disk: "",
+        shown: "",
     }
 }
 

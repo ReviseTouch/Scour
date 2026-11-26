@@ -7,7 +7,7 @@ use super::caret::{Caret, is_edited};
 use super::group::{Held, is_place, norm, runs};
 use super::negate::exclusion_blocks;
 use super::spots::{Spot, gather};
-use crate::disks::Tile;
+use crate::disks::{Tile, lies_under};
 use crate::path::home_form;
 
 /// One step of a folder's path, with the path that reaches it.
@@ -40,6 +40,42 @@ pub fn crumbs(path: &str, home: &str) -> Vec<Crumb> {
     out
 }
 
+/// The steps of `path` as a capsule shows them, and the disk it lies on by
+/// its index in `tiles`: from `~` inside `home`, from the disk's name below a
+/// disk's root ("Depo › PROJELER"), else from `/` as [`crumbs`]. `/` itself
+/// stays `/`: every disk lies under it.
+pub fn crumbs_on(path: &str, home: &str, tiles: &[Tile]) -> (Vec<Crumb>, Option<usize>) {
+    let disk = tile_of(path, tiles);
+    let in_home = !home.is_empty() && home_form(home, path).starts_with('~');
+    let Some(k) = disk.filter(|_| !in_home && !path.trim_end_matches('/').is_empty()) else {
+        return (crumbs(path, home), disk);
+    };
+    let root = tiles[k].root.trim_end_matches('/');
+    let mut out = vec![Crumb {
+        label: tiles[k].name.clone(),
+        path: if root.is_empty() { "/" } else { root }.to_string(),
+    }];
+    let mut at = root.to_string();
+    for seg in path[root.len()..].split('/').filter(|s| !s.is_empty()) {
+        at = format!("{at}/{seg}");
+        out.push(Crumb {
+            label: seg.into(),
+            path: at.clone(),
+        });
+    }
+    (out, disk)
+}
+
+/// The tile `path` lies on, by its index: the one with the longest root above it.
+pub fn tile_of(path: &str, tiles: &[Tile]) -> Option<usize> {
+    tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !t.root.is_empty() && lies_under(path, &t.root))
+        .max_by_key(|(_, t)| t.root.trim_end_matches('/').len())
+        .map(|(k, _)| k)
+}
+
 /// One part inside the place capsule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapPart {
@@ -56,6 +92,10 @@ pub struct CapPart {
     pub caret: bool,
     /// Drawn; one not drawn is counted in [`PlaceCap::hidden`].
     pub shown: bool,
+    /// The disk it lies on, by its index in the tiles given: a tile's own,
+    /// or the one with the longest root above the folder. None for an empty
+    /// member, or a folder on no disk known.
+    pub disk: Option<usize>,
 }
 
 /// A run of `under:` terms, or of `!under:` ones, and the parts it is drawn as.
@@ -76,6 +116,15 @@ pub struct PlaceCap {
 }
 
 impl PlaceCap {
+    /// The one disk its parts lie on, by its index in the tiles: what the
+    /// header shows. None when they lie on several, or on none known; a part
+    /// on no disk (an empty member) does not count.
+    pub fn disk(&self) -> Option<usize> {
+        let mut on = self.parts.iter().filter_map(|p| p.disk);
+        let first = on.next()?;
+        on.all(|d| d == first).then_some(first)
+    }
+
     /// The part an offset in `start..=end` is drawn at: the one whose term
     /// it is in or just after, else the one before it (a `|`), else the first.
     pub fn part_at(&self, offset: usize) -> Option<usize> {
@@ -164,7 +213,7 @@ fn cap(members: &[Term], home: &str, tiles: &[Tile], caret: Option<Caret>, not: 
     let raw = |t: &Term| is_edited(t, caret);
     let parts = gather(&held, home, tiles, not, Some(&raw))
         .into_iter()
-        .map(|spot| part(spot, home, caret))
+        .map(|spot| part(spot, home, tiles, caret))
         .collect();
     PlaceCap {
         start: members[0].start,
@@ -174,18 +223,21 @@ fn cap(members: &[Term], home: &str, tiles: &[Tile], caret: Option<Caret>, not: 
     }
 }
 
-fn part(spot: Spot, home: &str, caret: Option<Caret>) -> CapPart {
+fn part(spot: Spot, home: &str, tiles: &[Tile], caret: Option<Caret>) -> CapPart {
     let on = |t: &Term| caret.is_some_and(|c| t.start < c.at && c.at <= t.end);
     let raw = spot.tile.is_none() && is_edited(&spot.terms[0], caret);
     let empty = spot.tile.is_none() && spot.terms[0].value.is_empty();
+    let (crumbs, disk) = match spot.tile {
+        Some(k) => (Vec::new(), Some(k)),
+        None if empty => (Vec::new(), None),
+        None => crumbs_on(&spot.paths[0], home, tiles),
+    };
     CapPart {
-        crumbs: match spot.tile {
-            None if !empty => crumbs(&spot.paths[0], home),
-            _ => Vec::new(),
-        },
+        crumbs,
         raw,
         caret: spot.terms.iter().any(on),
         shown: true,
+        disk,
         spot,
     }
 }

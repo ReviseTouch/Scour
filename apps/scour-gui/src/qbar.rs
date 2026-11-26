@@ -37,6 +37,8 @@ pub const HEAD_PIC: f32 = 16.0;
 pub const HEAD_JOIN: f32 = 5.0;
 pub const HEAD_TRAIL: f32 = 8.0;
 pub const HEAD_ROOM: f32 = 9.0;
+/// A place group's header on one disk: its state's dot and the room before it.
+pub const HEAD_DOT: f32 = 12.0;
 /// A header drawn as a picture is this wide, whatever its letters were; an
 /// excluded one this much wider, for the `!` in front of it.
 pub const ICON_W: f32 = 27.0;

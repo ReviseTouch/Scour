@@ -6,8 +6,10 @@
    * layer — the collapsed ones at no width — so each offset is still a text
    * offset; a collapsed part's caret is drawn at its edge. */
 
-  /* The capsules of the last paint, folded as drawn; `not` on the red ones. */
+  /* The capsules of the last paint, folded as drawn; `not` on the red ones;
+     and the tiles they were read against, for the header's disk. */
   let PLACE_DRAWN = [];
+  let PLACE_DRAWN_TILES = [];
 
   function placeCapTiles() {
     return diskTiles(PLACE_DISKS.map(diskIn), PLACE_SOURCES, () => null);
@@ -16,6 +18,7 @@
   /* Every capsule of `text` for `caret` (a `Caret`, or null), in text order. */
   function placeCapsFor(text, caret) {
     const tiles = placeCapTiles();
+    PLACE_DRAWN_TILES = tiles;
     const pos = placeCapsAt(text, HOME, tiles, caret).map((c) => ({ ...c, not: false }));
     const neg = exclusionCaps(text, HOME, tiles, caret).map((c) => ({ ...c, not: true }));
     return [...pos, ...neg].sort((x, y) => x.start - y.start);
@@ -37,7 +40,8 @@
 
   const placeZero = (s) => (s ? '<span class="z">' + escape_(s) + "</span>" : "");
 
-  /* A collapsed part: a disk's dot and name, or a folder's crumbs, the last one bold. */
+  /* A collapsed part: a disk's dot and name in a chip, or a folder's steps
+     each in a chip of its own, `›` between, the last one bold. */
   function placePartArt(text, part, k) {
     const folder = part.spot.tile === null;
     const at = ' data-k="' + k + '" data-at="' + placePressAt(text, part) + '"' + (folder ? ' data-edit="1"' : "");
@@ -47,9 +51,19 @@
         part.spot.kind + ')"></i>' + escape_(part.spot.name) + "</span>";
     }
     const n = part.crumbs.length;
-    return '<span class="art pv"' + at + title + ">" + part.crumbs.map((c, i) =>
-      (i ? '<i class="cs">›</i>' : "") + (i + 1 === n ? "<b>" : '<span class="cr">') + escape_(c.label) +
-      (i + 1 === n ? "</b>" : "</span>")).join("") + "</span>";
+    return '<span class="art pgrp"' + at + title + ">" + part.crumbs.map((c, i) =>
+      (i ? '<i class="cs">›</i>' : "") + '<span class="pv">' + (i + 1 === n ? "<b>" : "") + escape_(c.label) +
+      (i + 1 === n ? "</b>" : "") + "</span>").join("") + "</span>";
+  }
+
+  /* The header's picture: the disk every part lies on, and after the name
+     that disk's state as its tile says it; a folder for several, or an
+     exclusion. */
+  function placeHeadArt(cap) {
+    const k = cap.not ? null : capDisk(cap);
+    const t = k === null ? null : PLACE_DRAWN_TILES[k];
+    if (!t) return [FOLDER_ART, ""];
+    return [DISK_ART[t.kind] || DISK_ART.fixed, '<i class="hst ' + escape_(t.shown) + '"></i>'];
   }
 
   /* A raw part: its value as typed, in a well, quotes in the capsule's ink. */
@@ -70,10 +84,11 @@
     cap.parts.forEach((p, k) => p.spot.terms.forEach((t) => partOf.set(t.start, k)));
     const blocks = new Map(capBlocks(cap).map(([first, n]) => [first, n]));
     const members = cap.parts.flatMap((p) => p.spot.terms).sort((x, y) => x.start - y.start);
+    const [art, state] = placeHeadArt(cap);
     let html = '<span class="term cap place' + (cap.not ? " neg" : "") + (edit ? " edit" : "") + '" data-a="' + cap.start +
       '" data-b="' + cap.end + '" data-h="' + head + '"><span class="cap-head"><span class="art head-art">' +
-      (cap.not ? '<span class="bang">!</span>' : "") + FOLDER_ART + '<span class="nm">' + escape_(fieldLabel("under")) +
-      "</span></span>" + placeZero(text.slice(cap.start, head)) + '</span><span class="pbody">';
+      (cap.not ? '<span class="bang">!</span>' : "") + art + '<span class="nm">' + escape_(fieldLabel("under")) +
+      "</span>" + state + "</span>" + placeZero(text.slice(cap.start, head)) + '</span><span class="pbody">';
     let at = head, first = true;
     const sep = (to) => (first ? "" : '<span class="art psep" data-at="' + to + '">·</span>');
     for (const t of members) {

@@ -37,16 +37,49 @@ fn the_system_disk_is_one_part_of_one_capsule() {
 fn folders_are_crumbs_in_tilde_form() {
     let q = r#"under:~/Projeler/Scour|under:"/mnt/depo/My Docs"|under:/ rapor"#;
     let c = &caps(q, None)[0];
-    assert_eq!(
-        said(c),
-        ["~ › Projeler › Scour", "/ › mnt › depo › My Docs", "/"]
-    );
+    assert_eq!(said(c), ["~ › Projeler › Scour", "Depo › My Docs", "/"]);
     let last = &c.parts[0].crumbs[2];
     assert_eq!(
         (last.label.as_str(), last.path.as_str()),
         ("Scour", "/home/hasan/Projeler/Scour")
     );
     assert_eq!(c.parts[0].crumbs[0].path, HOME);
+    // A folder below a disk's root starts from the disk, named; `/` is every disk's.
+    let depo = &c.parts[1].crumbs[0];
+    assert_eq!(
+        (depo.label.as_str(), depo.path.as_str()),
+        ("Depo", "/mnt/depo")
+    );
+    let names: Vec<Option<String>> = c
+        .parts
+        .iter()
+        .map(|p| p.disk.map(|k| machine()[k].name.clone()))
+        .collect();
+    let named = |n: &str| Some(n.to_string());
+    assert_eq!(names, [named("CACHY"), named("Depo"), named("CACHY")]);
+    assert_eq!(c.disk(), None, "three parts on two disks");
+}
+
+#[test]
+fn a_capsule_on_one_disk_names_it_and_a_folder_from_root_its_disk() {
+    let c = &caps("under:/mnt/depo/PROJELER/Scour rapor", None)[0];
+    assert_eq!(said(c), ["Depo › PROJELER › Scour"]);
+    assert_eq!(
+        c.disk().map(|k| machine()[k].name.clone()).as_deref(),
+        Some("Depo")
+    );
+    let c = &caps("under:/srv/www|under:~/x", None)[0];
+    assert_eq!(said(c), ["CACHY › srv › www", "~ › x"]);
+    assert_eq!(
+        c.disk().map(|k| machine()[k].name.clone()).as_deref(),
+        Some("CACHY")
+    );
+    // An empty member does not take the header's disk away.
+    let c = &caps("under:/mnt/depo/a|under:", None)[0];
+    assert_eq!(
+        c.disk().map(|k| machine()[k].name.clone()).as_deref(),
+        Some("Depo")
+    );
 }
 
 #[test]
@@ -57,7 +90,7 @@ fn a_mixed_or_negated_run_is_not_one_capsule() {
     let c = caps("under:/a !under:/b under:/mnt/depo|under:/c", None);
     let spans: Vec<(usize, usize)> = c.iter().map(|c| (c.start, c.end)).collect();
     assert_eq!(spans, [(0, 8), (19, 43)]);
-    assert_eq!(said(&c[1]), ["Depo", "/ › c"]);
+    assert_eq!(said(&c[1]), ["Depo", "CACHY › c"]);
 }
 
 fn at(q: &str, caret: Caret) -> Vec<String> {
@@ -81,7 +114,14 @@ fn a_caret_resting_on_a_tile_leaves_it_whole() {
 fn a_member_being_edited_is_raw_and_its_tile_comes_apart() {
     let q = format!("{SYSTEM}|under:/mnt/depo");
     let tilde = q.find('~').unwrap();
-    let apart = ["/ › etc", "[1]", "/ › opt", "/ › usr", "/ › var", "Depo"];
+    let apart = [
+        "CACHY › etc",
+        "[1]",
+        "CACHY › opt",
+        "CACHY › usr",
+        "CACHY › var",
+        "Depo",
+    ];
     // Strictly inside a member: edited however the caret got there.
     assert_eq!(at(&q, Caret::resting(tilde)), apart);
     assert_eq!(at(&q, Caret::editing(tilde + 1)), apart);

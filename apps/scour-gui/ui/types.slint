@@ -420,6 +420,10 @@ export struct Cap {
     group: bool,
     // Left out, it would bring the empty list back: a red mark at its corner.
     rescues: bool,
+    // A place group on one disk: its kind for the header's picture, and its
+    // tile's state for the dot after the name. Empty otherwise.
+    disk: string,
+    shown: string,
 }
 
 // A word a capsule shows in the window's own face, for the window to measure.
