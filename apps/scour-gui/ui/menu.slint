@@ -4,7 +4,7 @@ import { Theme, Fonts } from "theme.slint";
 import { DragTray } from "tray.slint";
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
-import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 
 /// The row menu, over the whole window.
 export component RowMenu inherits Rectangle {
@@ -31,7 +31,14 @@ export component RowMenu inherits Rectangle {
         }
     }
 
-    Rectangle {
+    Shade {
+        x: card.x;
+        y: card.y;
+        width: card.width;
+        height: card.height;
+        radius: 8px;
+    }
+    card := Rectangle {
         // Kept on screen: near the pointer, never past the edge.
         x: min(root.menu-x, root.width - self.width - 8px);
         y: min(root.menu-y, root.height - self.height - 8px);
@@ -43,10 +50,6 @@ export component RowMenu inherits Rectangle {
         border-width: Theme.hair;
         border-color: Theme.line;
         border-radius: 8px;
-        // A popover's shadow: soft and far, not a dark rim.
-        drop-shadow-blur: 32px;
-        drop-shadow-color: Theme.dark ? #00000090 : #0000002e;
-        drop-shadow-offset-y: 12px;
 
         items := VerticalLayout {
             padding: 6px;
@@ -281,7 +284,15 @@ export component AskSheet inherits Rectangle {
         }
     }
 
-    Rectangle {
+    Shade {
+        x: sheet.x;
+        y: sheet.y;
+        width: sheet.width;
+        height: sheet.height;
+        radius: 3px;
+        drop: 2px;
+    }
+    sheet := Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: 420px;
@@ -290,8 +301,6 @@ export component AskSheet inherits Rectangle {
         border-width: Theme.hair;
         border-color: Theme.line;
         border-radius: 3px;
-        drop-shadow-blur: 26px;
-        drop-shadow-color: #00000080;
 
         // Swallows the click, or the sheet behind answers "no".
         TouchArea { }

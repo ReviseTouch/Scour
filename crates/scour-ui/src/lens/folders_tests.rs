@@ -13,7 +13,7 @@ fn add_joins_the_group_and_says_where_it_wrote() {
     assert_eq!(&q[..at], "rapor under:/mnt/depo|under:/usr");
     assert_eq!(
         add("rapor", "/home/hasan/Belgeler"),
-        "rapor under:~/Belgeler"
+        "under:~/Belgeler rapor"
     );
     assert_eq!(add("", "/"), "under:/");
 }
@@ -81,18 +81,18 @@ fn add_takes_away_the_same_folders_exclusion() {
     assert_eq!(&q[..at], "rapor under:/usr|under:~/x");
     assert_eq!(
         add("rapor !under:~/x/y", "~/x"),
-        "rapor !under:~/x/y under:~/x"
+        "under:~/x rapor !under:~/x/y"
     );
 }
 
 #[test]
 fn quoted_paths_are_read_and_written_quoted() {
     let q = add("rapor", "/mnt/depo/My Docs");
-    assert_eq!(q, r#"rapor under:"/mnt/depo/My Docs""#);
+    assert_eq!(q, r#"under:"/mnt/depo/My Docs" rapor"#);
     assert_eq!(add(&q, "/mnt/depo/My Docs"), q);
     assert_eq!(
         add(&q, "/mnt/depo/My Docs/2025 Q1"),
-        r#"rapor under:"/mnt/depo/My Docs/2025 Q1""#
+        r#"under:"/mnt/depo/My Docs/2025 Q1" rapor"#
     );
 }
 

@@ -341,26 +341,6 @@
 
   /* No node per term: the face is monospace, so the caret index is
      `x / charWidth`. No z-index here, or the layer hides what it points at. */
-  #qpast {
-    position: absolute;
-    right: 0;
-    top: 1px;
-    z-index: 3;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: 0;
-    border-radius: 3px;
-    background: none;
-    color: var(--ink-3);
-    font: 600 11px/1 var(--sans);
-    cursor: pointer;
-  }
-  #qpast[hidden] { display: none; }
-  #qpast:hover { color: var(--ink); background: var(--line-soft); }
-  #qpast[aria-expanded="true"] { color: var(--ink); background: var(--line-soft); }
-  #qpast:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-
   .qacts {
     position: absolute;
     inset: 0;
@@ -420,6 +400,25 @@
   .qread b { color: var(--ink-2); font-weight: 600; }
   .qread.warn { color: var(--q-bad); }
 
+  /* A popup's shadow: light, and away from what opened it, so a panel stands
+     off what it covers. `--pop-shadow` for one that opens downwards (hardly
+     any above it), `--pop-shadow-up` for one that opens upwards from the
+     status bar (hardly any below). Dark unless light is asked for. */
+  :root {
+    --pop-shadow: 0 10px 22px -8px rgba(0,0,0,.38), 0 3px 6px -3px rgba(0,0,0,.25);
+    --pop-shadow-up: 0 -10px 22px -8px rgba(0,0,0,.38), 0 -3px 6px -3px rgba(0,0,0,.25);
+  }
+  :root[data-theme="light"] {
+    --pop-shadow: 0 10px 22px -8px rgba(0,0,0,.14), 0 3px 6px -3px rgba(0,0,0,.08);
+    --pop-shadow-up: 0 -10px 22px -8px rgba(0,0,0,.14), 0 -3px 6px -3px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --pop-shadow: 0 10px 22px -8px rgba(0,0,0,.14), 0 3px 6px -3px rgba(0,0,0,.08);
+      --pop-shadow-up: 0 -10px 22px -8px rgba(0,0,0,.14), 0 -3px 6px -3px rgba(0,0,0,.08);
+    }
+  }
+
   /* The lens: opaque, under its term, expanding for Miller places and sparklines. */
   .lens {
     position: absolute;
@@ -430,7 +429,7 @@
     background: var(--panel-2);
     border: 1px solid var(--line);
     border-radius: 10px;
-    box-shadow: 0 22px 48px -20px rgba(0,0,0,.78);
+    box-shadow: var(--pop-shadow);
     padding: 4px 0;
     z-index: 65;
     font: 500 12.5px/1.3 var(--sans);
@@ -550,7 +549,7 @@
     background: var(--panel-2);
     border: 1px solid var(--line);
     border-radius: 8px;
-    box-shadow: 0 20px 44px -24px rgba(0,0,0,.75);
+    box-shadow: var(--pop-shadow);
     padding: calc(var(--u) * 1);
     z-index: 30;
   }
@@ -629,15 +628,30 @@
   .meter[data-drop~="note"] #path-note, .meter[data-drop~="note"] #path-note-sep,
   .meter[data-drop~="rows"] #rows, .meter[data-drop~="rows"] #rows-sep,
   .meter[data-drop~="keys"] .mkeys { display: none; }
-  /* The index line opens the resources panel. Its ring is drawn in a padding
-     the margin takes back, so neither the text nor its neighbours move. */
+  /* The index line opens the resources panel, and looks it at rest: a ring,
+     a disk before it and a chevron up after it, where the panel opens. Hover
+     only darkens them, so nothing moves. */
   .meter .mdoor {
     flex: none; white-space: nowrap; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
     font: inherit; letter-spacing: inherit; color: inherit;
-    background: none; border: 0; border-radius: 6px;
-    padding: 3px 6px; margin: 0 -6px;
+    background: var(--panel); border: 0; border-radius: 6px;
+    box-shadow: inset 0 0 0 1px var(--line);
+    padding: 2px 7px; margin: 0 -1px;
   }
-  .meter .mdoor:hover { box-shadow: inset 0 0 0 1px var(--line); }
+  .meter .mdoor::before, .meter .mdoor::after {
+    content: ""; flex: none; background-color: currentColor;
+    -webkit-mask: var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat;
+  }
+  .meter .mdoor::before {
+    width: 12px; height: 12px;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.8' y='4.5' width='12.4' height='7' rx='1.6'/%3E%3Cpath d='M4.3 8h3.4'/%3E%3Ccircle cx='11.4' cy='8' r='.7'/%3E%3C/svg%3E");
+  }
+  .meter .mdoor::after {
+    width: 10px; height: 10px;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 9.5L8 6l3.5 3.5'/%3E%3C/svg%3E");
+  }
+  .meter .mdoor:hover { box-shadow: inset 0 0 0 1px var(--ink-3); color: var(--ink-2); }
   .meter .mdoor[aria-expanded="true"] {
     background: var(--cap); color: var(--q-key); box-shadow: inset 0 0 0 1px var(--cap-ring);
   }

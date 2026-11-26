@@ -76,20 +76,14 @@ pub fn remove_term(text: &str, t: &Term) -> (String, usize) {
 
 /// The query with the disk at `root` put into or taken out of the place
 /// group, and the caret after what changed. The group is the first run with
-/// an `under:` term; with none, the term goes at the end. `!under:` terms and
-/// every other run are left as they are.
+/// an `under:` term; with none, the term goes first in the query: where it
+/// is looked is the first thing it says. `!under:` terms and every other run
+/// are left as they are.
 pub fn place_toggle(text: &str, home: &str, root: &str, pick: Pick) -> (String, usize) {
     let want = norm(home, root);
     let new = format!("under:{}", quoted_path(&home_form(home, &want)));
     let Some(run) = runs(text).into_iter().find(|r| r.iter().any(is_place)) else {
-        let gap = if text.is_empty() || text.ends_with(char::is_whitespace) {
-            ""
-        } else {
-            " "
-        };
-        let out = format!("{text}{gap}{new}");
-        let caret = out.len();
-        return (out, caret);
+        return super::folders::at_head(text, &new, 0);
     };
     let places: Vec<&Term> = run.iter().filter(|t| is_place(t)).collect();
     let is = |t: &Term| !t.value.is_empty() && norm(home, &t.value) == want;

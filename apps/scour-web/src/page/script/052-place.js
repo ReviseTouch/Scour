@@ -82,10 +82,7 @@
     const want = placeNorm(home, root);
     const add = "under:" + quotedPath(homeIn(home, want));
     const run = placeRuns(text).find((r) => r.some(isPlace));
-    if (!run) {
-      const out = text + (!text || /\s$/.test(text) ? "" : " ") + add;
-      return [out, out.length];
-    }
+    if (!run) return placeAtHead(text, add, 0);
     const places = run.filter(isPlace);
     const is = (t) => t.value !== "" && placeNorm(home, t.value) === want;
     if (pick === Pick.Also) {

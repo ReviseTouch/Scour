@@ -5,6 +5,7 @@
 
 import { Theme, Fonts } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Shade } from "widgets.slint";
 
 /// One thing the service keeps on disk, as its row draws it.
 export struct HeldLine {
@@ -735,13 +736,22 @@ export component ResourcePanel inherits Rectangle {
 
     height: min(root.room,
         head.preferred-height + body.preferred-height + foot.preferred-height + 2 * Theme.hair);
-    background: Theme.panel-2;
-    border-radius: 11px;
-    border-width: Theme.hair;
-    border-color: Theme.line;
-    drop-shadow-blur: 24px;
-    drop-shadow-offset-y: 10px;
-    drop-shadow-color: Theme.dark ? #000000a0 : #00000038;
+    // Its shadow and its ground, drawn under everything in it.
+    // It opens upwards from the status bar: the shadow above, hardly below.
+    Shade {
+        width: parent.width;
+        height: parent.height;
+        radius: 11px;
+        drop: -6px;
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: Theme.panel-2;
+        border-radius: 11px;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+    }
 
     // A press on the panel is the panel's, not the list's under it.
     TouchArea { }

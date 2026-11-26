@@ -28,7 +28,7 @@ fn add(text: &str, home: &str, path: &str, typing: Option<&Term>) -> (String, us
     let want = norm(home, path);
     let new = format!("under:{}", quoted_path(&home_form(home, &want)));
     let Some(run) = runs(text).into_iter().find(|r| r.iter().any(is_place)) else {
-        return unexclude(at_end(text, &new), home, &want);
+        return unexclude(at_head(text, &new, 0), home, &want);
     };
     let gives_way = |t: &Term| {
         let held = norm(home, &t.value);
@@ -72,7 +72,21 @@ pub fn place_exclude(text: &str, home: &str, path: &str) -> (String, usize) {
         text.to_string()
     };
     let new = format!("!under:{}", quoted_path(&home_form(home, &want)));
-    at_end(&text, &new)
+    // Beside the group and the exclusions wherever they stand, else where
+    // the place is said.
+    let group = runs(&text)
+        .into_iter()
+        .find(|r| r.iter().any(is_place))
+        .and_then(|r| r.last().map(|t| t.end));
+    let excluded = terms(&text)
+        .iter()
+        .filter(|t| t.not && t.field == Some("under"))
+        .map(|t| t.end)
+        .max();
+    let at = place_head(&text)
+        .max(group.unwrap_or(0))
+        .max(excluded.unwrap_or(0));
+    at_head(&text, &new, at)
 }
 
 /// The end of the group's first member, else [`place_settle`]'s empty
@@ -147,15 +161,34 @@ pub fn place_at(value: &str, home: &str) -> (String, String) {
 }
 
 /// `new` as a term of its own at the end, and the caret after it.
-fn at_end(text: &str, new: &str) -> (String, usize) {
-    let gap = if text.is_empty() || text.ends_with(char::is_whitespace) {
+/// Where the query's place ends: the group and the exclusions standing first,
+/// with nothing but spaces and `|` between them; nought when it does not
+/// start with one.
+pub fn place_head(text: &str) -> usize {
+    let mut end = 0;
+    for t in terms(text) {
+        let between = &text[end..t.start];
+        let placed = is_place(&t) || (t.not && t.field == Some("under"));
+        if !placed || !between.chars().all(|c| c.is_whitespace() || c == '|') {
+            break;
+        }
+        end = t.end;
+    }
+    end
+}
+
+/// `new` written where the place is said: first in the query, or after the
+/// place already there (`head`); the caret after it.
+pub fn at_head(text: &str, new: &str, head: usize) -> (String, usize) {
+    let (before, after) = text.split_at(head.min(text.len()));
+    let lead = if before.is_empty() { "" } else { " " };
+    let tail = if after.is_empty() || after.starts_with(char::is_whitespace) {
         ""
     } else {
         " "
     };
-    let out = format!("{text}{gap}{new}");
-    let n = out.len();
-    (out, n)
+    let at = before.len() + lead.len() + new.len();
+    (format!("{before}{lead}{new}{tail}{after}"), at)
 }
 
 /// The standalone `!under:` of `want` taken out, the caret kept on its term.

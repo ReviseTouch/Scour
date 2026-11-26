@@ -219,6 +219,29 @@
     return [c.join(""), end + 1];
   }
 
+  /* What a paste writes in place of [from, to), as if typed: line breaks and
+     runs of spaces one space (one kept at either end, none for a copied
+     line's break), a space between two words keeping them in one
+     capsule, as a phrase. Text with its own operators (a quote, `;`, `|`, a
+     parenthesis, `!` or `~` before a word) goes in as it is. */
+  function patternPaste(input, from, to, pasted) {
+    pasted = pasted.replace(/[\r\n]+$/u, "");
+    let words = pasted.split(/\s+/u).filter(Boolean).join(" ");
+    if (words) words = (/^\s/u.test(pasted) ? " " : "") + words + (/\s$/u.test(pasted) ? " " : "");
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    let text = patternCut(input, lo, Math.min(hi, Array.from(input).length), "");
+    const operators = /[";|()]/u.test(words) || words.split(" ").some((w) => /^[!~]/u.test(w));
+    if (operators || !words.trim().includes(" ")) return [patternCut(text, lo, lo, words), lo + Array.from(words).length];
+    let at = lo;
+    for (const ch of Array.from(words)) {
+      const done = ch === " " ? patternSpace(text, at) : null;
+      if (done) { [text, at] = done; continue; }
+      text = patternCut(text, at, at, ch);
+      at++;
+    }
+    return [text, at];
+  }
+
   /* A quote at a word's start writes both, the caret between; at a phrase's
      closing quote it steps over it. */
   function patternQuote(input, caret) {

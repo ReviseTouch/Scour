@@ -171,6 +171,45 @@ pub fn leave(input: &str, caret: usize) -> Option<(String, usize)> {
     Some((c.into_iter().collect(), end + 1))
 }
 
+/// What a paste writes in place of `from..to`, as if it were typed: line
+/// breaks and runs of spaces are one space (one kept at either end, none for
+/// the line break a copied line ends in), and a space between two words
+/// keeps them in one capsule, as a phrase ([`space`]). Text that brings its
+/// own operators — a quote, `;`, `|`, a parenthesis, a `!` or `~` before a
+/// word — is a pattern already and goes in as it is.
+pub fn paste(input: &str, from: usize, to: usize, pasted: &str) -> (String, usize) {
+    let pasted = pasted.trim_end_matches(['\r', '\n']);
+    let mut words = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !words.is_empty() {
+        if pasted.starts_with(char::is_whitespace) {
+            words.insert(0, ' ');
+        }
+        if pasted.ends_with(char::is_whitespace) {
+            words.push(' ');
+        }
+    }
+    let (from, to) = (from.min(to), to.max(from));
+    let input = cut(input, from, to.min(input.chars().count()), "");
+    let operators = words.contains(['"', ';', '|', '(', ')'])
+        || words.split(' ').any(|w| w.starts_with(['!', '~']));
+    if operators || !words.trim().contains(' ') {
+        let at = from + words.chars().count();
+        return (cut(&input, from, from, &words), at);
+    }
+    let (mut text, mut at) = (input, from);
+    for ch in words.chars() {
+        if ch == ' '
+            && let Some((t, a)) = space(&text, at)
+        {
+            (text, at) = (t, a);
+            continue;
+        }
+        text = cut(&text, at, at, ch.encode_utf8(&mut [0; 4]));
+        at += 1;
+    }
+    (text, at)
+}
+
 /// A quote at a word's start writes both, the caret between them; at a
 /// phrase's closing quote it steps over it. `None`: typed as it is.
 pub fn quote(input: &str, caret: usize) -> Option<(String, usize)> {
@@ -249,6 +288,35 @@ mod tests {
         assert_eq!(leave("a b", 1), s("a  b", 2));
         assert_eq!(leave("a  b", 1), s("a  b", 2));
         assert_eq!(leave("ara ", 4), None);
+    }
+
+    #[test]
+    fn a_paste_is_typed_and_a_pasted_pattern_stays_one() {
+        let s = |t: &str, c: usize| (t.to_string(), c);
+        // Words: one capsule, a phrase, wherever they land.
+        assert_eq!(
+            paste("", 0, 0, "osmanlı devleti"),
+            s("\"osmanlı devleti\"", 16)
+        );
+        assert_eq!(
+            paste("!", 1, 1, "osmanlı\ndevleti\n"),
+            s("!\"osmanlı devleti\"", 17)
+        );
+        assert_eq!(paste("ara ", 4, 4, "a b"), s("ara \"a b\"", 8));
+        assert_eq!(paste("\"x \"", 3, 3, "a b"), s("\"x a b\"", 6));
+        // One word: as it is, into the word at the caret.
+        assert_eq!(paste("ara", 3, 3, "ba"), s("araba", 5));
+        // A pattern: as it is.
+        assert_eq!(
+            paste("", 0, 0, "\"iş kazası\" !ret"),
+            s("\"iş kazası\" !ret", 16)
+        );
+        assert_eq!(paste("", 0, 0, "a;b c"), s("a;b c", 5));
+        // A space at either end is kept, so a pasted piece stands apart.
+        assert_eq!(paste("\"a\"", 3, 3, " !b"), s("\"a\" !b", 6));
+        assert_eq!(paste("x", 0, 0, "!b "), s("!b x", 3));
+        // A selection gives way to it.
+        assert_eq!(paste("ara xyz", 4, 7, "a b"), s("ara \"a b\"", 8));
     }
 
     #[test]

@@ -1500,13 +1500,20 @@ pub(crate) fn open_or_focus_field(
         redraw(Lensing::Asked);
         return;
     }
-    let lead = if !text.is_empty() && !text.ends_with(char::is_whitespace) {
-        " "
+    // Where it looks is the first thing the query says; anything else is
+    // written at the end.
+    let (q, caret) = if field_name == "under" {
+        lens::at_head(&text, "under:", 0)
     } else {
-        ""
+        let lead = if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+            " "
+        } else {
+            ""
+        };
+        let q = format!("{text}{lead}{field_name}:");
+        let caret = q.len();
+        (q, caret)
     };
-    let q = format!("{text}{lead}{field_name}:");
-    let caret = q.len();
     write(w, state, q, caret);
     redraw(Lensing::Asked);
 }

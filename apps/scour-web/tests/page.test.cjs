@@ -941,6 +941,18 @@ test('an operator opens a capsule and backspace in its hole takes it (pattern/ed
   assert.equal(c.patternSpace('osm', 0), null);
   assert.equal(c.patternSpace('ara ', 4), null);
   assert.equal(c.patternSpace('"a"', 2), null);
+  // A paste is typed: words in one capsule; a pattern as it is.
+  const pa = (t, a, b, x) => PJ(c.patternPaste(t, a, b, x));
+  assert.deepEqual(pa('', 0, 0, 'osmanlı devleti'), ['"osmanlı devleti"', 16]);
+  assert.deepEqual(pa('!', 1, 1, 'osmanlı\ndevleti\n'), ['!"osmanlı devleti"', 17]);
+  assert.deepEqual(pa('ara ', 4, 4, 'a b'), ['ara "a b"', 8]);
+  assert.deepEqual(pa('"x "', 3, 3, 'a b'), ['"x a b"', 6]);
+  assert.deepEqual(pa('ara', 3, 3, 'ba'), ['araba', 5]);
+  assert.deepEqual(pa('', 0, 0, '"iş kazası" !ret'), ['"iş kazası" !ret', 16]);
+  assert.deepEqual(pa('', 0, 0, 'a;b c'), ['a;b c', 5]);
+  assert.deepEqual(pa('ara xyz', 4, 7, 'a b'), ['ara "a b"', 8]);
+  assert.deepEqual(pa('"a"', 3, 3, ' !b'), ['"a" !b', 6]);
+  assert.deepEqual(pa('x', 0, 0, '!b '), ['!b x', 3]);
   // Tab: out of the capsule, past one space, the phrase tidied.
   const lv = (t, k) => PJ(c.patternLeave(t, k));
   assert.deepEqual(lv('osmanlı', 7), ['osmanlı ', 8]);
@@ -1244,7 +1256,7 @@ function placeModel() {
   vm.runInContext(section('  /* ---------------- the place rules', '\n  /* ---------------- '), c);
   vm.runInContext(section('  /* ---------------- where the query looks', '\n  /* ---------------- '), c);
   vm.runInContext(section('  function scopeSays(', '\n  /* As many names'), c);
-  return vm.runInContext(`({ placeToggle, tileToggle, placeScope, placeRemove, placeReplace, placeRuns, placeRunOf,
+  return vm.runInContext(`({ placeHead, placeAtHead, placeToggle, tileToggle, placeScope, placeRemove, placeReplace, placeRuns, placeRunOf,
     placeTerms, scopeHolds, diskTiles, diskStrip, diskOf, scopeSays, STRIP_FLOOR, DISK_KINDS, quotedPath,
     placeTermAt, placeAddAt, placeAddWith, placeExclude, placeSettle, placeAt, withoutPlaces, spots, spotRemove,
     chipLabel, chipDots, tileHeld, tileLit, crumbs, crumbsOn, tileOf, capDisk, placeCapsAt, exclusionCaps, capPartAt, capFold,
@@ -1258,9 +1270,9 @@ test('the place group: a disk in, a second beside it, one out, none left (lens/g
   const also = (q, root) => pt(q, root, 'also')[0];
   const only = (q, root) => pt(q, root, 'only')[0];
   // the_first_disk_is_one_term
-  assert.deepEqual(pt('rapor', '/mnt/depo', 'only'), ['rapor under:/mnt/depo', 21]);
+  assert.deepEqual(pt('rapor', '/mnt/depo', 'only'), ['under:/mnt/depo rapor', 15]);
   assert.equal(also('', '/mnt/depo'), 'under:/mnt/depo');
-  assert.equal(also('rapor ', '/'), 'rapor under:/');
+  assert.equal(also('rapor ', '/'), 'under:/ rapor ');
   // an_empty_place_term_is_where_the_disk_goes
   assert.deepEqual(pt('rapor under: ext:pdf', '/mnt/depo', 'also'), ['rapor under:/mnt/depo ext:pdf', 21]);
   assert.equal(only('rapor under: ext:pdf', '/mnt/depo'), 'rapor under:/mnt/depo ext:pdf');
@@ -1290,20 +1302,20 @@ test('the place group quotes, writes home with a tilde and leaves the rest alone
   const only = (q, root) => M.placeToggle(q, PLACE_HOME, root, 'only')[0];
   // a_path_with_a_space_or_a_bar_is_quoted
   let q = also('rapor', '/mnt/depo/My Docs');
-  assert.equal(q, 'rapor under:"/mnt/depo/My Docs"');
+  assert.equal(q, 'under:"/mnt/depo/My Docs" rapor');
   q = also(q, '/srv/a|b');
-  assert.equal(q, 'rapor under:"/mnt/depo/My Docs"|under:"/srv/a|b"');
-  assert.equal(also(q, '/mnt/depo/My Docs'), 'rapor under:"/srv/a|b"');
+  assert.equal(q, 'under:"/mnt/depo/My Docs"|under:"/srv/a|b" rapor');
+  assert.equal(also(q, '/mnt/depo/My Docs'), 'under:"/srv/a|b" rapor');
   // home_is_written_and_read_with_a_tilde
-  assert.equal(also('rapor', '/home/hasan/Belgeler'), 'rapor under:~/Belgeler');
+  assert.equal(also('rapor', '/home/hasan/Belgeler'), 'under:~/Belgeler rapor');
   assert.equal(also('rapor under:~/Belgeler', '/mnt/depo'), 'rapor under:~/Belgeler|under:/mnt/depo');
   assert.equal(also('rapor under:~/Belgeler/|under:/mnt/depo', '/home/hasan/Belgeler'), 'rapor under:/mnt/depo');
   // an_exclusion_elsewhere_is_left_alone
-  assert.equal(also('rapor !under:/mnt/depo/tmp', '/mnt/depo'), 'rapor !under:/mnt/depo/tmp under:/mnt/depo');
+  assert.equal(also('rapor !under:/mnt/depo/tmp', '/mnt/depo'), 'under:/mnt/depo rapor !under:/mnt/depo/tmp');
   const x = '!under:/x rapor under:/a|under:/b';
   assert.equal(also(x, '/a'), '!under:/x rapor under:/b');
   assert.equal(only(x, '/b'), '!under:/x rapor under:/b');
-  assert.equal(also('rapor !under:/a', '/a'), 'rapor !under:/a under:/a');
+  assert.equal(also('rapor !under:/a', '/a'), 'under:/a rapor !under:/a');
   // a_second_run_is_not_the_group
   const two = 'under:/a|under:/b rapor under:/c';
   assert.equal(also(two, '/c'), 'under:/a|under:/b|under:/c rapor under:/c');
@@ -1346,13 +1358,13 @@ test('a tile goes into and out of the place group whole (lens/group_tests.rs)', 
   // a_tile_of_several_roots_goes_in_and_out_as_one
   const sys = ['/home/hasan', '/usr', '/etc'];
   const q = tile('rapor', sys, 'only');
-  assert.equal(q, 'rapor under:~|under:/usr|under:/etc');
+  assert.equal(q, 'under:~|under:/usr|under:/etc rapor');
   assert.equal(tile(q, sys, 'only'), 'rapor');
   assert.equal(tile(q, sys, 'also'), 'rapor');
   const both = tile(q, ['/mnt/depo'], 'also');
-  assert.equal(both, 'rapor under:~|under:/usr|under:/etc|under:/mnt/depo');
-  assert.equal(tile(both, ['/mnt/depo'], 'only'), 'rapor under:/mnt/depo');
-  assert.equal(tile(both, sys, 'also'), 'rapor under:/mnt/depo');
+  assert.equal(both, 'under:~|under:/usr|under:/etc|under:/mnt/depo rapor');
+  assert.equal(tile(both, ['/mnt/depo'], 'only'), 'under:/mnt/depo rapor');
+  assert.equal(tile(both, sys, 'also'), 'under:/mnt/depo rapor');
   // a_tile_half_held_is_completed_not_dropped
   const half = 'rapor under:/usr ext:pdf';
   assert.equal(tile(half, ['/usr', '/etc'], 'also'), 'rapor under:/usr|under:/etc ext:pdf');
@@ -1490,7 +1502,7 @@ test('Add joins, narrows and widens in place, and never takes a folder out (lens
   let [q, at] = M.placeAddWith('rapor under:/mnt/depo ext:pdf', H, '/usr', null);
   assert.equal(q, 'rapor under:/mnt/depo|under:/usr ext:pdf');
   assert.equal(q.slice(0, at), 'rapor under:/mnt/depo|under:/usr');
-  assert.equal(add('rapor', '/home/hasan/Belgeler'), 'rapor under:~/Belgeler');
+  assert.equal(add('rapor', '/home/hasan/Belgeler'), 'under:~/Belgeler rapor');
   assert.equal(add('', '/'), 'under:/');
   // add_never_takes_a_folder_out
   const g = 'rapor under:/mnt/depo|under:/usr';
@@ -1519,12 +1531,25 @@ test('Add joins, narrows and widens in place, and never takes a folder out (lens
   [q, at] = M.placeAddWith('!under:~/x rapor under:/usr', H, '~/x', null);
   assert.equal(q, 'rapor under:/usr|under:~/x');
   assert.equal(q.slice(0, at), 'rapor under:/usr|under:~/x');
-  assert.equal(add('rapor !under:~/x/y', '~/x'), 'rapor !under:~/x/y under:~/x');
+  assert.equal(add('rapor !under:~/x/y', '~/x'), 'under:~/x rapor !under:~/x/y');
   // quoted_paths_are_read_and_written_quoted
   q = add('rapor', '/mnt/depo/My Docs');
-  assert.equal(q, 'rapor under:"/mnt/depo/My Docs"');
+  assert.equal(q, 'under:"/mnt/depo/My Docs" rapor');
   assert.equal(add(q, '/mnt/depo/My Docs'), q);
-  assert.equal(add(q, '/mnt/depo/My Docs/2025 Q1'), 'rapor under:"/mnt/depo/My Docs/2025 Q1"');
+  assert.equal(add(q, '/mnt/depo/My Docs/2025 Q1'), 'under:"/mnt/depo/My Docs/2025 Q1" rapor');
+});
+
+test('where it looks is the first thing the query says (lens/group_tests.rs)', () => {
+  const M = placeModel();
+  assert.equal(M.placeHead('under:/a|under:/b !under:/a/x rapor'), 29);
+  assert.equal(M.placeHead('rapor under:/a'), 0);
+  assert.equal(M.placeHead('!under:/x rapor'), 9);
+  assert.deepEqual(J(M.placeAtHead('rapor', 'under:', 0)), ['under: rapor', 6]);
+  assert.deepEqual(J(M.placeAtHead('', 'under:', 0)), ['under:', 6]);
+  assert.deepEqual(J(M.placeAtHead('under:/a rapor', '!under:/b', 8)), ['under:/a !under:/b rapor', 18]);
+  assert.deepEqual(J(M.placeAtHead('under:/a', '!under:/b', 8)), ['under:/a !under:/b', 18]);
+  assert.equal(M.placeExclude('rapor !under:/tmp', PLACE_HOME, '/srv')[0], 'rapor !under:/tmp !under:/srv');
+  assert.equal(M.placeExclude('rapor', PLACE_HOME, '/srv')[0], '!under:/srv rapor');
 });
 
 test('Exclude toggles its own term and takes a held folder out (lens/folders_tests.rs)', () => {

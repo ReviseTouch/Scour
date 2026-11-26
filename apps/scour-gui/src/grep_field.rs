@@ -234,6 +234,29 @@ fn key(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, key: &str) -
     true
 }
 
+/// Ctrl+V: the clipboard written as if typed (`pattern::edit::paste`), over
+/// the selection; a regex or hex as it is. False when the clipboard cannot be
+/// read here, and the field pastes it itself.
+fn paste(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue) -> bool {
+    let Some(pasted) = crate::paste::text() else {
+        return false;
+    };
+    let text = w.get_grep_pattern().to_string();
+    let (a, b) = (s.grep.field.anchor, s.grep.field.caret);
+    let (after, caret) = if s.grep.mode == GrepMode::Text {
+        edit::paste(&text, a, b, &pasted)
+    } else {
+        let one = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
+        let (lo, hi) = (a.min(b), a.max(b));
+        let chars: Vec<char> = text.chars().collect();
+        let head: String = chars[..lo].iter().collect();
+        let tail: String = chars[hi.min(chars.len())..].iter().collect();
+        (format!("{head}{one}{tail}"), lo + one.chars().count())
+    };
+    rewrite(w, s, link, cat, after, caret);
+    true
+}
+
 /// A line of what `:` offers chosen.
 fn pick(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, i: usize) {
     let Some(item) = s.grep.field.menu.get(i).copied() else {
@@ -299,6 +322,20 @@ pub fn wire(
     }
     {
         let (weak, state, link, cat) = (weak(), Rc::clone(state), Rc::clone(link), Rc::clone(cat));
+        window.on_grep_paste({
+            let (weak, state, link, cat) = (
+                weak.clone(),
+                Rc::clone(&state),
+                Rc::clone(&link),
+                Rc::clone(&cat),
+            );
+            move || {
+                let Some(w) = weak.upgrade() else {
+                    return false;
+                };
+                paste(&w, &mut state.borrow_mut(), &link, &cat.borrow())
+            }
+        });
         window.on_grep_key(move |k| {
             let Some(w) = weak.upgrade() else {
                 return false;

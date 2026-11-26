@@ -419,13 +419,10 @@ fn the_system_disk_just_chosen_reads_collapsed() {
     let rows = app.disk_rows(&tiles);
     app.panel_at = rows.iter().position(|r| *r == Row::Tile(cachy)).unwrap();
     enter(&mut app);
-    assert!(app.query.contains("under:"), "{}", app.query);
-    assert_eq!(app.caret, app.query.len());
-    assert!(
-        bar(&app).starts_with(" SCOUR rapor ⛁ CACHY"),
-        "{}",
-        bar(&app)
-    );
+    // Where it looks is written first, and the caret stays on it.
+    assert!(app.query.starts_with("under:"), "{}", app.query);
+    assert_eq!(app.caret, app.query.find(" rapor").unwrap());
+    assert!(bar(&app).starts_with(" SCOUR ⛁ CACHY"), "{}", bar(&app));
 
     // Typed into, the member is the person's letters again.
     key(&mut app, 'x');

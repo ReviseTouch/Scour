@@ -8,10 +8,25 @@
     return placeTerms(text).find((t) => caret > t.start && caret <= t.end) || null;
   }
 
-  /* `add` as a term of its own at the end, and the caret after it. */
-  function placeAtEnd(text, add) {
-    const out = text + (!text || /\s$/.test(text) ? "" : " ") + add;
-    return [out, out.length];
+  /* `lens::place_head`: where the query's place ends — the group and the
+     exclusions standing first, nothing but spaces and `|` between them. */
+  function placeHead(text) {
+    let end = 0;
+    for (const t of placeTerms(text)) {
+      const placed = isPlace(t) || (t.not && t.field === "under");
+      if (!placed || !/^[\s|]*$/.test(text.slice(end, t.start))) break;
+      end = t.end;
+    }
+    return end;
+  }
+
+  /* `lens::at_head`: `add` written where the place is said — first, or after
+     the place already there at `head` — and the caret after it. */
+  function placeAtHead(text, add, head) {
+    const before = text.slice(0, head), after = text.slice(head);
+    const lead = before ? " " : "";
+    const tail = !after || /^\s/.test(after) ? "" : " ";
+    return [before + lead + add + tail + after, before.length + lead.length + add.length];
   }
 
   /* The standalone `!under:` of `want` taken out, the caret kept on its term. */
@@ -35,7 +50,7 @@
     const want = placeNorm(home, path);
     const add = "under:" + quotedPath(homeIn(home, want));
     const run = placeRuns(text).find((r) => r.some(isPlace));
-    if (!run) return placeUnexclude(placeAtEnd(text, add), home, want);
+    if (!run) return placeUnexclude(placeAtHead(text, add, 0), home, want);
     const givesWay = (t) => {
       const held = placeNorm(home, t.value);
       return t.value === "" || (typed && sameTerm(typed, t)) || liesUnder(want, held) || liesUnder(held, want);
@@ -52,15 +67,19 @@
     return placeUnexclude(placeReplace(out, give[0], add), home, want);
   }
 
-  /* `lens::place_exclude`: "Exclude" writes the folder's `!under:` at the
-     end, or takes it away; a member naming the folder leaves the group. */
+  /* `lens::place_exclude`: "Exclude" writes the folder's `!under:` beside
+     the group, or where the place is said, or takes it away; a member naming
+     the folder leaves the group. */
   function placeExclude(text, home, path) {
     const want = placeNorm(home, path);
     const s = placeScope(text, home);
     const h = s.outside.find((x) => x.path === want);
     if (h) return placeRemove(text, h.term);
     const rest = scopeHolds(s, want) ? placeToggle(text, home, want, Pick.Also)[0] : text;
-    return placeAtEnd(rest, "!under:" + quotedPath(homeIn(home, want)));
+    const run = placeRuns(rest).find((r) => r.some(isPlace));
+    const excluded = placeTerms(rest).filter((t) => t.not && t.field === "under").map((t) => t.end);
+    const at = Math.max(placeHead(rest), run ? run[run.length - 1].end : 0, ...excluded);
+    return placeAtHead(rest, "!under:" + quotedPath(homeIn(home, want)), at);
   }
 
   /* `lens::place_settle`: where the caret rests after a press of the place

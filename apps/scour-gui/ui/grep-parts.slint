@@ -3,7 +3,7 @@
 // (`grep_lay.rs`); the invisible input under it holds the text.
 
 import { Theme, Fonts } from "theme.slint";
-import { PairButton } from "widgets.slint";
+import { PairButton, Shade } from "widgets.slint";
 
 /// Letters drawn as typed, outside capsules: a regex, hex. `role` 0.
 export struct GrepRun {
@@ -212,87 +212,94 @@ export component GrepMenu inherits Rectangle {
     callback pick(int);
     width: 320px;
     height: body.preferred-height;
-    background: Theme.panel-2;
-    border-width: Theme.hair;
-    border-color: Theme.line;
-    border-radius: 10px;
-    clip: true;
-    drop-shadow-blur: 16px;
-    drop-shadow-color: #0000005c;
-    drop-shadow-offset-y: 6px;
-    TouchArea {}
-    body := VerticalLayout {
-        padding-top: 4px;
-        padding-bottom: 4px;
-        for r[i] in root.rows: Rectangle {
-            height: 40px;
-            background: i == root.sel ? Theme.selection : t.has-hover ? Theme.hover : transparent;
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 10px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 7px;
-                        border-width: 1px;
-                        background: Theme.cap-read;
-                        border-color: Theme.cap-read-ring;
-                        if r.icon == "approx": Image {
-                            x: 6px;
-                            y: 6px;
-                            width: 16px;
-                            height: 16px;
-                            source: @image-url("icons/tools/lens-fuzzy.svg");
-                            colorize: Theme.q-bad;
-                        }
-                        if r.icon != "approx": Text {
-                            width: parent.width;
-                            height: parent.height;
-                            text: r.icon == "quote" ? "\u{201c}\u{201d}" : r.icon == "or" ? "∨"
-                                : r.icon == "not" ? "⊘" : "Aa";
-                            color: Theme.q-bad;
-                            font-size: r.icon == "case" ? 11px : 15px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+    // Its shadow drawn, then its ground, which clips what it holds.
+    Shade {
+        width: parent.width;
+        height: parent.height;
+        radius: 10px;
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: Theme.panel-2;
+        border-width: Theme.hair;
+        border-color: Theme.line;
+        border-radius: 10px;
+        clip: true;
+        TouchArea {}
+        body := VerticalLayout {
+            padding-top: 4px;
+            padding-bottom: 4px;
+            for r[i] in root.rows: Rectangle {
+                height: 40px;
+                background: i == root.sel ? Theme.selection : t.has-hover ? Theme.hover : transparent;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 7px;
+                            border-width: 1px;
+                            background: Theme.cap-read;
+                            border-color: Theme.cap-read-ring;
+                            if r.icon == "approx": Image {
+                                x: 6px;
+                                y: 6px;
+                                width: 16px;
+                                height: 16px;
+                                source: @image-url("icons/tools/lens-fuzzy.svg");
+                                colorize: Theme.q-bad;
+                            }
+                            if r.icon != "approx": Text {
+                                width: parent.width;
+                                height: parent.height;
+                                text: r.icon == "quote" ? "\u{201c}\u{201d}" : r.icon == "or" ? "∨"
+                                    : r.icon == "not" ? "⊘" : "Aa";
+                                color: Theme.q-bad;
+                                font-size: r.icon == "case" ? 11px : 15px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: r.label;
-                        color: Theme.ink;
-                        font-size: 13.5px;
-                        font-weight: 600;
-                        overflow: elide;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: r.label;
+                            color: Theme.ink;
+                            font-size: 13.5px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: r.about;
+                            color: Theme.ink-3;
+                            font-size: 11.5px;
+                            overflow: elide;
+                        }
                     }
                     Text {
-                        text: r.about;
+                        width: 34px;
+                        text: r.sign;
                         color: Theme.ink-3;
-                        font-size: 11.5px;
-                        overflow: elide;
+                        font-family: Fonts.mono;
+                        font-size: 11px;
+                        font-weight: 600;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
                     }
                 }
-                Text {
-                    width: 34px;
-                    text: r.sign;
-                    color: Theme.ink-3;
-                    font-family: Fonts.mono;
-                    font-size: 11px;
-                    font-weight: 600;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                }
-            }
-            t := TouchArea {
-                pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                        root.pick(i);
+                t := TouchArea {
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            root.pick(i);
+                        }
                     }
                 }
             }

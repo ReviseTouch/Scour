@@ -1234,3 +1234,26 @@ export component CalCell inherits Rectangle {
         clicked => { root.picked(root.day.n); }
     }
 }
+
+// A popup's shadow, drawn. The software renderer the window uses leaves
+// `drop-shadow-*` unpainted (a TODO in Slint's own source), so a panel over
+// the list showed nothing but its hairline and ran into what is under it.
+// Rings of black, fainter outward, the same box as the popup and drawn
+// before it; their alpha adds up towards the edge. Light, and away from what
+// opened it: `drop` sits them lower for a popup that opens downwards, so its
+// top keeps almost none; a negative one, higher, for one that opens upwards.
+export component Shade inherits Rectangle {
+    in property <length> radius: 8px;
+    // How far the rings reach, and how far down (or up) they sit.
+    in property <int> depth: 6;
+    in property <length> drop: 6px;
+    property <float> alpha: Theme.dark ? 0.05 : 0.016;
+    for ring[i] in root.depth: Rectangle {
+        x: -(i + 1) * 1.5px;
+        y: -(i + 1) * 1.5px + root.drop;
+        width: root.width + (i + 1) * 3px;
+        height: root.height + (i + 1) * 3px;
+        border-radius: root.radius + (i + 1) * 1.5px;
+        background: rgba(0, 0, 0, root.alpha);
+    }
+}

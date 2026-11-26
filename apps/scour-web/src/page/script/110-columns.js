@@ -378,7 +378,6 @@
     peekToggle.setAttribute("aria-pressed", s.preview ? "true" : "false");
     VIEW = (s.view && s.view.web) || {};
     applyView();
-    showPastAffordance();
     buildHeads();
     applyWidths();
     applyPeekWidth();

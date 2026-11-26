@@ -201,6 +201,16 @@
     return true;
   }
 
+  /* A paste is typed (`pattern::edit::paste`): words land in one capsule. */
+  grepInput.addEventListener("paste", (e) => {
+    if (GREP.mode !== "text" || !e.clipboardData) return;
+    e.preventDefault();
+    const text = grepInput.value;
+    const a = grepCol(text, grepInput.selectionStart ?? 0), b = grepCol(text, grepInput.selectionEnd ?? 0);
+    const [out, at] = patternPaste(text, a, b, e.clipboardData.getData("text/plain"));
+    grepSetText(out, grepUnit(out, at));
+  });
+
   /* The field's text changed from outside the keyboard: drawn, read again. */
   function grepSetText(value, caretUnit) {
     grepInput.value = value;

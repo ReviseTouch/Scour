@@ -350,9 +350,6 @@ msgstr "Sorgu"
 msgid "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb"
 msgstr "dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb"
 
-msgid "past searches (Alt+↓)"
-msgstr "önceki aramalar (Alt+↓)"
-
 msgid "past searches"
 msgstr "önceki aramalar"
 
@@ -3185,8 +3182,8 @@ msgstr "Sil ve baştan tara"
 msgid "The index was emptied; the walk has started."
 msgstr "İndeks silindi, tarama başladı."
 
-msgid "Document texts"
-msgstr "Belge metinleri"
+msgid "Content search cache"
+msgstr "İçerik arama önbelleği"
 
 msgid "{n} documents · up to {limit}"
 msgstr "{n} belge · en çok {limit}"
@@ -3200,8 +3197,8 @@ msgstr "PDF ve Office belgelerinden çıkarılan metinler silinir. İçerik aram
 msgid "Empty it"
 msgstr "Boşalt"
 
-msgid "Document texts emptied."
-msgstr "Belge metinleri boşaltıldı."
+msgid "Content search cache emptied."
+msgstr "İçerik arama önbelleği boşaltıldı."
 
 msgid "Previews"
 msgstr "Önizlemeler"

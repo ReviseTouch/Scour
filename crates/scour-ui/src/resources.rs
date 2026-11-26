@@ -65,14 +65,14 @@ pub const THINGS: [Thing; 5] = [
     },
     Thing {
         token: "texts",
-        label: "Document texts",
+        label: "Content search cache",
         note: "{n} documents · up to {limit}",
         act: Act {
             what: Do::ForgetTexts,
             button: "Empty…",
             ask: "Text read out of PDF and Office documents is deleted. Content search is slower until it has read them again.",
             go: "Empty it",
-            done: "Document texts emptied.",
+            done: "Content search cache emptied.",
             danger: true,
         },
     },

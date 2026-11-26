@@ -237,8 +237,11 @@ pub(super) fn order_for(query: &str, sort: &str) -> String {
 /// What was searched before, narrowed by what is typed now.
 pub(super) fn past_matching(past: &[String], typed: &str) -> Vec<slint::SharedString> {
     let typed = typed.trim().to_lowercase();
+    // What is typed narrows it; when nothing past holds it, all of it, so the
+    // gesture never opens nothing.
+    let narrows = past.iter().any(|line| line.to_lowercase().contains(&typed));
     past.iter()
-        .filter(|line| typed.is_empty() || line.to_lowercase().contains(&typed))
+        .filter(|line| typed.is_empty() || !narrows || line.to_lowercase().contains(&typed))
         // The cap is here rather than on the box: a layout gives its parent a
         // minimum height, so a shorter box is overflowed by its rows.
         .take(PAST_SHOWN)

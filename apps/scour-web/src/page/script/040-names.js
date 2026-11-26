@@ -297,16 +297,16 @@
     hints = [];
     hintSel = 0;
     q.setAttribute("aria-expanded", "false");
-    const arrow = document.getElementById("qpast");
-    if (arrow) arrow.setAttribute("aria-expanded", "false");
   }
 
   /* The past, in the completions' own box: a remembered query is a completion
    * whose insert is the whole line, so every key already works. */
   function showHistory() {
     const typed = q.value.trim().toLowerCase();
-    // What was typed narrows it; an empty box offers everything, newest first.
-    const past = HISTORY.filter((h) => !typed || h.toLowerCase().includes(typed));
+    // What was typed narrows it; an empty box, or one nothing past holds,
+    // offers everything, newest first, so `Alt+↓` never opens nothing.
+    const narrowed = HISTORY.filter((h) => !typed || h.toLowerCase().includes(typed));
+    const past = narrowed.length ? narrowed : HISTORY;
     if (!past.length) { hideHints(); return; }
     hints = past.map((h) => ({ insert: h, label: h, about: "", at: [0, q.value.length] }));
     hintSel = 0;
@@ -320,23 +320,11 @@
 
   /* The box searches per keystroke, so the history holds what was committed
    * to — Enter, or opening a result — rather than `r`, `ra`, `rap`. */
-  const qpast = document.getElementById("qpast");
-  /* Shown only when there is a past. */
-  function showPastAffordance() {
-    qpast.hidden = HISTORY.length === 0;
-  }
-  qpast.addEventListener("mousedown", (e) => {
-    // `mousedown`: by `click` the input has lost focus and the list is closed.
-    e.preventDefault();
-    if (hintBox.hidden) { q.focus(); showHistory(); } else { hideHints(); }
-    qpast.setAttribute("aria-expanded", String(!hintBox.hidden));
-  });
 
   function remember(text) {
     text = (text || "").trim();
     if (!text || HISTORY[0] === text) return;
     HISTORY = [text, ...HISTORY.filter((h) => h !== text)].slice(0, 100);
-    showPastAffordance();
     /* The query, not the list: the service holds the history and applies the
        cap, so no frontend has to know the number. */
     keep({ remember: text });

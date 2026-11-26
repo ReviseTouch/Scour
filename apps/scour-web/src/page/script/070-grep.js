@@ -293,10 +293,12 @@
       lensSync(true);
       return;
     }
-    const lead = v.length && !/\s$/.test(v) ? " " : "";
-    const add = fieldName + ":";
-    q.value = v + lead + add;
-    q.setSelectionRange(q.value.length, q.value.length);
+    // Where it looks is the first thing the query says; anything else at the end.
+    const [out, caret] = fieldName === "under" ? placeAtHead(v, "under:", 0)
+      : [v + (v.length && !/\s$/.test(v) ? " " : "") + fieldName + ":", -1];
+    q.value = out;
+    const at = caret < 0 ? out.length : caret;
+    q.setSelectionRange(at, at);
     render();
     lensSync(true);
   }

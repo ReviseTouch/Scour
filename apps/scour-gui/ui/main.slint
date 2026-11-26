@@ -25,7 +25,7 @@ export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { HeldPanel, HeldLine, SortLine, MemLine, RunLine, ResourcePanel } from "resources.slint";
 export { HeldPanel, HeldLine, SortLine, MemLine, RunLine }
-import { FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
 export component MainWindow inherits Window {
@@ -220,6 +220,9 @@ export component MainWindow inherits Window {
     callback grep-hover(length);
     // A key the pattern answers itself; false lets the field type it.
     callback grep-key(string) -> bool;
+    // A paste the pattern writes, as if typed; false when the clipboard
+    // could not be read here, and the field pastes it itself.
+    callback grep-paste() -> bool;
     // The capsule under the pointer, and what its pill offers.
     in property <int> grep-hov: -1;
     in property <length> grep-hov-x;
@@ -1392,10 +1395,8 @@ export component MainWindow inherits Window {
                     // Past the scope chip, which stands at the start of the
                     // first line; the lines under it start as far in.
                     property <length> pad: scope-chip.x + scope-chip.width + 8px;
-                    // What a line holds: the width less the padding and the
-                    // past's button at the end.
-                    property <length> room: max(0px, field.width - field.pad - 9px
-                        - (root.has-past ? 24px : 0px));
+                    // What a line holds: the width less the padding.
+                    property <length> room: max(0px, field.width - field.pad - 9px);
                     // One character's width, measured over forty because a
                     // layout rounds each run to whole pixels and the error
                     // accumulates. One width for every character: the query's
@@ -2038,7 +2039,7 @@ export component MainWindow inherits Window {
                 q-press := TouchArea {
                     x: 0;
                     y: 0;
-                    width: parent.width - (root.has-past ? 24px : 0px);
+                    width: parent.width;
                     height: parent.height;
                     mouse-cursor: text;
                     property <int> anchor: 0;
@@ -2099,35 +2100,6 @@ export component MainWindow inherits Window {
                         pressed => {
                             input.focus();
                             root.where-pressed();
-                        }
-                    }
-
-                    // What says `Alt+↓` is there. Inside the field at its
-                    // trailing edge, because the box stretches and a button
-                    // outside it would move with every resize.
-                    if root.has-past: Rectangle {
-                        x: field.width - 26px;
-                        width: 22px;
-                        height: 22px;
-                        y: (field.height - 22px) / 2;
-                        border-radius: 3px;
-                        background: chevron.has-hover || root.past-open ? Theme.hover : Theme.panel-2;
-                        Image {
-                            source: @image-url("icons/tools/chevron.svg");
-                            colorize: root.past-open ? Theme.ink : Theme.ink-3;
-                            width: 12px;
-                            height: 12px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        chevron := TouchArea {
-                            // The pointer, not the click: by the time a click
-                            // lands, the list has already closed on blur.
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down) {
-                                    root.past-toggled();
-                                }
-                            }
                         }
                     }
 
@@ -2409,6 +2381,12 @@ export component MainWindow inherits Window {
                                     if (e.text == Key.Escape) {
                                         root.grep-toggled();
                                         return accept;
+                                    }
+                                    if ((e.modifiers.control && !e.modifiers.alt && (e.text == "v" || e.text == "V"))
+                                        || (e.modifiers.shift && e.text == Key.Insert)) {
+                                        if (root.grep-paste()) {
+                                            return accept;
+                                        }
                                     }
                                     // Backspace in an empty capsule, a space (it
                                     // stays in its capsule), a quote, Tab (out of
@@ -4454,8 +4432,9 @@ export component MainWindow inherits Window {
                 }
 
                 // What the service is holding, not what it just answered.
-                // Pressed, the panel of what it keeps; the ring is always
-                // there, so neither hover nor the open panel moves a thing.
+                // Pressed, the panel of what it keeps. It looks pressable at
+                // rest: a ring, a disk before it and a chevron up after it,
+                // where the panel opens; hover only darkens them.
                 if root.holding != "": Text {
                     text: "·";
                     color: Theme.line;
@@ -4467,24 +4446,43 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 0;
                     Rectangle {
                         height: 22px;
-                        preferred-width: held-text.preferred-width + 16px;
-                        max-width: held-text.preferred-width + 16px;
-                        min-width: 40px;
+                        // The disk and the chevron, 12 + 10 px, and the gaps.
+                        property <length> art: 12px + 10px + 10px;
+                        property <brush> ink: HeldPanel.open ? Theme.q-key
+                            : held-touch.has-hover ? Theme.ink-2 : Theme.ink-3;
+                        preferred-width: held-text.preferred-width + self.art + 14px;
+                        max-width: held-text.preferred-width + self.art + 14px;
+                        min-width: 60px;
                         border-radius: 6px;
                         border-width: Theme.hair;
                         border-color: HeldPanel.open ? Theme.cap-ring
-                            : held-touch.has-hover ? Theme.line : transparent;
-                        background: HeldPanel.open ? Theme.cap : transparent;
+                            : held-touch.has-hover ? Theme.ink-3 : Theme.line;
+                        background: HeldPanel.open ? Theme.cap : Theme.panel;
+                        Image {
+                            x: 7px;
+                            y: (parent.height - self.height) / 2;
+                            width: 12px;
+                            height: 12px;
+                            source: @image-url("icons/held/disk.svg");
+                            colorize: parent.ink;
+                        }
                         held-text := Text {
-                            x: 8px;
-                            width: parent.width - 16px;
+                            x: 7px + 12px + 5px;
+                            width: parent.width - parent.art - 14px;
                             height: parent.height;
                             text: root.holding;
-                            color: HeldPanel.open ? Theme.q-key
-                                : held-touch.has-hover ? Theme.ink-2 : Theme.ink-3;
+                            color: parent.ink;
                             font-size: 11.5px;
                             vertical-alignment: center;
                             overflow: elide;
+                        }
+                        Image {
+                            x: parent.width - 7px - self.width;
+                            y: (parent.height - self.height) / 2;
+                            width: 10px;
+                            height: 10px;
+                            source: @image-url("icons/tools/chevron-up.svg");
+                            colorize: parent.ink;
                         }
                         held-touch := TouchArea {
                             mouse-cursor: pointer;
@@ -4719,53 +4717,60 @@ export component MainWindow inherits Window {
                 8px, parent.width - self.width - 8px);
             y: field.absolute-position.y + field.height + 4px;
             height: min(root.past.length * 24px + 8px, 152px);
-            background: Theme.panel-2;
-            border-width: Theme.hair;
-            border-color: Theme.line;
-            border-radius: 8px;
-            clip: true;
-            drop-shadow-blur: 14px;
-            drop-shadow-color: #00000055;
-            drop-shadow-offset-y: 4px;
-
-            TouchArea {}
-
-            past-scroll := Flickable {
+            // Its shadow drawn, then its ground, which clips what it holds.
+            Shade {
                 width: parent.width;
                 height: parent.height;
-                viewport-height: root.past.length * 24px + 8px;
-                property <int> follow: root.past-picked;
-                changed follow => {
-                    let top = 4px + self.follow * 24px;
-                    if (top + self.viewport-y < 0px) {
-                        self.viewport-y = -top;
-                    } else if (top + 24px + self.viewport-y > self.height) {
-                        self.viewport-y = self.height - top - 24px;
-                    }
-                }
-                VerticalLayout {
-                    padding: 4px;
-                    spacing: 0px;
-                    for line[i] in root.past: Rectangle {
-                        height: 24px;
-                        background: i == root.past-picked ? Theme.selection
-                                  : row-touch.has-hover ? Theme.hover : transparent;
-                        border-radius: 4px;
-                        Text {
-                            x: 8px;
-                            width: parent.width - 16px;
-                            text: line;
-                            color: Theme.ink;
-                            font-family: Fonts.mono;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                            overflow: elide;
+                radius: 8px;
+            }
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: Theme.panel-2;
+                border-width: Theme.hair;
+                border-color: Theme.line;
+                border-radius: 8px;
+                clip: true;
+
+                TouchArea {}
+
+                past-scroll := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-height: root.past.length * 24px + 8px;
+                    property <int> follow: root.past-picked;
+                    changed follow => {
+                        let top = 4px + self.follow * 24px;
+                        if (top + self.viewport-y < 0px) {
+                            self.viewport-y = -top;
+                        } else if (top + 24px + self.viewport-y > self.height) {
+                            self.viewport-y = self.height - top - 24px;
                         }
-                        row-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down) {
-                                    root.past-taken(line);
+                    }
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 0px;
+                        for line[i] in root.past: Rectangle {
+                            height: 24px;
+                            background: i == root.past-picked ? Theme.selection
+                                      : row-touch.has-hover ? Theme.hover : transparent;
+                            border-radius: 4px;
+                            Text {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                text: line;
+                                color: Theme.ink;
+                                font-family: Fonts.mono;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            row-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down) {
+                                        root.past-taken(line);
+                                    }
                                 }
                             }
                         }
@@ -4799,7 +4804,7 @@ export component MainWindow inherits Window {
 
         // The lens: under the term the caret is on, expanding to a 2-column
         // Miller place explorer or interactive sparkline histogram when needed.
-        if root.lens-open && (root.lens-kind == "place" || root.lens-rows.length > 0): Rectangle {
+        if root.lens-open && (root.lens-kind == "place" || root.lens-rows.length > 0): lens-box := Rectangle {
             x: clamp(field.absolute-position.x + field.pad + root.lens-x - 12px,
                 8px, root.width - self.width - 8px);
             y: field.absolute-position.y + field.top + (root.lens-line + 1) * root.q-pitch + 4px;
@@ -4817,346 +4822,353 @@ export component MainWindow inherits Window {
                 : root.lens-kind == "type" ? min(type-panel.want, root.height - self.y - 12px)
                 : root.lens-kind == "size" ? min(size-panel.want, root.height - self.y - 12px)
                 : min(lens-body.preferred-height, 410px);
-            background: Theme.panel-2;
-            border-width: Theme.hair;
-            border-color: Theme.line;
-            border-radius: 10px;
-            clip: true;
-            drop-shadow-blur: 16px;
-            drop-shadow-color: #0000005c;
-            drop-shadow-offset-y: 6px;
-
-            TouchArea {}
-
-            if root.lens-kind == "place": PlaceLens {
-                x: 0px;
-                y: 0px;
+            // Its shadow drawn, then its ground, which clips what it holds.
+            Shade {
                 width: parent.width;
                 height: parent.height;
-                words: root.place-words;
-                tiles: root.lens-tiles;
-                strip: root.lens-strip;
-                held: root.lens-holds;
-                places: root.lens-places;
-                crumbs: root.lens-crumbs;
-                dirs: root.lens-dirs;
-                cur: root.lens-place-cur;
-                shown: root.lens-place-shown;
-                up: root.lens-place-up;
-                direct: root.lens-place-direct;
-                sel: root.lens-sel;
-                here-at: root.lens-here-at;
-                sum: root.lens-sum;
-                total: root.lens-total;
-                none: root.lens-none;
-                foot: root.lens-foot;
-                cols: parent.tile-cols;
-                act(what, target) => { root.lens-place-act(what, target); }
-                tile(i, also) => { root.lens-tile(i, also); }
-                drop(i) => { root.lens-held-drop(i); }
+                radius: 10px;
             }
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: Theme.panel-2;
+                border-width: Theme.hair;
+                border-color: Theme.line;
+                border-radius: 10px;
+                clip: true;
 
-            time-panel := TimePanel {
-                visible: root.lens-kind == "time";
-                width: parent.width;
-                height: parent.height;
-                look: root.lens-time;
-                title: root.lens-title;
-                foot: root.lens-foot;
-                sel: root.lens-sel;
-                calendar: root.word-calendar;
-                months: root.cal-months;
-                week: root.cal-week;
-                cal-hint: root.cal-hint;
-                cal-open <=> root.cal-open;
-                cal-from <=> root.cal-from;
-                cal-to <=> root.cal-to;
-                cal-hover <=> root.cal-hover;
-                press(i, alt) => { root.lens-press(i, alt); }
-                bars(a, b) => { root.lens-bars(a, b); }
-                scale(i) => { root.lens-scale(i); }
-                mode(i) => { root.lens-mode(i); }
-                cal-opened => { root.cal-opened(); }
-                cal-shift(by) => { root.cal-shift(by); }
-                cal-range(a, b) => { root.lens-cal-range(a, b); }
-            }
-            type-panel := TypePanel {
-                visible: root.lens-kind == "type";
-                width: parent.width;
-                height: parent.height;
-                look: root.lens-type;
-                title: root.lens-title;
-                foot: root.lens-foot;
-                sel: root.lens-sel;
-                press(i, alt) => { root.lens-press(i, alt); }
-            }
-            size-panel := SizePanel {
-                visible: root.lens-kind == "size";
-                width: parent.width;
-                height: parent.height;
-                look: root.lens-size;
-                title: root.lens-title;
-                foot: root.lens-foot;
-                sel: root.lens-sel;
-                press(i, alt) => { root.lens-press(i, alt); }
-            }
+                TouchArea {}
 
-            lens-flick := Flickable {
-                visible: root.lens-kind != "place" && !parent.panel;
-                viewport-height: lens-body.preferred-height;
-                property <int> sel: root.lens-sel;
-                changed sel => {
-                    let at = 30px + self.sel * (root.lens-launching ? 40px : 26px);
-                    if (at + 30px + self.viewport-y > self.height) {
-                        self.viewport-y = self.height - at - 30px;
-                    }
-                    if (at + self.viewport-y < 30px) {
-                        self.viewport-y = min(0px, 30px - at);
-                    }
+                if root.lens-kind == "place": PlaceLens {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    words: root.place-words;
+                    tiles: root.lens-tiles;
+                    strip: root.lens-strip;
+                    held: root.lens-holds;
+                    places: root.lens-places;
+                    crumbs: root.lens-crumbs;
+                    dirs: root.lens-dirs;
+                    cur: root.lens-place-cur;
+                    shown: root.lens-place-shown;
+                    up: root.lens-place-up;
+                    direct: root.lens-place-direct;
+                    sel: root.lens-sel;
+                    here-at: root.lens-here-at;
+                    sum: root.lens-sum;
+                    total: root.lens-total;
+                    none: root.lens-none;
+                    foot: root.lens-foot;
+                    cols: lens-box.tile-cols;
+                    act(what, target) => { root.lens-place-act(what, target); }
+                    tile(i, also) => { root.lens-tile(i, also); }
+                    drop(i) => { root.lens-held-drop(i); }
                 }
-                lens-body := VerticalLayout {
-                    padding-top: 4px;
-                    padding-bottom: 4px;
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        height: 24px;
-                        Text {
-                            text: root.lens-title;
-                            color: Theme.ink-2;
-                            font-size: 11.5px;
-                            font-weight: 600;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: 1;
+
+                time-panel := TimePanel {
+                    visible: root.lens-kind == "time";
+                    width: parent.width;
+                    height: parent.height;
+                    look: root.lens-time;
+                    title: root.lens-title;
+                    foot: root.lens-foot;
+                    sel: root.lens-sel;
+                    calendar: root.word-calendar;
+                    months: root.cal-months;
+                    week: root.cal-week;
+                    cal-hint: root.cal-hint;
+                    cal-open <=> root.cal-open;
+                    cal-from <=> root.cal-from;
+                    cal-to <=> root.cal-to;
+                    cal-hover <=> root.cal-hover;
+                    press(i, alt) => { root.lens-press(i, alt); }
+                    bars(a, b) => { root.lens-bars(a, b); }
+                    scale(i) => { root.lens-scale(i); }
+                    mode(i) => { root.lens-mode(i); }
+                    cal-opened => { root.cal-opened(); }
+                    cal-shift(by) => { root.cal-shift(by); }
+                    cal-range(a, b) => { root.lens-cal-range(a, b); }
+                }
+                type-panel := TypePanel {
+                    visible: root.lens-kind == "type";
+                    width: parent.width;
+                    height: parent.height;
+                    look: root.lens-type;
+                    title: root.lens-title;
+                    foot: root.lens-foot;
+                    sel: root.lens-sel;
+                    press(i, alt) => { root.lens-press(i, alt); }
+                }
+                size-panel := SizePanel {
+                    visible: root.lens-kind == "size";
+                    width: parent.width;
+                    height: parent.height;
+                    look: root.lens-size;
+                    title: root.lens-title;
+                    foot: root.lens-foot;
+                    sel: root.lens-sel;
+                    press(i, alt) => { root.lens-press(i, alt); }
+                }
+
+                lens-flick := Flickable {
+                    visible: root.lens-kind != "place" && !lens-box.panel;
+                    viewport-height: lens-body.preferred-height;
+                    property <int> sel: root.lens-sel;
+                    changed sel => {
+                        let at = 30px + self.sel * (root.lens-launching ? 40px : 26px);
+                        if (at + 30px + self.viewport-y > self.height) {
+                            self.viewport-y = self.height - at - 30px;
                         }
-                        Text {
-                            text: root.lens-said;
-                            color: Theme.ink-3;
-                            font-size: 11px;
-                            vertical-alignment: center;
+                        if (at + self.viewport-y < 30px) {
+                            self.viewport-y = min(0px, 30px - at);
                         }
                     }
-
-                    VerticalLayout {
-                        for row[i] in root.lens-rows: VerticalLayout {
-                            if row.group != "": Rectangle {
-                                height: row.group == " " ? 7px : 20px;
-                                Rectangle {
-                                    visible: row.group == " ";
-                                    y: 3px;
-                                    height: 1px;
-                                    background: Theme.line;
-                                }
-                                Text {
-                                    x: 12px;
-                                    visible: row.group != " ";
-                                    text: row.group;
-                                    color: Theme.ink-3;
-                                    font-size: 11px;
-                                    font-weight: 600;
-                                    vertical-alignment: bottom;
-                                    height: parent.height - 2px;
-                                }
+                    lens-body := VerticalLayout {
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            height: 24px;
+                            Text {
+                                text: root.lens-title;
+                                color: Theme.ink-2;
+                                font-size: 11.5px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
                             }
-                            if root.lens-launching: Rectangle {
-                                height: 40px;
-                                background: i == root.lens-sel ? Theme.selection
-                                          : launch-touch.has-hover ? Theme.hover : transparent;
-                                property <bool> reads: row.icon == "read";
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    spacing: 10px;
-                                    // The capsule's own picture, on its tint.
-                                    VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            width: 28px;
-                                            height: 28px;
-                                            border-radius: 7px;
-                                            border-width: 1px;
-                                            background: reads ? Theme.cap-read : Theme.cap;
-                                            border-color: reads ? Theme.cap-read-ring : Theme.cap-ring;
-                                            Image {
-                                                x: 6px;
-                                                y: 6px;
-                                                width: 16px;
-                                                height: 16px;
-                                                source: row.icon == "approx" ? @image-url("icons/tools/lens-fuzzy.svg")
-                                                    : row.icon == "folder" ? @image-url("icons/tools/folder.svg")
-                                                    : row.icon == "clock" ? @image-url("icons/tools/lens-time.svg")
-                                                    : row.icon == "shapes" ? @image-url("icons/tools/field-kind.svg")
-                                                    : row.icon == "ext" ? @image-url("icons/tools/field-ext.svg")
-                                                    : row.icon == "size" ? @image-url("icons/tools/field-size.svg")
-                                                    : @image-url("icons/tools/lens-content.svg");
-                                                colorize: reads ? Theme.q-bad : Theme.q-key;
-                                            }
-                                        }
-                                    }
-                                    VerticalLayout {
-                                        alignment: center;
-                                        horizontal-stretch: 1;
-                                        Text {
-                                            text: row.label;
-                                            color: Theme.ink;
-                                            font-size: 13.5px;
-                                            font-weight: 600;
-                                            overflow: elide;
-                                        }
-                                        Text {
-                                            text: row.hint;
-                                            color: Theme.ink-3;
-                                            font-size: 11.5px;
-                                            overflow: elide;
-                                        }
-                                    }
-                                    if row.held: VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 17px;
-                                            width: held-tag.preferred-width + 12px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: Theme.cap-ring;
-                                            held-tag := Text {
-                                                x: 6px;
-                                                y: 0px;
-                                                height: parent.height;
-                                                text: root.lens-held;
-                                                color: Theme.q-key;
-                                                font-size: 10.5px;
-                                                font-weight: 600;
-                                                vertical-alignment: center;
-                                            }
-                                        }
+                            Text {
+                                text: root.lens-said;
+                                color: Theme.ink-3;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            for row[i] in root.lens-rows: VerticalLayout {
+                                if row.group != "": Rectangle {
+                                    height: row.group == " " ? 7px : 20px;
+                                    Rectangle {
+                                        visible: row.group == " ";
+                                        y: 3px;
+                                        height: 1px;
+                                        background: Theme.line;
                                     }
                                     Text {
-                                        width: 34px;
-                                        text: row.key;
+                                        x: 12px;
+                                        visible: row.group != " ";
+                                        text: row.group;
                                         color: Theme.ink-3;
-                                        font-family: Fonts.mono;
                                         font-size: 11px;
                                         font-weight: 600;
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
+                                        vertical-alignment: bottom;
+                                        height: parent.height - 2px;
                                     }
                                 }
-                                launch-touch := TouchArea {
-                                    pointer-event(e) => {
-                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                            root.lens-pick(i, row.stays);
-                                        }
-                                    }
-                                }
-                            }
-                            if !root.lens-launching: Rectangle {
-                                height: 26px;
-                                background: i == root.lens-sel ? Theme.selection
-                                          : lens-touch.has-hover ? Theme.hover : transparent;
-                                HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    spacing: 8px;
+                                if root.lens-launching: Rectangle {
+                                    height: 40px;
+                                    background: i == root.lens-sel ? Theme.selection
+                                              : launch-touch.has-hover ? Theme.hover : transparent;
+                                    property <bool> reads: row.icon == "read";
                                     HorizontalLayout {
-                                        spacing: 7px;
-                                        horizontal-stretch: 1;
-                                        Text {
-                                            text: row.label;
-                                            color: row.zero || row.wait ? Theme.ink-3 : Theme.ink;
-                                            font-size: 12.5px;
-                                            font-weight: 500;
-                                            vertical-alignment: center;
-                                            overflow: elide;
+                                        padding-left: 12px;
+                                        padding-right: 12px;
+                                        spacing: 10px;
+                                        // The capsule's own picture, on its tint.
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 28px;
+                                                height: 28px;
+                                                border-radius: 7px;
+                                                border-width: 1px;
+                                                background: reads ? Theme.cap-read : Theme.cap;
+                                                border-color: reads ? Theme.cap-read-ring : Theme.cap-ring;
+                                                Image {
+                                                    x: 6px;
+                                                    y: 6px;
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    source: row.icon == "approx" ? @image-url("icons/tools/lens-fuzzy.svg")
+                                                        : row.icon == "folder" ? @image-url("icons/tools/folder.svg")
+                                                        : row.icon == "clock" ? @image-url("icons/tools/lens-time.svg")
+                                                        : row.icon == "shapes" ? @image-url("icons/tools/field-kind.svg")
+                                                        : row.icon == "ext" ? @image-url("icons/tools/field-ext.svg")
+                                                        : row.icon == "size" ? @image-url("icons/tools/field-size.svg")
+                                                        : @image-url("icons/tools/lens-content.svg");
+                                                    colorize: reads ? Theme.q-bad : Theme.q-key;
+                                                }
+                                            }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            horizontal-stretch: 1;
+                                            Text {
+                                                text: row.label;
+                                                color: Theme.ink;
+                                                font-size: 13.5px;
+                                                font-weight: 600;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: row.hint;
+                                                color: Theme.ink-3;
+                                                font-size: 11.5px;
+                                                overflow: elide;
+                                            }
+                                        }
+                                        if row.held: VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                height: 17px;
+                                                width: held-tag.preferred-width + 12px;
+                                                border-radius: 4px;
+                                                border-width: 1px;
+                                                border-color: Theme.cap-ring;
+                                                held-tag := Text {
+                                                    x: 6px;
+                                                    y: 0px;
+                                                    height: parent.height;
+                                                    text: root.lens-held;
+                                                    color: Theme.q-key;
+                                                    font-size: 10.5px;
+                                                    font-weight: 600;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
                                         }
                                         Text {
-                                            text: row.hint;
+                                            width: 34px;
+                                            text: row.key;
                                             color: Theme.ink-3;
                                             font-family: Fonts.mono;
                                             font-size: 11px;
+                                            font-weight: 600;
+                                            horizontal-alignment: right;
                                             vertical-alignment: center;
-                                            overflow: elide;
-                                            horizontal-stretch: 1;
                                         }
                                     }
-                                    if row.reads: Text {
-                                        text: root.lens-foot == "" ? "" : root.lens-reads;
-                                        color: Theme.q-bad;
-                                        font-size: 11.5px;
-                                        vertical-alignment: center;
-                                    }
-                                    if !row.reads: Rectangle {
-                                        width: 56px;
-                                        Rectangle {
-                                            y: (parent.height - 5px) / 2;
-                                            height: 5px;
-                                            border-radius: 3px;
-                                            background: row.n == "" ? transparent : Theme.line-soft;
-                                            Rectangle {
-                                                x: 0;
-                                                width: parent.width * row.bar;
-                                                height: parent.height;
-                                                border-radius: 3px;
-                                                background: Theme.k3;
+                                    launch-touch := TouchArea {
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.lens-pick(i, row.stays);
                                             }
                                         }
                                     }
-                                    if !row.reads: Text {
-                                        width: 72px;
-                                        text: row.n;
-                                        color: row.zero ? Theme.ink-3 : Theme.ink-2;
-                                        font-family: Fonts.mono;
-                                        font-size: 11.5px;
-                                        horizontal-alignment: right;
-                                        vertical-alignment: center;
-                                    }
                                 }
-                                lens-touch := TouchArea {
-                                    pointer-event(e) => {
-                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                            root.lens-pick(i, row.stays);
+                                if !root.lens-launching: Rectangle {
+                                    height: 26px;
+                                    background: i == root.lens-sel ? Theme.selection
+                                              : lens-touch.has-hover ? Theme.hover : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 12px;
+                                        padding-right: 12px;
+                                        spacing: 8px;
+                                        HorizontalLayout {
+                                            spacing: 7px;
+                                            horizontal-stretch: 1;
+                                            Text {
+                                                text: row.label;
+                                                color: row.zero || row.wait ? Theme.ink-3 : Theme.ink;
+                                                font-size: 12.5px;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: row.hint;
+                                                color: Theme.ink-3;
+                                                font-family: Fonts.mono;
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+                                        if row.reads: Text {
+                                            text: root.lens-foot == "" ? "" : root.lens-reads;
+                                            color: Theme.q-bad;
+                                            font-size: 11.5px;
+                                            vertical-alignment: center;
+                                        }
+                                        if !row.reads: Rectangle {
+                                            width: 56px;
+                                            Rectangle {
+                                                y: (parent.height - 5px) / 2;
+                                                height: 5px;
+                                                border-radius: 3px;
+                                                background: row.n == "" ? transparent : Theme.line-soft;
+                                                Rectangle {
+                                                    x: 0;
+                                                    width: parent.width * row.bar;
+                                                    height: parent.height;
+                                                    border-radius: 3px;
+                                                    background: Theme.k3;
+                                                }
+                                            }
+                                        }
+                                        if !row.reads: Text {
+                                            width: 72px;
+                                            text: row.n;
+                                            color: row.zero ? Theme.ink-3 : Theme.ink-2;
+                                            font-family: Fonts.mono;
+                                            font-size: 11.5px;
+                                            horizontal-alignment: right;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    lens-touch := TouchArea {
+                                        pointer-event(e) => {
+                                            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                                root.lens-pick(i, row.stays);
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    if root.lens-kind == "word": HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        padding-top: 4px;
-                        padding-bottom: 4px;
-                        spacing: 6px;
-                        Text {
-                            text: root.typos-said;
-                            color: Theme.ink-2;
-                            font-size: 11px;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                        Push {
-                            label: root.typos-choice == "always" ? "✓" : "≈";
-                            plain: true;
-                            clicked => {
-                                root.typos-picked(root.typos-choice == "" ? "always"
-                                    : root.typos-choice == "always" ? "off" : "");
+                        if root.lens-kind == "word": HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            spacing: 6px;
+                            Text {
+                                text: root.typos-said;
+                                color: Theme.ink-2;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Push {
+                                label: root.typos-choice == "always" ? "✓" : "≈";
+                                plain: true;
+                                clicked => {
+                                    root.typos-picked(root.typos-choice == "" ? "always"
+                                        : root.typos-choice == "always" ? "off" : "");
+                                }
                             }
                         }
-                    }
-                    Rectangle {
-                        height: 1px;
-                        background: Theme.line;
-                    }
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        padding-top: 6px;
-                        padding-bottom: 2px;
-                        Text {
-                            text: root.lens-foot;
-                            color: Theme.ink-3;
-                            font-size: 11.5px;
-                            wrap: word-wrap;
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.line;
+                        }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 6px;
+                            padding-bottom: 2px;
+                            Text {
+                                text: root.lens-foot;
+                                color: Theme.ink-3;
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
                         }
                     }
                 }
@@ -5678,13 +5690,21 @@ export component MainWindow inherits Window {
         x: max(8px, min(root.tip-x, root.width - self.width - 8px));
         y: root.tip-y + self.height > root.height - 8px
             ? root.tip-y - self.height - Theme.row-height - 4px : root.tip-y;
-        background: Theme.panel;
-        border-width: Theme.hair;
-        border-color: Theme.line;
-        border-radius: 4px;
-        drop-shadow-blur: 12px;
-        drop-shadow-color: #00000060;
-        drop-shadow-offset-y: 4px;
+        Shade {
+            width: parent.width;
+            height: parent.height;
+            radius: 4px;
+            depth: 4;
+            drop: 2px;
+        }
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: Theme.panel;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            border-radius: 4px;
+        }
         tip-label := Text {
             x: 10px;
             y: 6px;

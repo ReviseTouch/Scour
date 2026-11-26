@@ -14,10 +14,10 @@ fn only(q: &str, root: &str) -> String {
 fn the_first_disk_is_one_term() {
     assert_eq!(
         place_toggle("rapor", HOME, "/mnt/depo", Pick::Only),
-        ("rapor under:/mnt/depo".into(), 21)
+        ("under:/mnt/depo rapor".into(), 15)
     );
     assert_eq!(also("", "/mnt/depo"), "under:/mnt/depo");
-    assert_eq!(also("rapor ", "/"), "rapor under:/");
+    assert_eq!(also("rapor ", "/"), "under:/ rapor ");
 }
 
 #[test]
@@ -82,17 +82,17 @@ fn only_leaves_one_disk() {
 #[test]
 fn a_path_with_a_space_or_a_bar_is_quoted() {
     let q = also("rapor", "/mnt/depo/My Docs");
-    assert_eq!(q, r#"rapor under:"/mnt/depo/My Docs""#);
+    assert_eq!(q, r#"under:"/mnt/depo/My Docs" rapor"#);
     let q = also(&q, "/srv/a|b");
-    assert_eq!(q, r#"rapor under:"/mnt/depo/My Docs"|under:"/srv/a|b""#);
-    assert_eq!(also(&q, "/mnt/depo/My Docs"), r#"rapor under:"/srv/a|b""#);
+    assert_eq!(q, r#"under:"/mnt/depo/My Docs"|under:"/srv/a|b" rapor"#);
+    assert_eq!(also(&q, "/mnt/depo/My Docs"), r#"under:"/srv/a|b" rapor"#);
 }
 
 #[test]
 fn home_is_written_and_read_with_a_tilde() {
     assert_eq!(
         also("rapor", "/home/hasan/Belgeler"),
-        "rapor under:~/Belgeler"
+        "under:~/Belgeler rapor"
     );
     assert_eq!(
         also("rapor under:~/Belgeler", "/mnt/depo"),
@@ -112,12 +112,12 @@ fn an_exclusion_elsewhere_is_left_alone() {
     let q = "rapor !under:/mnt/depo/tmp";
     assert_eq!(
         also(q, "/mnt/depo"),
-        "rapor !under:/mnt/depo/tmp under:/mnt/depo"
+        "under:/mnt/depo rapor !under:/mnt/depo/tmp"
     );
     let q = "!under:/x rapor under:/a|under:/b";
     assert_eq!(also(q, "/a"), "!under:/x rapor under:/b");
     assert_eq!(only(q, "/b"), "!under:/x rapor under:/b");
-    assert_eq!(also("rapor !under:/a", "/a"), "rapor !under:/a under:/a");
+    assert_eq!(also("rapor !under:/a", "/a"), "under:/a rapor !under:/a");
 }
 
 #[test]
@@ -179,17 +179,17 @@ fn tile(q: &str, roots: &[&str], pick: Pick) -> String {
 fn a_tile_of_several_roots_goes_in_and_out_as_one() {
     let sys = ["/home/hasan", "/usr", "/etc"];
     let q = tile("rapor", &sys, Pick::Only);
-    assert_eq!(q, "rapor under:~|under:/usr|under:/etc");
+    assert_eq!(q, "under:~|under:/usr|under:/etc rapor");
     assert_eq!(tile(&q, &sys, Pick::Only), "rapor");
     assert_eq!(tile(&q, &sys, Pick::Also), "rapor");
     // Another disk beside it, then that one alone.
     let both = tile(&q, &["/mnt/depo"], Pick::Also);
-    assert_eq!(both, "rapor under:~|under:/usr|under:/etc|under:/mnt/depo");
+    assert_eq!(both, "under:~|under:/usr|under:/etc|under:/mnt/depo rapor");
     assert_eq!(
         tile(&both, &["/mnt/depo"], Pick::Only),
-        "rapor under:/mnt/depo"
+        "under:/mnt/depo rapor"
     );
-    assert_eq!(tile(&both, &sys, Pick::Also), "rapor under:/mnt/depo");
+    assert_eq!(tile(&both, &sys, Pick::Also), "under:/mnt/depo rapor");
 }
 
 #[test]
@@ -218,4 +218,32 @@ fn dropping_an_empty_member_takes_its_bar_too() {
         assert_eq!(replace(q, t, "").0, want, "{q}");
         assert_eq!(crate::lens::without(q, t), want, "{q}");
     }
+}
+
+#[test]
+fn where_it_looks_is_the_first_thing_the_query_says() {
+    use crate::lens::{at_head, place_head};
+    assert_eq!(place_head("under:/a|under:/b !under:/a/x rapor"), 29);
+    assert_eq!(place_head("rapor under:/a"), 0);
+    assert_eq!(place_head("!under:/x rapor"), 9);
+    assert_eq!(at_head("rapor", "under:", 0), ("under: rapor".into(), 6));
+    assert_eq!(at_head("", "under:", 0), ("under:".into(), 6));
+    assert_eq!(
+        at_head("under:/a rapor", "!under:/b", 8),
+        ("under:/a !under:/b rapor".into(), 18)
+    );
+    assert_eq!(
+        at_head("under:/a", "!under:/b", 8),
+        ("under:/a !under:/b".into(), 18)
+    );
+}
+
+#[test]
+fn a_new_exclusion_stands_beside_the_ones_already_written() {
+    use crate::lens::place_exclude;
+    assert_eq!(
+        place_exclude("rapor !under:/tmp", HOME, "/srv").0,
+        "rapor !under:/tmp !under:/srv"
+    );
+    assert_eq!(place_exclude("rapor", HOME, "/srv").0, "!under:/srv rapor");
 }
