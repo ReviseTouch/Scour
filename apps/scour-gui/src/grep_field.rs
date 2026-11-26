@@ -204,8 +204,9 @@ fn hover(w: &MainWindow, s: &mut State, x: f32) {
 }
 
 /// A key the pattern answers itself (`pattern::edit`): Backspace in an empty
-/// capsule takes it and its operator, a space in one is not written, a quote
-/// comes with its pair. False: the field types it.
+/// capsule takes it and its operator, a space stays in its capsule (a word
+/// becomes a phrase), a quote comes with its pair, Tab leaves the capsule for
+/// a new one. False: the field types it, or Tab moves on.
 fn key(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, key: &str) -> bool {
     let f = &s.grep.field;
     if s.grep.mode != GrepMode::Text || f.anchor != f.caret {
@@ -216,6 +217,7 @@ fn key(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, key: &str) -
         "\u{8}" => edit::backspace(&text, f.caret),
         " " => edit::space(&text, f.caret),
         "\"" => edit::quote(&text, f.caret),
+        "\t" => edit::leave(&text, f.caret),
         _ => None,
     };
     let Some((after, caret)) = done else {

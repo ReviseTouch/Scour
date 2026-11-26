@@ -181,16 +181,18 @@
     return best;
   }
 
-  /* Backspace in an empty capsule, a space with no word in it yet, a quote:
-     the pattern's own (`pattern::edit`). True when it was answered here. */
+  /* Backspace in an empty capsule, a space (it stays in its capsule), a
+     quote, Tab (out of the capsule, for a new one): the pattern's own
+     (`pattern::edit`). True when it was answered here. */
+  const GREP_KEYS = { Backspace: patternBackspace, " ": patternSpace, '"': patternQuote, Tab: patternLeave };
   function grepPatternKey(e) {
     if (GREP.mode !== "text" || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return false;
-    if (e.key !== "Backspace" && e.key !== " " && e.key !== '"') return false;
+    const answer = GREP_KEYS[e.key];
+    if (!answer || (e.key === "Tab" && e.shiftKey)) return false;
     const a = grepInput.selectionStart ?? 0;
     if (a !== grepInput.selectionEnd) return false;
     const text = grepInput.value, caret = grepCol(text, a);
-    const done = e.key === "Backspace" ? patternBackspace(text, caret)
-      : e.key === " " ? patternSpace(text, caret) : patternQuote(text, caret);
+    const done = answer(text, caret);
     if (!done) return false;
     e.preventDefault();
     const [after, at] = done;

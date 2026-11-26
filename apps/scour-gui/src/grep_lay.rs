@@ -341,9 +341,10 @@ fn between(
                 not: false,
             });
         }
-        let span = (to - from) as f32;
-        for (j, col) in out.xs[from + 1..=to].iter_mut().enumerate() {
-            *col = x + w * (j + 1) as f32 / span;
+        // Every column in it after the first is where a new piece would
+        // start: past the word.
+        for col in &mut out.xs[from + 1..=to] {
+            *col = x + w;
         }
         return x + w;
     }

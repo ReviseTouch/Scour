@@ -2410,10 +2410,11 @@ export component MainWindow inherits Window {
                                         root.grep-toggled();
                                         return accept;
                                     }
-                                    // Backspace in an empty capsule, a space with
-                                    // no word in it yet, a quote: the pattern's own.
-                                    if (!e.modifiers.control && !e.modifiers.alt
-                                        && (e.text == Key.Backspace || e.text == " " || e.text == "\"")
+                                    // Backspace in an empty capsule, a space (it
+                                    // stays in its capsule), a quote, Tab (out of
+                                    // the capsule, for a new one): the pattern's own.
+                                    if (!e.modifiers.control && !e.modifiers.alt && !e.modifiers.shift
+                                        && (e.text == Key.Backspace || e.text == " " || e.text == "\"" || e.text == Key.Tab)
                                         && root.grep-key(e.text)) {
                                         return accept;
                                     }

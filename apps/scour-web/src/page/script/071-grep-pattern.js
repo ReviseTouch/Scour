@@ -180,11 +180,43 @@
     return [patternCut(input, caret - 1, a.end + close, c.slice(a.start, a.end).join("")), caret - 1];
   }
 
-  /* A space in a hole is not written; between quotes it is a letter. */
+  /* A space stays in its capsule: after a letter of a word the word becomes a
+     phrase holding it (`osmanlı` → `"osmanlı "`); in a hole it is not written;
+     between quotes, before a word or between capsules it is typed. */
   function patternSpace(input, caret) {
     const p = patternPieces(input);
     const hole = patternHoleAt(p, caret);
-    return hole && !p[hole[0]].alts[hole[1]].phrase ? [input, caret] : null;
+    if (hole) return p[hole[0]].alts[hole[1]].phrase ? null : [input, caret];
+    const a = p.flatMap((x) => x.alts).find((x) => !x.phrase && x.start < caret && caret <= x.end);
+    if (!a) return null;
+    const c = Array.from(input);
+    const part = (from, to) => c.slice(from, to).join("");
+    return [part(0, a.start) + '"' + part(a.start, caret) + " " + part(caret, a.end) + '"' + part(a.end, c.length), caret + 2];
+  }
+
+  /* Tab leaves the capsule for a new one after it: an empty capsule goes, a
+     phrase loses the spaces at its ends and its quotes when one plain word is
+     left, and the caret lands past a space after it. Null: not in a capsule. */
+  function patternLeave(input, caret) {
+    const p = patternPieces(input);
+    const k = patternPieceAt(p, caret);
+    if (k === null) return null;
+    const piece = p[k];
+    if (patternEmpty(piece)) return [patternCut(input, piece.start, piece.end, ""), piece.start];
+    const c = Array.from(input);
+    let end = piece.end;
+    for (const a of piece.alts.filter((x) => x.phrase && x.start !== x.end).reverse()) {
+      const closed = c[a.end] === '"' ? 1 : 0;
+      const words = c.slice(a.start, a.end).join("").trim();
+      const plain = words !== "" && !/[\s";|!~()\\]/u.test(words);
+      const put = Array.from(plain || !words ? words : '"' + words + '"');
+      const from = a.start - 1, to = a.end + closed;
+      end += put.length - (to - from);
+      c.splice(from, to - from, ...put);
+    }
+    const spaced = end < c.length && /\s/u.test(c[end]) && (end + 1 === c.length || /\s/u.test(c[end + 1]));
+    if (!spaced) c.splice(end, 0, " ");
+    return [c.join(""), end + 1];
   }
 
   /* A quote at a word's start writes both, the caret between; at a phrase's

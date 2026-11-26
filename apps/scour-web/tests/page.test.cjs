@@ -931,8 +931,30 @@ test('an operator opens a capsule and backspace in its hole takes it (pattern/ed
   assert.deepEqual(PJ(c.patternSpace('!', 1)), ['!', 1]);
   assert.deepEqual(PJ(c.patternSpace('ara;', 4)), ['ara;', 4]);
   assert.equal(c.patternSpace('""', 1), null);
-  assert.equal(c.patternSpace('ara', 3), null);
-  assert.equal(c.patternSpace('!a', 2), null);
+  // A space keeps its capsule: after a letter the word becomes a phrase.
+  const sp = (t, k) => PJ(c.patternSpace(t, k));
+  assert.deepEqual(sp('osmanlı', 7), ['"osmanlı "', 9]);
+  assert.deepEqual(sp('osmanlı', 3), ['"osm anlı"', 5]);
+  assert.deepEqual(sp('!osm', 4), ['!"osm "', 6]);
+  assert.deepEqual(sp('a;osm', 5), ['a;"osm "', 7]);
+  assert.deepEqual(sp('~osm', 4), ['~"osm "', 6]);
+  assert.equal(c.patternSpace('osm', 0), null);
+  assert.equal(c.patternSpace('ara ', 4), null);
+  assert.equal(c.patternSpace('"a"', 2), null);
+  // Tab: out of the capsule, past one space, the phrase tidied.
+  const lv = (t, k) => PJ(c.patternLeave(t, k));
+  assert.deepEqual(lv('osmanlı', 7), ['osmanlı ', 8]);
+  assert.deepEqual(lv('osmanlı', 2), ['osmanlı ', 8]);
+  assert.deepEqual(lv('"osmanlı "', 9), ['osmanlı ', 8]);
+  assert.deepEqual(lv('"osmanlı devleti "', 17), ['"osmanlı devleti" ', 18]);
+  assert.deepEqual(lv('"dava d', 7), ['"dava d" ', 9]);
+  assert.deepEqual(lv('!"osmanlı "', 10), ['!osmanlı ', 9]);
+  assert.deepEqual(lv('x;"a b "', 7), ['x;"a b" ', 8]);
+  assert.deepEqual(lv('"a;b"', 4), ['"a;b" ', 6]);
+  assert.deepEqual(lv('ara !', 5), ['ara ', 4]);
+  assert.deepEqual(lv('a b', 1), ['a  b', 2]);
+  assert.deepEqual(lv('a  b', 1), ['a  b', 2]);
+  assert.equal(c.patternLeave('ara ', 4), null);
   assert.deepEqual(PJ(c.patternQuote('', 0)), ['""', 1]);
   assert.deepEqual(PJ(c.patternQuote('x !', 3)), ['x !""', 4]);
   assert.equal(c.patternQuote('x', 1), null);
