@@ -65,6 +65,9 @@ mod qtime;
 mod qtype;
 mod qwire;
 mod report;
+mod resource_gauges;
+mod resource_lines;
+mod resources;
 mod rows;
 mod service_mode;
 mod tabs;
@@ -97,8 +100,8 @@ mod ui {
 
 pub use ui::{
     Bar, Big, CalDay, CalMonth, Cap, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts,
-    Found, HeadInfo, Kid, LensRow, MainWindow, MenuItem, QBit, QMeasure, Reach, Row, Rule, Scheme,
-    Seg, Sel, Slice, Slot, Span, Theme,
+    Found, HeadInfo, HeldLine, HeldPanel, Kid, LensRow, MainWindow, MemLine, MenuItem, QBit,
+    QMeasure, Reach, Row, Rule, RunLine, Scheme, Seg, Sel, Slice, Slot, SortLine, Span, Theme,
 };
 
 thread_local! {
@@ -268,6 +271,8 @@ struct State {
     /// Files already asked about, oldest first. Bounded, and outliving the rows:
     /// one screenful otherwise started eleven thumbnailers twice.
     asked_pictures: std::collections::VecDeque<String>,
+    /// The status bar's panel of what the service keeps. See `resources`.
+    res: resources::Panel,
 }
 
 #[derive(Clone, Copy)]
@@ -549,6 +554,7 @@ fn main() -> Result<()> {
         hits: Vec::new(),
         revision: 0,
         down: false,
+        res: resources::Panel::default(),
     }));
 
     // The report's last answer, held so a resize can relabel its strips without
@@ -725,6 +731,7 @@ fn main() -> Result<()> {
     wiring::opening::wire(&wiring);
     wiring::history::wire(&wiring);
     wiring::menu::wire(&wiring);
+    wiring::resources::wire(&wiring);
     // `SCOUR_GUI_PANIC=1` stands on the hook, and leaves a real crash's file.
     if std::env::var("SCOUR_GUI_PANIC").is_ok() {
         panic!("deliberate — proving the crash log writes");
@@ -939,6 +946,7 @@ fn apply(
             let mut s = state.borrow_mut();
             s.down = true;
             s.search_out = false;
+            s.res.lost();
             rows.forget_asking();
             w.set_busy(false);
             said(
@@ -1151,6 +1159,8 @@ fn apply(
         // desktop's own words, so nothing here translates them.
         got @ Got::Places { .. } => answers::places(&cx, got),
         got @ Got::Facets { .. } => answers::facets(&cx, got),
+        Got::Resources(reply) => wiring::resources::landed(&cx, reply),
+        Got::Pressed { press, outcome } => wiring::resources::pressed(&cx, press, outcome),
     }
 }
 

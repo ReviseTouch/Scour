@@ -222,6 +222,7 @@ fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         hits: Vec::new(),
         revision: 0,
         down: false,
+        res: crate::resources::Panel::default(),
     };
     assert_eq!(full_query(&s), "rapor");
     // A pressed term is in the text, so the engine is asked the text.
@@ -302,6 +303,7 @@ fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         hits: Vec::new(),
         revision: 0,
         down: false,
+        res: crate::resources::Panel::default(),
     };
 
     assert!(s.start_background());

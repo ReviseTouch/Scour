@@ -226,6 +226,38 @@ pub(crate) fn wire(wiring: &Wiring) {
         });
     }
 
+    // `SCOUR_GUI_RESOURCES=1` opens the status bar's panel; `=index` opens a
+    // row's ask as well, and `=sort:go` presses its second step.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_RESOURCES") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
+            let Some(w) = weak.upgrade() else { return };
+            w.global::<HeldPanel>().invoke_toggle();
+            let (token, go) = match spec.split_once(':') {
+                Some((token, step)) => (token.to_owned(), step == "go"),
+                None => (spec.clone(), false),
+            };
+            if token == "1" {
+                return;
+            }
+            let weak = w.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_millis(1200), move || {
+                let Some(w) = weak.upgrade() else { return };
+                w.global::<HeldPanel>()
+                    .invoke_act(token.as_str().into(), "ask".into());
+                if go {
+                    let weak = w.as_weak();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(400), move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.global::<HeldPanel>()
+                                .invoke_act(token.as_str().into(), "go".into());
+                        }
+                    });
+                }
+            });
+        });
+    }
+
     // Text set from Rust leaves the caret at nought.
     if std::env::var_os("SCOUR_GUI_END").is_some() {
         let weak = window.as_weak();

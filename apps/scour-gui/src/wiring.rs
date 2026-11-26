@@ -12,6 +12,7 @@ pub(crate) mod picking;
 pub(crate) mod query;
 pub(crate) mod rail;
 pub(crate) mod report_tab;
+pub(crate) mod resources;
 pub(crate) mod service;
 pub(crate) mod tab_bar;
 pub(crate) mod window_size;

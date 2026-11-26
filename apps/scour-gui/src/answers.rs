@@ -763,9 +763,7 @@ pub(super) fn status(cx: &Cx, got: Got) {
             link.send(Ask::Await { since: st.revision });
         }
     }
-    // Every query reads the unsorted tail: a week of use took ordering by
-    // path from 1.9 ms to 21.5, and one rebuild put it back.
-    let mut holding = format!(
+    let holding = format!(
         "{} {}  ·  {} {}  ·  {} {}",
         t(cat, "index"),
         compact_bytes(st.index_bytes),
@@ -774,10 +772,6 @@ pub(super) fn status(cx: &Cx, got: Got) {
         st.watching,
         t(cat, "watching"),
     );
-    if st.rebuild_advised {
-        holding.push_str("  ·  ");
-        holding.push_str(&t(cat, scour_ui::REBUILD_ADVISED));
-    }
     w.set_about_body(
         format!(
             "Scour {}\n\n{} {}\n{}",

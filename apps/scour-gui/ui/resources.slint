@@ -1,0 +1,881 @@
+// The panel the status bar opens: what the service keeps on this machine,
+// its memory and processor, and Scour's other programs. Everything in it is
+// `HeldPanel`'s, which Rust fills from `resources.rs`; a press goes back as
+// `act(token, step)`.
+
+import { Theme, Fonts } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// One thing the service keeps on disk, as its row draws it.
+export struct HeldLine {
+    token: string,
+    label: string,
+    note: string,
+    size: string,
+    path: string,
+    full: string,
+    share: float,
+    bar: bool,
+    button: string,
+    danger: bool,
+    two-step: bool,
+    ask: string,
+    go: string,
+    /// Said instead of offering the button: the page's browser is open.
+    refused: string,
+    asking: bool,
+    said: string,
+    said-no: bool,
+}
+
+/// The index's unsorted rows, under its row. No `count`, no line.
+export struct SortLine {
+    label: string,
+    count: string,
+    button: string,
+    ask: string,
+    go: string,
+    asking: bool,
+    said: string,
+    said-no: bool,
+}
+
+/// A memory row: the bar is `share` of the largest, `ghost` the peak's.
+export struct MemLine {
+    label: string,
+    note: string,
+    value: string,
+    share: float,
+    ghost: float,
+}
+
+export struct RunLine {
+    kind: string,
+    label: string,
+    count: string,
+    note: string,
+}
+
+export global HeldPanel {
+    in property <bool> open;
+    in property <string> title;
+    in property <string> on-disk;
+    in property <string> memory;
+    in property <string> processor;
+    in property <string> programs;
+    in property <string> cancel;
+    /// The status bar's tip.
+    in property <string> hint;
+    in property <string> unreadable;
+
+    in property <string> disk-total;
+    in property <[HeldLine]> held;
+    in property <SortLine> sort;
+
+    in property <string> mem-total;
+    in property <bool> mem-unknown;
+    in property <[MemLine]> mem;
+    in property <bool> machine-shown;
+    in property <float> machine-us;
+    in property <float> machine-others;
+    in property <string> machine-us-said;
+    in property <string> machine-others-said;
+    in property <string> machine-said;
+
+    in property <bool> cpu-unknown;
+    in property <string> cpu-short;
+    in property <string> cpu-long;
+    in property <string> cpu-machine;
+    /// Path commands in a 300 × 64 box; empty until there are two samples.
+    in property <string> spark-line;
+    in property <string> spark-area;
+    in property <float> spark-end;
+
+    in property <[RunLine]> running;
+
+    in property <string> foot;
+    in property <bool> foot-no;
+    in property <bool> restartable;
+    in property <bool> restarting;
+    in property <string> restart;
+
+    /// The status bar's text was pressed.
+    callback toggle();
+    /// Its ×, Escape, or a press outside it.
+    callback close();
+    /// `ask` (the row's button), `go` (its second step) or `no`, for a
+    /// thing's token, `sort` or `restart`.
+    callback act(string, string);
+}
+
+/// A drawing on a 16-unit square, by name, tinted. Files, not `Path`s: the
+/// software renderer's stroker never finished one of these curves.
+component Glyph inherits Image {
+    in property <string> name;
+    in property <brush> ink: Theme.ink-3;
+    width: 15px;
+    height: 15px;
+    colorize: root.ink;
+    source: root.name == "disk" ? @image-url("icons/held/disk.svg")
+        : root.name == "mem" ? @image-url("icons/held/mem.svg")
+        : root.name == "cpu" ? @image-url("icons/held/cpu.svg")
+        : root.name == "window" ? @image-url("icons/held/window.svg")
+        : root.name == "page" ? @image-url("icons/held/page.svg")
+        : root.name == "terminal" ? @image-url("icons/held/terminal.svg")
+        : root.name == "extractor" ? @image-url("icons/held/extractor.svg")
+        : @image-url("icons/held/mcp.svg");
+}
+
+/// The panel's own button: smaller than `Push`, as the mock draws it. `go`
+/// is a deletion's second step, filled in the exclusion red.
+component Btn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger;
+    in property <bool> go;
+    in property <bool> plain;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: btn-text.preferred-width + 18px;
+    height: 22px;
+    border-radius: 6px;
+    border-width: root.plain ? 0px : Theme.hair;
+    border-color: root.go ? Theme.q-not
+        : touch.has-hover && root.enabled ? (root.danger ? Theme.q-not : Theme.ink-3)
+        : Theme.line;
+    background: root.go ? Theme.q-not : root.plain ? transparent : Theme.panel-2;
+    opacity: root.enabled ? 1 : 0.5;
+
+    btn-text := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: root.go ? #ffffff
+            : root.danger ? Theme.q-not
+            : touch.has-hover && root.enabled ? Theme.ink : Theme.ink-2;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Pill inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <string> value;
+    width: pill-row.preferred-width;
+    height: 24px;
+    border-radius: 6px;
+    background: Theme.panel;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    pill-row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Glyph { name: root.glyph; }
+        }
+        Text {
+            text: root.label;
+            font-size: 12px;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.value;
+            font-size: 12px;
+            font-weight: 700;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component BlockHead inherits HorizontalLayout {
+    in property <string> glyph;
+    in property <string> label;
+    in property <string> value;
+    spacing: 8px;
+    VerticalLayout {
+        alignment: center;
+        Glyph {
+            name: root.glyph;
+            ink: Theme.ink-2;
+        }
+    }
+    Text {
+        text: root.label;
+        font-size: 12px;
+        font-weight: 650;
+        color: Theme.ink-2;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    Text {
+        text: root.value;
+        font-size: 12px;
+        font-weight: 600;
+        color: Theme.ink;
+        vertical-alignment: center;
+    }
+}
+
+/// The second step, inside the row: what will happen, the button that does
+/// it, and the way out. Red-tinted for a deletion, the capsule's blue else.
+component AskBox inherits Rectangle {
+    in property <bool> calm;
+    in property <string> said;
+    in property <string> go;
+    in property <string> cancel;
+    callback go-pressed();
+    callback no();
+    border-radius: 7px;
+    background: root.calm ? Theme.cap : Theme.cap-neg;
+    border-width: Theme.hair;
+    border-color: root.calm ? Theme.cap-ring : Theme.cap-neg-ring;
+    // The buttons under the sentence, as the mock wraps them at this width.
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 8px;
+        Text {
+            text: root.said;
+            font-size: 12.5px;
+            color: Theme.ink;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            HorizontalLayout {
+                spacing: 6px;
+                Btn {
+                    label: root.go;
+                    go: !root.calm;
+                    clicked => { root.go-pressed(); }
+                }
+                Btn {
+                    label: root.cancel;
+                    plain: true;
+                    clicked => { root.no(); }
+                }
+            }
+        }
+    }
+}
+
+/// What a press came to: green when taken, red with the service's sentence.
+component Said inherits Text {
+    in property <bool> no;
+    font-size: 12px;
+    font-weight: 600;
+    color: root.no ? Theme.q-not : Theme.q-val;
+    wrap: word-wrap;
+}
+
+component DiskRow inherits Rectangle {
+    in property <HeldLine> line;
+    in property <SortLine> sort;
+    in property <string> cancel;
+    in property <int> at;
+    callback tip(int, string, length, length);
+    callback untip(int);
+    background: Theme.panel;
+    border-radius: 8px;
+    border-width: Theme.hair;
+    border-color: Theme.line-soft;
+
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.line.label;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.line.note;
+                font-size: 11.5px;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.line.size;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            // The whole path on a tip: the line is cut to its width.
+            Rectangle {
+                horizontal-stretch: 1;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.line.path;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                TouchArea {
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            root.tip(root.at, root.line.full, self.absolute-position.x,
+                                self.absolute-position.y + self.height + 6px);
+                        } else {
+                            root.untip(root.at);
+                        }
+                    }
+                }
+            }
+            Btn {
+                label: root.line.button;
+                danger: root.line.danger;
+                enabled: root.line.refused == "";
+                clicked => { HeldPanel.act(root.line.token, root.line.two-step ? "ask" : "go"); }
+            }
+        }
+        if root.line.refused != "": Text {
+            text: root.line.refused;
+            font-size: 12px;
+            color: Theme.q-bad;
+            wrap: word-wrap;
+        }
+        if root.line.bar: Rectangle {
+            height: 4px;
+            border-radius: 2px;
+            background: Theme.line-soft;
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * root.line.share;
+                height: parent.height;
+                border-radius: 2px;
+                background: Theme.q-key;
+            }
+        }
+        // Under the index alone: its rows outside the stored order.
+        if root.line.token == "index" && root.sort.count != "": VerticalLayout {
+            spacing: 6px;
+            padding-top: 4px;
+            Rectangle {
+                height: Theme.hair;
+                background: Theme.line;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.sort.label;
+                    font-size: 12px;
+                    color: Theme.ink-2;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.sort.count;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                // Nothing left to order, nothing offered: the line only says so.
+                if root.sort.count != "0": Btn {
+                    label: root.sort.button;
+                    clicked => { HeldPanel.act("sort", "ask"); }
+                }
+            }
+            if root.sort.asking: AskBox {
+                calm: true;
+                said: root.sort.ask;
+                go: root.sort.go;
+                cancel: root.cancel;
+                go-pressed => { HeldPanel.act("sort", "go"); }
+                no => { HeldPanel.act("sort", "no"); }
+            }
+            if root.sort.said != "": Said {
+                text: root.sort.said;
+                no: root.sort.said-no;
+            }
+        }
+        if root.line.asking: AskBox {
+            calm: !root.line.danger;
+            said: root.line.ask;
+            go: root.line.go;
+            cancel: root.cancel;
+            go-pressed => { HeldPanel.act(root.line.token, "go"); }
+            no => { HeldPanel.act(root.line.token, "no"); }
+        }
+        if root.line.said != "": Said {
+            text: root.line.said;
+            no: root.line.said-no;
+        }
+    }
+}
+
+component DiskBlock inherits VerticalLayout {
+    callback tip(int, string, length, length);
+    callback untip(int);
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 8px;
+    alignment: start;
+    BlockHead {
+        glyph: "disk";
+        label: HeldPanel.on-disk;
+        value: HeldPanel.disk-total;
+    }
+    for line[i] in HeldPanel.held: DiskRow {
+        line: line;
+        sort: HeldPanel.sort;
+        cancel: HeldPanel.cancel;
+        at: i;
+        tip(a, b, c, d) => { root.tip(a, b, c, d); }
+        untip(a) => { root.untip(a); }
+    }
+}
+
+component Swatch inherits HorizontalLayout {
+    in property <brush> ink;
+    in property <float> fade: 1;
+    in property <string> said;
+    spacing: 5px;
+    VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            background: root.ink;
+            opacity: root.fade;
+        }
+    }
+    Text {
+        text: root.said;
+        font-size: 11.5px;
+        color: Theme.ink-3;
+        vertical-alignment: center;
+    }
+}
+
+component MemBlock inherits VerticalLayout {
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 8px;
+    BlockHead {
+        glyph: "mem";
+        label: HeldPanel.memory;
+        value: HeldPanel.mem-total;
+    }
+    if HeldPanel.mem-unknown: Text {
+        text: HeldPanel.unreadable;
+        font-size: 12px;
+        color: Theme.ink-3;
+    }
+    // The machine's memory: Scour's share, everyone else's, what is free.
+    if HeldPanel.machine-shown: VerticalLayout {
+        spacing: 5px;
+        Rectangle {
+            height: 10px;
+            border-radius: 3px;
+            background: Theme.line-soft;
+            clip: true;
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: max(3px, parent.width * HeldPanel.machine-us);
+                height: parent.height;
+                background: Theme.q-key;
+            }
+            Rectangle {
+                x: max(3px, parent.width * HeldPanel.machine-us);
+                y: 0;
+                width: parent.width * HeldPanel.machine-others;
+                height: parent.height;
+                background: Theme.ink-3;
+                opacity: 0.35;
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Swatch {
+                ink: Theme.q-key;
+                said: HeldPanel.machine-us-said;
+            }
+            Swatch {
+                ink: Theme.ink-3;
+                fade: 0.35;
+                said: HeldPanel.machine-others-said;
+            }
+        }
+        Text {
+            text: HeldPanel.machine-said;
+            font-size: 11.5px;
+            color: Theme.ink-3;
+        }
+    }
+    for m in HeldPanel.mem: VerticalLayout {
+        spacing: 3px;
+        HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: m.label;
+                font-size: 12.5px;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            Text {
+                text: m.note;
+                font-size: 11px;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: m.value;
+                font-size: 12.5px;
+                font-weight: 600;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                min-width: 64px;
+            }
+        }
+        Rectangle {
+            height: 4px;
+            border-radius: 2px;
+            background: Theme.line-soft;
+            // The most it has held, as an outline behind what it holds now.
+            if m.ghost > 0: Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * m.ghost;
+                height: parent.height;
+                border-radius: 2px;
+                border-width: Theme.hair;
+                border-color: Theme.ink-3;
+                opacity: 0.5;
+            }
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width * m.share;
+                height: parent.height;
+                border-radius: 2px;
+                background: Theme.q-key;
+            }
+        }
+    }
+}
+
+component CpuBlock inherits VerticalLayout {
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 8px;
+    BlockHead {
+        glyph: "cpu";
+        label: HeldPanel.processor;
+        value: HeldPanel.cpu-short;
+    }
+    if HeldPanel.cpu-unknown: Text {
+        text: HeldPanel.unreadable;
+        font-size: 12px;
+        color: Theme.ink-3;
+    }
+    // The service's share of one core over the last minute, newest right.
+    if !HeldPanel.cpu-unknown: Rectangle {
+        height: 64px;
+        Rectangle {
+            x: 0;
+            y: parent.height * 8 / 64;
+            width: parent.width;
+            height: 1px;
+            background: Theme.line-soft;
+        }
+        Rectangle {
+            x: 0;
+            y: parent.height * 56 / 64;
+            width: parent.width;
+            height: 1px;
+            background: Theme.line-soft;
+        }
+        if HeldPanel.spark-line != "": Path {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 300;
+            viewbox-height: 64;
+            fit: fill;
+            commands: HeldPanel.spark-area;
+            fill: Theme.q-key;
+            opacity: 0.14;
+        }
+        if HeldPanel.spark-line != "": Path {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 300;
+            viewbox-height: 64;
+            fit: fill;
+            commands: HeldPanel.spark-line;
+            stroke: Theme.q-key;
+            stroke-width: 1.6px;
+            fill: transparent;
+        }
+        if HeldPanel.spark-line != "": Rectangle {
+            x: parent.width - 3px;
+            y: parent.height * HeldPanel.spark-end / 64 - 3px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.q-key;
+        }
+    }
+    if HeldPanel.cpu-long != "": Text {
+        text: HeldPanel.cpu-long;
+        font-size: 12px;
+        color: Theme.ink-2;
+    }
+    if HeldPanel.cpu-machine != "": Text {
+        text: HeldPanel.cpu-machine;
+        font-size: 12px;
+        color: Theme.ink-3;
+        overflow: elide;
+    }
+}
+
+component RunBlock inherits VerticalLayout {
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 7px;
+    BlockHead {
+        glyph: "mcp";
+        label: HeldPanel.programs;
+    }
+    for r in HeldPanel.running: VerticalLayout {
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Glyph { name: r.kind; }
+            }
+            Text {
+                text: r.label;
+                font-size: 12.5px;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: r.count;
+                font-size: 12.5px;
+                font-weight: 650;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+        }
+        if r.note != "": HorizontalLayout {
+            padding-left: 23px;
+            Text {
+                text: r.note;
+                font-size: 11.5px;
+                color: Theme.ink-3;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component Hairline inherits Rectangle {
+    background: Theme.line;
+}
+
+export component ResourcePanel inherits Rectangle {
+    /// The most height it may take; past it, the middle scrolls.
+    in property <length> room;
+    callback tip(int, string, length, length);
+    callback untip(int);
+    property <bool> wide: self.width >= 640px;
+
+    height: min(root.room,
+        head.preferred-height + body.preferred-height + foot.preferred-height + 2 * Theme.hair);
+    background: Theme.panel-2;
+    border-radius: 11px;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 10px;
+    drop-shadow-color: Theme.dark ? #000000a0 : #00000038;
+
+    // A press on the panel is the panel's, not the list's under it.
+    TouchArea { }
+
+    VerticalLayout {
+        head := HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 10px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 6px;
+            Text {
+                text: HeldPanel.title;
+                font-size: 14px;
+                font-weight: 650;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            VerticalLayout {
+                alignment: center;
+                Pill {
+                    glyph: "disk";
+                    label: HeldPanel.on-disk;
+                    value: HeldPanel.disk-total;
+                }
+            }
+            if HeldPanel.mem-total != "": VerticalLayout {
+                alignment: center;
+                Pill {
+                    glyph: "mem";
+                    label: HeldPanel.memory;
+                    value: HeldPanel.mem-total;
+                }
+            }
+            if HeldPanel.cpu-short != "": VerticalLayout {
+                alignment: center;
+                Pill {
+                    glyph: "cpu";
+                    label: HeldPanel.processor;
+                    value: HeldPanel.cpu-short;
+                }
+            }
+            Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 6px;
+                border-width: Theme.hair;
+                border-color: x-touch.has-hover ? Theme.line : transparent;
+                Text {
+                    text: "×";
+                    font-size: 17px;
+                    color: x-touch.has-hover ? Theme.ink : Theme.ink-3;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                x-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { HeldPanel.close(); }
+                }
+            }
+        }
+        Hairline { height: Theme.hair; }
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-height: body.preferred-height;
+            body := VerticalLayout {
+                // The mock's 1.25 : 1, whatever either side would rather have.
+                if root.wide: HorizontalLayout {
+                    DiskBlock {
+                        preferred-width: 0px;
+                        horizontal-stretch: 5;
+                        tip(a, b, c, d) => { root.tip(a, b, c, d); }
+                        untip(a) => { root.untip(a); }
+                    }
+                    Hairline { width: Theme.hair; }
+                    VerticalLayout {
+                        preferred-width: 0px;
+                        horizontal-stretch: 4;
+                        alignment: start;
+                        MemBlock { }
+                        Hairline { height: Theme.hair; }
+                        CpuBlock { }
+                        Hairline { height: Theme.hair; }
+                        RunBlock { }
+                    }
+                }
+                if !root.wide: VerticalLayout {
+                    DiskBlock {
+                        tip(a, b, c, d) => { root.tip(a, b, c, d); }
+                        untip(a) => { root.untip(a); }
+                    }
+                    Hairline { height: Theme.hair; }
+                    MemBlock { }
+                    Hairline { height: Theme.hair; }
+                    CpuBlock { }
+                    Hairline { height: Theme.hair; }
+                    RunBlock { }
+                }
+            }
+        }
+        Hairline { height: Theme.hair; }
+        foot := HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: HeldPanel.restarting ? Theme.ink-3 : Theme.q-val;
+                }
+            }
+            Text {
+                text: HeldPanel.foot;
+                font-size: 12px;
+                color: HeldPanel.foot-no ? Theme.q-not : Theme.ink-2;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if HeldPanel.restartable: VerticalLayout {
+                alignment: center;
+                Btn {
+                    label: HeldPanel.restart;
+                    enabled: !HeldPanel.restarting;
+                    clicked => { HeldPanel.act("restart", "go"); }
+                }
+            }
+        }
+    }
+}

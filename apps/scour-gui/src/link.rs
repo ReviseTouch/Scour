@@ -148,6 +148,12 @@ pub enum Ask {
         append: bool,
         request: Request,
     },
+    /// What the service keeps on this machine, for the status bar's panel.
+    Resources,
+    /// A press in that panel: empty a thing, put rows in order, restart.
+    Press {
+        press: crate::resources::Press,
+    },
     Stop,
 }
 
@@ -244,6 +250,13 @@ pub enum Got {
         revision: ReplyRevision,
         why: String,
     },
+    /// The status bar's panel: what the service keeps, or why it would not say.
+    Resources(Result<Box<scour_proto::Resources>, String>),
+    /// What a press in that panel came to: taken, or the service's no.
+    Pressed {
+        press: crate::resources::Press,
+        outcome: Result<(), String>,
+    },
     /// The service could not be reached, with the reason as a sentence.
     Down(String),
     /// It could, after having been down.
@@ -338,6 +351,8 @@ impl Freshness {
             | Ask::ForgetTexts
             | Ask::Reorganize
             | Ask::Reset
+            | Ask::Resources
+            | Ask::Press { .. }
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -423,6 +438,8 @@ impl Link {
             | Ask::ForgetTexts
             | Ask::Reorganize
             | Ask::Reset
+            | Ask::Resources
+            | Ask::Press { .. }
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -506,6 +523,10 @@ enum Lane {
     Narrow,
     /// Reading matching files for a grep pattern.
     Grep,
+    /// What the service keeps on this machine.
+    Resources,
+    /// A press in the status bar's panel.
+    Press(crate::resources::Press),
 }
 
 pub use scour_client::boot;
@@ -630,6 +651,8 @@ fn spawn_lane(
                     Lane::Places,
                 ),
                 Ask::Reset => (0, Request::Reset {}, Lane::Places),
+                Ask::Resources => (0, Request::Resources {}, Lane::Resources),
+                Ask::Press { press } => (0, press.request(), Lane::Press(press)),
                 Ask::Usage { ref path } => (
                     0,
                     Request::Usage {
@@ -810,6 +833,14 @@ fn spawn_lane(
                         Lane::Rules => Got::Rules(reply),
                         Lane::Volumes => Got::Volumes(reply),
                         Lane::Status => Got::Status(reply),
+                        Lane::Resources => Got::Resources(match *reply {
+                            Response::Resources(r) => Ok(Box::new(r)),
+                            other => Err(format!("unexpected reply {other:?}")),
+                        }),
+                        Lane::Press(press) => Got::Pressed {
+                            press,
+                            outcome: Ok(()),
+                        },
                         Lane::Await => Got::Awake(reply),
                         Lane::Explain => Got::Explain {
                             query_revision: revision,
@@ -826,6 +857,13 @@ fn spawn_lane(
                     ) {
                         conn.lost();
                         sink(Got::Down(e.to_string()));
+                    } else if let Lane::Press(press) = facets {
+                        sink(Got::Pressed {
+                            press,
+                            outcome: Err(e.to_string()),
+                        });
+                    } else if matches!(facets, Lane::Resources) {
+                        sink(Got::Resources(Err(e.to_string())));
                     } else if matches!(facets, Lane::Lens | Lane::Narrow) {
                         // A choice whose count was refused keeps no number;
                         // nothing else is said about it.
@@ -852,6 +890,8 @@ fn spawn_lane(
                             | Lane::Lens
                             | Lane::Narrow
                             | Lane::Grep
+                            | Lane::Resources
+                            | Lane::Press(_)
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

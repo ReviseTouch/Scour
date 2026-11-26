@@ -386,6 +386,7 @@ pub(super) fn words(window: &MainWindow, cat: &Catalogue) {
     ));
     hotkey::words(window, cat);
     settings_words(window, cat);
+    wiring::resources::words(window, cat);
     window.set_rules_hint(t(cat, "a directory name, or a path"));
     window.set_rules_add(t(cat, "add"));
     window.set_rules_off_word(t(cat, "off"));
