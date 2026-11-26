@@ -8,11 +8,13 @@ mod call;
 mod disks;
 mod grep;
 mod request;
+mod resources;
 mod response;
 pub use call::*;
 pub use disks::*;
 pub use grep::*;
 pub use request::*;
+pub use resources::*;
 pub use response::*;
 
 /// What a disk is, named here so a face that reads a [`Disk`] needs no other crate.

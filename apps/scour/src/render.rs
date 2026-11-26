@@ -492,6 +492,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 );
             }
         }
+        Response::Resources(r) => resources(r),
         Response::Text { text } => println!("{text}"),
         // An export never arrives here; `run_export` in `main.rs` writes its
         // pieces as they come. Named rather than covered by a `_`, so the next
@@ -1230,3 +1231,72 @@ pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+/// `scour resources`: one line a thing, the path last, so the columns that
+/// matter line up. Figures the system did not give are left out.
+fn resources(r: &scour_proto::Resources) {
+    use scour_proto::HeldKind;
+    let size = |b: u64| format_size(b, BINARY);
+    let up = r.uptime_ms / 1000;
+    println!(
+        "service    {} · up {}",
+        r.version,
+        if up < 3600 {
+            format!("{} min {} s", up / 60, up % 60)
+        } else {
+            format!("{} h {} min", up / 3600, up % 3600 / 60)
+        }
+    );
+    for h in &r.files {
+        let what = match h.kind {
+            HeldKind::Index => format!(
+                "index      {} · {} entries · {} parts · {} unsorted",
+                size(h.bytes),
+                h.items,
+                h.parts,
+                r.unsorted
+            ),
+            HeldKind::Texts => format!(
+                "texts      {} of {} · {} documents",
+                size(h.bytes),
+                size(h.limit),
+                h.items
+            ),
+            HeldKind::Previews => format!("previews   {}", size(h.bytes)),
+            HeldKind::Page => format!(
+                "page       {}{}",
+                size(h.bytes),
+                if h.busy == "open" { " (open)" } else { "" }
+            ),
+            HeldKind::State => format!("settings   {}", size(h.bytes)),
+        };
+        println!("{what}   {}", h.path);
+    }
+    let m = &r.memory;
+    if m.service > 0 {
+        println!(
+            "memory     service {} (at most {}) · machine {} of {} in use",
+            size(m.service),
+            size(m.peak),
+            size(m.total.saturating_sub(m.available)),
+            size(m.total)
+        );
+    }
+    let c = &r.cpu;
+    if c.total > 0 {
+        println!(
+            "processor  service {:.1} s in all · {} threads · load {:.2}",
+            c.service_ms as f64 / 1000.0,
+            c.threads,
+            f64::from(c.load_x100) / 100.0
+        );
+    }
+    if !r.running.is_empty() {
+        let said: Vec<String> = r
+            .running
+            .iter()
+            .map(|p| format!("{} {} ({})", p.kind, p.count, size(p.bytes)))
+            .collect();
+        println!("running    {}", said.join(" · "));
+    }
+}

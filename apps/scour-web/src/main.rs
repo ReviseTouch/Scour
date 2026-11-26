@@ -28,6 +28,7 @@ mod hotkey;
 mod http;
 mod icons;
 mod peer;
+mod resources;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
@@ -282,6 +283,9 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         || req.path == "/api/reread"
         || (req.path == "/api/texts" && req.param("forget").is_some())
         || req.path == "/api/index-do"
+        || req.path == "/api/clear"
+        || req.path == "/api/restart"
+        || req.path == "/api/held-open"
         || req.path == "/api/pick-folder"
         || (req.path == "/api/settings" && req.param("set").is_some())
         // Reading the desktop's key is a `GET`; writing one carries a body.
@@ -323,6 +327,10 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         "/api/texts" => disks::api_texts(&mut stream, client, &req),
         "/api/index" => disks::api_index(&mut stream, client),
         "/api/index-do" => disks::api_index_do(&mut stream, client, &req, doing.launch),
+        "/api/resources" => resources::api_resources(&mut stream, client),
+        "/api/clear" => resources::api_clear(&mut stream, client, &req),
+        "/api/restart" => resources::api_restart(&mut stream, client),
+        "/api/held-open" => resources::api_held_open(&mut stream, client, &req, doing.launch),
         "/api/rules" => api_rules(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => facets::api_facets(&mut stream, client, &req),

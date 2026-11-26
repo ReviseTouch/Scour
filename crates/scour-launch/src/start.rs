@@ -14,6 +14,27 @@ const PATIENCE: Duration = Duration::from_secs(10);
 /// How often the socket is looked at. Cheap: a connect that fails is a syscall.
 const BEAT: Duration = Duration::from_millis(200);
 
+/// How long word that a service is restarting is believed. A system unit
+/// brings it back in five seconds; past this, it is not coming.
+const RESTART_GRACE: Duration = Duration::from_secs(30);
+
+/// Where a restarting service leaves word that it is coming back: beside its
+/// socket. Nothing on Windows, whose pipe name is no path.
+pub fn restart_marker(addr: &str) -> std::path::PathBuf {
+    PathBuf::from(format!("{addr}.restarting"))
+}
+
+/// The service said it is restarting, recently enough to wait for it rather
+/// than start one: started by a face, one would win the index lock without the
+/// watcher a system unit runs it under, and the unit's own would lose.
+pub fn restarting(addr: &str) -> bool {
+    std::fs::metadata(restart_marker(addr))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < RESTART_GRACE)
+}
+
 /// One attempt to have a service at an address.
 pub struct Autostart<'a> {
     addr: &'a str,
@@ -76,6 +97,13 @@ impl<'a> Autostart<'a> {
     pub fn run(&self) -> Outcome {
         if (self.reachable)(self.addr) {
             return Outcome::AlreadyRunning;
+        }
+        // A service restarting itself is waited for, never raced.
+        while restarting(self.addr) {
+            std::thread::sleep(self.beat);
+            if (self.reachable)(self.addr) {
+                return Outcome::AlreadyRunning;
+            }
         }
         // Run as a Windows service, the index is the service's: a session
         // `scourd` started beside it would find the pipe taken or, worse, a

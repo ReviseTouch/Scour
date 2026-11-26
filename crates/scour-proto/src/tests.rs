@@ -153,6 +153,11 @@ fn every_request_round_trips() {
         Request::Reread { from_start: false },
         Request::Texts {},
         Request::ForgetTexts {},
+        Request::Resources {},
+        Request::Clear {
+            what: crate::HeldKind::Previews,
+        },
+        Request::Restart {},
         Request::Await {
             since: 9,
             timeout_ms: 1_000,
@@ -233,6 +238,38 @@ fn every_response_round_trips() {
             dead: 9,
             reader: true,
         },
+        Response::Resources(crate::Resources {
+            version: "0.2.0".into(),
+            uptime_ms: 82_000,
+            files: vec![crate::Held {
+                kind: crate::HeldKind::Page,
+                path: "/home/u/.local/share/scour/app".into(),
+                bytes: 296 << 20,
+                busy: "open".into(),
+                ..Default::default()
+            }],
+            unsorted: 1_391_010,
+            memory: crate::Memory {
+                service: 65 << 20,
+                peak: 480 << 20,
+                total: 32 << 30,
+                available: 20 << 30,
+            },
+            cpu: crate::Cpu {
+                service_ms: 9_000,
+                busy: 10,
+                total: 700,
+                threads: 20,
+                load_x100: 227,
+            },
+            running: vec![crate::Running {
+                kind: "mcp".into(),
+                count: 14,
+                bytes: 28 << 20,
+                oldest_s: 97_000,
+            }],
+            restartable: true,
+        }),
         Response::Grep(GrepResponse {
             files: vec![GrepFile {
                 path: "/a/b.rs".into(),

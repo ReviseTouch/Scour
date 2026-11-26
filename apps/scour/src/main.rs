@@ -229,6 +229,17 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// What the service holds on this machine: its files and where they are,
+    /// its memory and processor time, and Scour's other programs running.
+    Resources {
+        /// Empty the previews or the page window's browser profile. The index
+        /// has `reset`, the documents' text `texts --clear`.
+        #[arg(long, value_enum)]
+        clear: Option<Clearable>,
+        /// Stop the service and have it start again, once its index is written.
+        #[arg(long)]
+        restart: bool,
+    },
     /// Housekeeping: flush, compact or rebuild.
     Maintain {
         #[arg(default_value = "flush")]
@@ -280,6 +291,12 @@ enum Command {
     },
     /// Where the settings and the index live.
     Where,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Clearable {
+    Previews,
+    Page,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -723,6 +740,16 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Stop) => Request::Shutdown {},
         Some(Command::Rescan { path }) => Request::Rescan { path: path.clone() },
         Some(Command::Reset { .. }) => Request::Reset {},
+        Some(Command::Resources { restart: true, .. }) => Request::Restart {},
+        Some(Command::Resources {
+            clear: Some(what), ..
+        }) => Request::Clear {
+            what: match what {
+                Clearable::Previews => scour_proto::HeldKind::Previews,
+                Clearable::Page => scour_proto::HeldKind::Page,
+            },
+        },
+        Some(Command::Resources { .. }) => Request::Resources {},
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
         },

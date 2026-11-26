@@ -7,6 +7,7 @@ mod disks;
 mod documents;
 mod handle;
 mod live;
+mod resources;
 #[cfg(windows)]
 mod service;
 mod sources;
@@ -73,6 +74,94 @@ fn access_for(owner: &str) -> String {
 /// `SuccessExitStatus=` in `scourd.service` names.
 const BUSY: i32 = 75;
 
+/// The exit status for "start me again", after `Restart`: one no
+/// `SuccessExitStatus=` names, so a unit's `Restart=on-failure` brings it back.
+const AGAIN: i32 = 76;
+
+/// `Restart` was asked: once the index is committed, come back. See [`again`].
+static RESTART: AtomicBool = AtomicBool::new(false);
+
+/// After the index is committed, when `Restart` was asked: started again by a
+/// system unit, for a status it does not count as success; otherwise by a copy
+/// of this process, which waits for this one to be gone before it opens the
+/// index. Faces finding nothing in the gap wait, told by the marker.
+fn again() {
+    if !RESTART.load(Ordering::Relaxed) {
+        return;
+    }
+    if under_a_unit() {
+        std::process::exit(AGAIN);
+    }
+    #[cfg(unix)]
+    if let Ok(exe) = std::env::current_exe() {
+        use std::os::unix::process::CommandExt;
+        // A binary replaced while running is still named for what replaced it.
+        let exe = std::path::PathBuf::from(
+            exe.to_string_lossy()
+                .trim_end_matches(" (deleted)")
+                .to_string(),
+        );
+        let mut again = std::process::Command::new(exe);
+        again
+            .args(std::env::args_os().skip(1))
+            .env("SCOUR_RESTART_AFTER", std::process::id().to_string());
+        // SAFETY: `setsid` only, in the child before it execs: a session of
+        // its own, as a face starts one, so it outlives this one.
+        unsafe {
+            again.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        if let Err(e) = again.spawn() {
+            eprintln!("scourd: could not start again: {e}");
+        }
+    }
+    std::process::exit(0);
+}
+
+/// Run by a systemd unit of Scour's own: the last step of this process's
+/// cgroup is `scour….service`. Not `INVOCATION_ID`, which every program of a
+/// desktop session inherits — a window has it, and so would a service the
+/// window started, which no unit would bring back.
+fn under_a_unit() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/cgroup").is_ok_and(|c| unit_of(&c))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// See [`under_a_unit`]; the cgroup file's text.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unit_of(cgroup: &str) -> bool {
+    cgroup.lines().any(|l| {
+        let last = l.rsplit('/').next().unwrap_or_default();
+        last.starts_with("scour") && last.ends_with(".service")
+    })
+}
+
+/// Started by [`again`]: the one before has the index until it is gone.
+#[cfg(unix)]
+fn after_the_last() {
+    let Some(pid) = std::env::var("SCOUR_RESTART_AFTER")
+        .ok()
+        .and_then(|p| p.parse::<i32>().ok())
+    else {
+        return;
+    };
+    // SAFETY: nothing else runs yet; and a child of ours must not wait too.
+    unsafe { std::env::remove_var("SCOUR_RESTART_AFTER") };
+    let until = std::time::Instant::now() + Duration::from_secs(20);
+    // SAFETY: signal 0 only asks whether the process is there.
+    while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// How many heaps glibc may keep. See [`cap_allocator_arenas`].
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 const ARENAS: libc::c_int = 2;
@@ -112,6 +201,9 @@ fn main() -> Result<()> {
 
 /// Everything after the arguments: the same for a console start and a service.
 pub(crate) fn run(args: Args) -> Result<()> {
+    resources::mark_start();
+    #[cfg(unix)]
+    after_the_last();
     if let Some(owner) = &args.owner {
         as_owner::set_owner(owner);
     }
@@ -195,6 +287,8 @@ pub(crate) fn run(args: Args) -> Result<()> {
 
     let access = args.owner.as_deref().map(access_for);
     let server = Server::bind_for(&addr, access.as_deref())?;
+    // Back: faces need not wait any longer.
+    let _ = std::fs::remove_file(scour_launch::restart_marker(&addr));
     let stop = Arc::new(AtomicBool::new(false));
     scour_core::note!(
         "scourd: listening on {addr} · {} sources · watching starting",
@@ -236,7 +330,14 @@ pub(crate) fn run(args: Args) -> Result<()> {
     let serve = move || {
         server.serve(
             move |req, emit| {
-                if matches!(req, scour_proto::Request::Shutdown {}) {
+                let restart = cfg!(unix) && matches!(req, scour_proto::Request::Restart {});
+                if restart {
+                    RESTART.store(true, Ordering::Relaxed);
+                    // Written while the socket still answers: a face that
+                    // finds it gone has already been told to wait.
+                    let _ = std::fs::write(scour_launch::restart_marker(&wake_addr), b"");
+                }
+                if restart || matches!(req, scour_proto::Request::Shutdown {}) {
                     handler_stop.store(true, Ordering::Relaxed);
                     // The accept loop only reads the flag when a connection
                     // arrives, so one is made. From another thread and after a
@@ -262,13 +363,17 @@ pub(crate) fn run(args: Args) -> Result<()> {
     {
         let serving = std::thread::spawn(move || {
             serve();
+            again();
             std::process::exit(0);
         });
         hold_key();
         let _ = serving.join();
     }
     #[cfg(not(target_os = "macos"))]
-    serve();
+    {
+        serve();
+        again();
+    }
     Ok(())
 }
 
@@ -460,5 +565,26 @@ fn wait_for_scan(engine: &scour_engine::Engine) {
             );
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::unit_of;
+
+    #[test]
+    fn only_scour_s_own_unit_restarts_it() {
+        assert!(unit_of("0::/system.slice/scour.service\n"));
+        assert!(unit_of(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/scourd.service"
+        ));
+        assert!(unit_of(
+            "0::/system.slice/system-scour.slice/scour@hasan.service"
+        ));
+        // A desktop session's programs, and whatever they start.
+        assert!(!unit_of(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-gnome-scour\\x2dopen-2785589.scope"
+        ));
+        assert!(!unit_of("0::/user.slice/user-1000.slice/user@1000.service"));
     }
 }

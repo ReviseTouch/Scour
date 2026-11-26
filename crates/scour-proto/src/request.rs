@@ -235,6 +235,20 @@ pub enum Request {
     Syntax {},
     /// Stop the service.
     Shutdown {},
+    /// What the service holds on this machine: its files, its memory, its
+    /// share of the processor, Scour's other programs. See [`crate::Resources`].
+    Resources {},
+    /// Empty one of the things [`crate::Resources::files`] lists: the index
+    /// (walked again from nothing, as `Reset`), the documents' texts (as
+    /// `ForgetTexts`), the previews, or the page's browser profile — refused
+    /// while that browser is open. Settings are never emptied.
+    Clear {
+        what: crate::HeldKind,
+    },
+    /// Stop, and come back: the reply goes out first, the index is committed,
+    /// and whatever started the service starts it again. Faces asking in the
+    /// gap wait for it rather than start one of their own.
+    Restart {},
 }
 
 fn yes() -> bool {
@@ -308,6 +322,8 @@ impl Request {
             | Request::Postpone { .. }
             | Request::ForgetTexts {}
             | Request::Choose { .. }
+            | Request::Clear { .. }
+            | Request::Restart {}
             | Request::Shutdown {} => true,
             Request::Search { .. }
             | Request::Export { .. }
@@ -330,6 +346,7 @@ impl Request {
             | Request::Await { .. }
             | Request::Reread { .. }
             | Request::Texts {}
+            | Request::Resources {}
             | Request::Syntax {} => false,
         }
     }
@@ -369,6 +386,9 @@ impl Request {
             | Request::Rescan { .. }
             | Request::Maintain { .. }
             | Request::Reset {}
+            | Request::Resources {}
+            | Request::Clear { .. }
+            | Request::Restart {}
             | Request::Syntax {}
             | Request::Shutdown {} => false,
         }
@@ -409,6 +429,9 @@ impl Request {
             Request::Reset {} => "reset",
             Request::Syntax {} => "syntax",
             Request::Shutdown {} => "shutdown",
+            Request::Resources {} => "resources",
+            Request::Clear { .. } => "clear",
+            Request::Restart {} => "restart",
         }
     }
 }

@@ -72,6 +72,41 @@ fn nothing_beside_and_nothing_on_the_path_says_so() {
     }
 }
 
+/// A service that said it is restarting is waited for, and nothing is started
+/// beside it; word that is too old is not believed.
+#[test]
+fn a_service_restarting_is_waited_for_not_raced() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let home = tempfile::tempdir().expect("temp");
+    let addr = home.path().join("scour.sock");
+    let addr = addr.to_str().expect("utf-8");
+    let never = home.path().join("never-run");
+    std::fs::write(scour_launch::restart_marker(addr), b"").expect("marker");
+    assert!(scour_launch::restarting(addr));
+    // It answers on the third look.
+    let looks = AtomicUsize::new(0);
+    let back = move |_: &str| looks.fetch_add(1, Ordering::Relaxed) >= 2;
+    let outcome = Autostart::new(addr, home.path().join("log"), &back)
+        .binary(never.clone())
+        .every(Duration::from_millis(10))
+        .run();
+    assert_eq!(outcome, Outcome::AlreadyRunning);
+
+    // A minute old, it is a service that is not coming back: one is started.
+    let old = std::time::SystemTime::now() - Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(scour_launch::restart_marker(addr))
+        .and_then(|f| f.set_modified(old))
+        .expect("age the marker");
+    assert!(!scour_launch::restarting(addr));
+    let outcome = Autostart::new(addr, home.path().join("log"), &|_| false)
+        .binary(never)
+        .within(Duration::from_millis(50))
+        .run();
+    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+}
+
 /// The ordinary case: the service takes a moment to open its socket.
 #[cfg(unix)]
 #[test]

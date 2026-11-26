@@ -59,6 +59,8 @@ pub enum Response {
         unconfirmed: u64,
     },
     Grep(GrepResponse),
+    /// What `resources` asked: files, memory, processor, programs.
+    Resources(crate::Resources),
     /// What `texts` asked: whether documents' text is kept, where, and what is.
     Texts {
         on: bool,

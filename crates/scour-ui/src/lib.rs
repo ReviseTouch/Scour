@@ -24,4 +24,5 @@ pub mod lens;
 pub mod menu;
 pub mod pattern;
 pub mod query;
+pub mod resources;
 pub mod wrap;

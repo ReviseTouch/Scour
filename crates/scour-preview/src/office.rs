@@ -244,7 +244,8 @@ fn soffice() -> Option<&'static Path> {
     BIN.as_deref()
 }
 
-fn cache_root() -> PathBuf {
+/// Where previews made of documents are kept; emptied, they are made again.
+pub fn cache_root() -> PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
         return PathBuf::from(xdg).join("scour");
     }

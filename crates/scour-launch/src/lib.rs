@@ -24,4 +24,6 @@ mod start;
 pub use binary::{NAME, locate, scourd};
 pub use face::{face, program};
 pub use outcome::Outcome;
-pub use start::{Autostart, ensure_once, wanted, windows_service_registered};
+pub use start::{
+    Autostart, ensure_once, restart_marker, restarting, wanted, windows_service_registered,
+};

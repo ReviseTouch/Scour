@@ -5889,6 +5889,7 @@ dependencies = [
  "scour-icon",
  "scour-index-native",
  "scour-ipc",
+ "scour-launch",
  "scour-places",
  "scour-preview",
  "scour-proto",

@@ -342,6 +342,38 @@ fn run(
         },
         // The reply goes out before the accept loop is torn down.
         Request::Shutdown {} => Response::Accepted,
+        Request::Resources {} => {
+            let stats = engine.stats()?;
+            let settings = kept
+                .settings
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let texts = crate::documents::shared().map(|d| d.held(&settings));
+            Response::Resources(crate::resources::collect(&stats, texts.as_ref(), &kept.dir))
+        }
+        // The index and the texts go the way their own requests go.
+        Request::Clear { what } => {
+            match what {
+                scour_proto::HeldKind::Index => live.reset(kept),
+                scour_proto::HeldKind::Texts => {
+                    if let Some(documents) = crate::documents::shared() {
+                        documents.forget().map_err(|e| scour_core::Error::Io {
+                            detail: e.to_string(),
+                        })?;
+                    }
+                }
+                other => crate::resources::clear(other)?,
+            }
+            Response::Accepted
+        }
+        // As `Shutdown`; `main` starts it again once the index is committed.
+        Request::Restart {} if cfg!(unix) => Response::Accepted,
+        Request::Restart {} => {
+            return Err(scour_core::Error::unsupported(
+                "restarting from a face here: restart the service from the system",
+            ));
+        }
     })
 }
 
