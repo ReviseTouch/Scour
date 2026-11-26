@@ -4,6 +4,7 @@
 //! cells that differ, so no widget tree has to be kept in step. The layout is
 //! the page's and the window's — query, meter, list, one line at the bottom.
 
+mod grepcap;
 mod list;
 mod menu;
 mod panels;
@@ -13,6 +14,7 @@ mod side;
 mod top;
 mod valuecap;
 mod weighed;
+pub use grepcap::{content_menu_at, pill_cells};
 pub use list::*;
 pub use menu::*;
 pub use panels::*;
@@ -153,6 +155,9 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme) {
     }
 
     footer(f, foot, app, theme, mark);
+    if app.panel == Panel::None {
+        grepcap::menu(f, area, app, theme);
+    }
     if app.panel != Panel::None {
         panel(f, area, app, theme);
     }

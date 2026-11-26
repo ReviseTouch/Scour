@@ -107,6 +107,20 @@ impl Theme {
     pub fn pick(&self) -> Color {
         self.of(self.palette.pick)
     }
+    /// A content capsule's ground — files will be read — and its inner one.
+    pub fn cap_read(&self) -> Color {
+        self.of(self.palette.cap_read)
+    }
+    pub fn cap_read_ring(&self) -> Color {
+        self.of(self.palette.cap_read_ring)
+    }
+    /// An excluded piece's ground, and its inner one.
+    pub fn cap_neg(&self) -> Color {
+        self.of(self.palette.cap_neg)
+    }
+    pub fn cap_neg_ring(&self) -> Color {
+        self.of(self.palette.cap_neg_ring)
+    }
 
     /// The colour a kind is drawn in, or quiet ink for one with none.
     pub fn kind(&self, token: &str) -> Color {

@@ -85,6 +85,12 @@ pub enum Spot {
     Head(usize),
     /// The scrollbar, by which of its rows the pointer is on.
     Bar(u16),
+    /// A capsule of the content field: its piece, and the alternative.
+    GrepCap(usize, usize),
+    /// A button of the pill over one, by its place in the pill.
+    GrepPill(usize),
+    /// An item of the content field's `:` menu.
+    GrepMenu(usize),
 }
 
 /// What is over the list, if anything. One at a time: a second panel behind the

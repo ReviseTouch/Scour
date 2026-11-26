@@ -8,6 +8,7 @@ use scour_ui::lens::{self, Lens};
 use crate::app::{App, Panel, Want};
 use crate::draw::PanelLine;
 
+mod content;
 mod filters;
 mod kinds;
 mod place;
@@ -16,6 +17,7 @@ mod spots;
 mod time;
 mod time_keys;
 
+pub use content::{Deed, Pill};
 pub use filters::{Asked, Filters, LensAsk, unix_now};
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +32,13 @@ pub struct V2 {
     pub grep_files: Vec<GrepFile>,
     pub grep_next: Option<u32>,
     pub grep_summary: String,
+    /// Where the caret is in the pattern, in characters.
+    pub grep_caret: usize,
+    /// The capsule a pill is over, if any.
+    pub grep_pill: Option<Pill>,
+    /// The `:` menu's cursor, and the `:` it was closed on with `Esc`.
+    pub grep_menu_at: usize,
+    pub grep_menu_shut: Option<usize>,
     pub place_mode: bool,
     pub place_dir: String,
     /// The lens opened on a place term still being typed: the folder it
@@ -406,6 +415,7 @@ impl App {
         self.v2.grep_open = !self.v2.grep_open;
         self.dirty = true;
         if self.v2.grep_open {
+            self.v2.grep_caret = self.v2.grep_pattern.chars().count();
             self.dispatch_grep(false)
         } else {
             self.v2.grep_summary.clear();

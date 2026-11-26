@@ -3121,3 +3121,48 @@ msgstr "tık: ekle ya da çıkar · Alt+tık: dışla"
 
 msgid "Extensions in {kinds}"
 msgstr "{kinds} içindeki uzantılar"
+
+msgid "exact phrase"
+msgstr "tam ifade"
+
+msgid "either"
+msgstr "biri"
+
+msgid "without"
+msgstr "değil"
+
+msgid "similar"
+msgstr "benzer"
+
+msgid "and"
+msgstr "ve"
+
+msgid "or"
+msgstr "veya"
+
+msgid "Exact phrase"
+msgstr "Tam ifade"
+
+msgid "these words, in this order"
+msgstr "bu sözcükler, bu sırayla"
+
+msgid "Either"
+msgstr "Veya"
+
+msgid "this word or the next"
+msgstr "bu sözcük ya da sonraki"
+
+msgid "Without"
+msgstr "Değil"
+
+msgid "files that do not hold the word"
+msgstr "bu sözcüğü içermeyen dosyalar"
+
+msgid "Match case"
+msgstr "Büyük/küçük harf"
+
+msgid "capitals as typed"
+msgstr "büyük harfler yazıldığı gibi"
+
+msgid "in the content field: choose a piece · ~ ! Del change it"
+msgstr "içerik alanında: bir parça seç · ~ ! Del ile değiştir"

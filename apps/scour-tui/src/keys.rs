@@ -38,6 +38,10 @@ pub const MAP: &[(&str, &str)] = &[
         "in the type panel: Tab goes between kinds and extensions",
     ),
     ("Ctrl+G", "search inside matching files (grep)"),
+    (
+        "Alt+← →",
+        "in the content field: choose a piece · ~ ! Del change it",
+    ),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
     ("Ctrl+D", "disks"),
@@ -222,6 +226,58 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
     }
 
+    // The content field's `:` menu and a capsule chosen from the keyboard
+    // take their keys before anything else reads them.
+    if app.v2.grep_open && app.panel == Panel::None && app.mode == Mode::Search {
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if app.grep_menu().is_some() {
+            match key.code {
+                KeyCode::Up => {
+                    app.grep_menu_walk(-1);
+                    return Want::Nothing;
+                }
+                KeyCode::Down => {
+                    app.grep_menu_walk(1);
+                    return Want::Nothing;
+                }
+                KeyCode::Enter | KeyCode::Tab => return app.grep_menu_choose(None),
+                KeyCode::Esc => {
+                    app.grep_menu_close();
+                    return Want::Nothing;
+                }
+                _ => {}
+            }
+        }
+        match key.code {
+            KeyCode::Left if alt => {
+                app.grep_choose(-1);
+                return Want::Nothing;
+            }
+            KeyCode::Right if alt => {
+                app.grep_choose(1);
+                return Want::Nothing;
+            }
+            _ => {}
+        }
+        if let Some(pill) = app.v2.grep_pill.filter(|p| p.by_key) {
+            match key.code {
+                KeyCode::Delete => return app.grep_deed(crate::v2::Deed::Remove),
+                KeyCode::Char('!') => return app.grep_deed(crate::v2::Deed::Not),
+                KeyCode::Char('~') => return app.grep_deed(crate::v2::Deed::Similar),
+                KeyCode::Enter => {
+                    app.grep_into(pill.piece);
+                    return Want::Nothing;
+                }
+                KeyCode::Esc => {
+                    app.v2.grep_pill = None;
+                    app.dirty = true;
+                    return Want::Nothing;
+                }
+                _ => app.v2.grep_pill = None,
+            }
+        }
+    }
+
     // The keys that mean the same in both modes, first: nothing shadows them.
     match key.code {
         KeyCode::Char('c' | 'q') if ctrl => {
@@ -372,13 +428,18 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 return app.dispatch_grep(false);
             }
             KeyCode::Esc => return app.toggle_grep(),
-            KeyCode::Backspace if app.mode == Mode::Search => {
-                app.v2.grep_pattern.pop();
-                return app.dispatch_grep(false);
+            KeyCode::Backspace if app.mode == Mode::Search => return app.grep_rub(false),
+            KeyCode::Delete if app.mode == Mode::Search => return app.grep_rub(true),
+            KeyCode::Left if app.mode == Mode::Search => {
+                app.grep_step(-1);
+                return Want::Nothing;
+            }
+            KeyCode::Right if app.mode == Mode::Search => {
+                app.grep_step(1);
+                return Want::Nothing;
             }
             KeyCode::Char(c) if !ctrl && !alt && app.mode == Mode::Search => {
-                app.v2.grep_pattern.push(c);
-                return app.dispatch_grep(false);
+                return app.grep_type(c);
             }
             _ => {}
         }
@@ -556,6 +617,27 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
         app.hover = spot;
         app.dirty = true;
     }
+    // The pill follows the pointer onto a capsule, stays while it crosses to
+    // the pill, and goes when it leaves both — unless the keyboard chose it.
+    match spot {
+        Spot::GrepCap(piece, alt) => {
+            let pill = Some(crate::v2::Pill {
+                piece,
+                alt,
+                by_key: false,
+            });
+            if app.v2.grep_pill != pill {
+                app.v2.grep_pill = pill;
+                app.dirty = true;
+            }
+        }
+        Spot::GrepPill(_) => {}
+        _ if app.v2.grep_pill.is_some_and(|p| !p.by_key) => {
+            app.v2.grep_pill = None;
+            app.dirty = true;
+        }
+        _ => {}
+    }
     match m.kind {
         MouseEventKind::Moved => Want::Nothing,
         // A drag has to be followed while the button is down, not on release.
@@ -710,6 +792,24 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.drag_bar(at, list_to.saturating_sub(crate::draw::LIST_TOP + 1))
                 }
                 Spot::Chip => app.unfilter(),
+                Spot::GrepCap(piece, _) => {
+                    app.grep_into(piece);
+                    Want::Nothing
+                }
+                Spot::GrepPill(at) => {
+                    let laid = crate::draw::grep_laid(app);
+                    let deed = app.v2.grep_pill.zip(laid).and_then(|(pill, laid)| {
+                        let origin = crate::draw::grep_origin(app, size.0);
+                        crate::draw::pill_cells(&app.v2.grep_pattern, &laid, &pill, origin)
+                            .get(at)
+                            .map(|c| c.0)
+                    });
+                    match deed {
+                        Some(deed) => app.grep_deed(deed),
+                        None => Want::Nothing,
+                    }
+                }
+                Spot::GrepMenu(at) => app.grep_menu_choose(Some(at)),
                 Spot::Tool(which) => app.tool(which),
                 Spot::Deed(which) => app.deed(which),
                 Spot::Query => {
@@ -752,6 +852,11 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
         };
     }
 
+    // The content field's `:` menu, over the counter line and the list.
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    if let Some(at) = crate::draw::content_menu_at(app, area, col, row) {
+        return Spot::GrepMenu(at);
+    }
     // The bar of things to do with a selection, along the bottom row.
     if row + 1 == height && !app.picked.is_empty() {
         return match crate::draw::deed_at(app, col, width) {
@@ -767,6 +872,9 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
         };
     }
     if row < QUERY_HIGH {
+        if let Some(spot) = grep_spot(app, col, row, width) {
+            return spot;
+        }
         if row == crate::draw::QUERY_ROW
             && let Some((from, to)) = crate::draw::chip_at(app)
             && col >= from
@@ -826,6 +934,32 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
         return Spot::Tick(at);
     }
     Spot::Row(at)
+}
+
+/// A capsule of the content field, or a button of the pill above one.
+fn grep_spot(app: &App, col: u16, row: u16, width: u16) -> Option<Spot> {
+    let laid = crate::draw::grep_laid(app)?;
+    let origin = crate::draw::grep_origin(app, width);
+    if row == crate::draw::QUERY_ROW {
+        let at = (col as usize).checked_sub(origin)?;
+        let cap = laid.caps.iter().find(|c| c.from <= at && at < c.to)?;
+        let alt = cap
+            .alts
+            .iter()
+            .position(|&(a, b)| a <= at && at < b)
+            .unwrap_or(0);
+        return Some(Spot::GrepCap(cap.piece, alt));
+    }
+    if row + 1 == crate::draw::QUERY_ROW {
+        let pill = app.v2.grep_pill?;
+        let cells = crate::draw::pill_cells(&app.v2.grep_pattern, &laid, &pill, origin);
+        let at = col as usize;
+        return cells
+            .iter()
+            .position(|&(_, a, b)| a <= at && at < b)
+            .map(Spot::GrepPill);
+    }
+    None
 }
 
 /// How long two clicks on one row may be apart and still be one double-click.

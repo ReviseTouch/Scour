@@ -5,11 +5,12 @@ use crate::app::{App, Mode, Spot};
 use crate::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use scour_ui::format;
 
+use super::grepcap::{self, Laid};
 use super::placecap::{self, Folded};
 use super::valuecap;
 
@@ -19,16 +20,14 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     f.render_widget(Block::new().style(Style::new().bg(theme.panel())), area);
     // The text sits on the middle row, with a row of quiet above and below:
     // that is what makes three rows read as one box.
+    let field = area;
     let area = Rect {
         y: area.y + area.height / 2,
         height: 1,
         ..area
     };
     let triggers_shown = !app.v2.grep_open && area.width >= 96;
-    let room = (area.width as usize).saturating_sub(7 + if triggers_shown { 18 } else { 0 });
-    let mut folds = placecap::folded(app, room);
-    folds.extend(valuecap::folded(app, room));
-    folds.sort_by_key(|f| f.start);
+    let folds = folds(app, area.width);
     let typed = if app.query.is_empty() {
         // Quiet and short: a hint as bright as a query reads as one.
         vec![Span::styled(
@@ -155,44 +154,8 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                         Modifier::BOLD
                     }),
             ));
-        } else {
-            // Each piece of the pattern as the search reads it: a phrase, an
-            // OR and a NOT on a ground of their own, operators in colour.
-            let chars: Vec<char> = app.v2.grep_pattern.chars().collect();
-            let mut ground = vec![theme.hover(); chars.len()];
-            let mut fg: Vec<Color> = vec![theme.ink(); chars.len()];
-            for p in scour_ui::pattern::pieces(&app.v2.grep_pattern) {
-                let under = match p.kind {
-                    scour_ui::pattern::PieceKind::Word => None,
-                    scour_ui::pattern::PieceKind::Not => Some(theme.line()),
-                    _ => Some(theme.panel()),
-                };
-                if let Some(under) = under {
-                    ground[p.start..p.end].iter_mut().for_each(|g| *g = under);
-                }
-                for i in p.ops {
-                    fg[i] = match chars[i] {
-                        '!' => theme.not(),
-                        '"' => theme.glob(),
-                        _ => theme.key(),
-                    };
-                }
-            }
-            let mut i = 0;
-            while i < chars.len() {
-                let mut j = i + 1;
-                while j < chars.len() && ground[j] == ground[i] && fg[j] == fg[i] {
-                    j += 1;
-                }
-                parts.push(Span::styled(
-                    chars[i..j].iter().collect::<String>(),
-                    Style::new()
-                        .fg(fg[i])
-                        .bg(ground[i])
-                        .add_modifier(Modifier::BOLD),
-                ));
-                i = j;
-            }
+        } else if let Some(laid) = grep_laid(app) {
+            parts.extend(grepcap::spans(&laid, theme));
         }
         let flags = format!(
             " · {mode_lbl}{}{}{} · F8/Esc ]",
@@ -204,10 +167,26 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             flags,
             Style::new().fg(theme.ink_3()).bg(theme.hover()),
         ));
-        grep_caret_x = Some((pre_cols + 6 + app.v2.grep_pattern.chars().count()) as u16);
+        let into = match grep_laid(app) {
+            Some(laid) => laid.caret,
+            None if app.v2.grep_pattern.is_empty() => 0,
+            None => app.grep_caret(),
+        };
+        debug_assert_eq!(pre_cols + 6, grep_origin(app, field.width));
+        grep_caret_x = Some((pre_cols + 6 + into) as u16);
     }
     let line = Line::from(parts);
     f.render_widget(Paragraph::new(line), area);
+    // The pill floats on the row above, over its capsule's right end.
+    if let Some(laid) = grep_laid(app)
+        && area.y > field.y
+    {
+        let row = Rect {
+            y: area.y - 1,
+            ..area
+        };
+        grepcap::pill(f, row, grep_origin(app, field.width), app, &laid, theme);
+    }
     if triggers_shown {
         let triggers = Line::from(vec![
             Span::styled(
@@ -235,6 +214,42 @@ pub(super) fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             f.set_cursor_position((area.x + 7 + before, area.y));
         }
     }
+}
+
+/// The query's runs drawn folded, on a line this wide.
+fn folds(app: &App, width: u16) -> Vec<Folded> {
+    let triggers_shown = !app.v2.grep_open && width >= 96;
+    let room = (width as usize).saturating_sub(7 + if triggers_shown { 18 } else { 0 });
+    let mut folds = placecap::folded(app, room);
+    folds.extend(valuecap::folded(app, room));
+    folds.sort_by_key(|f| f.start);
+    folds
+}
+
+/// The column the content field's pattern starts at, on a line this wide:
+/// after the brand, the query as drawn, the filter and the field's `[ ≣ `.
+/// The drawing and the mouse both count from it.
+pub fn grep_origin(app: &App, width: u16) -> usize {
+    let typed = if app.query.is_empty() {
+        hint(app).chars().count()
+    } else {
+        placecap::caret_column(&app.query, app.query.len(), &folds(app, width))
+    };
+    let chip = app.filter.as_ref().map_or(0, |t| 5 + t.chars().count());
+    7 + typed + chip + 6
+}
+
+/// The content field's pattern laid out in capsules: while it is open, has
+/// something in it, and is read as text (a regex or hex pattern is not).
+pub fn grep_laid(app: &App) -> Option<Laid> {
+    let open = app.v2.grep_open
+        && !app.v2.grep_pattern.is_empty()
+        && app.v2.grep_mode == scour_proto::GrepMode::Text;
+    open.then(|| {
+        grepcap::lay(&app.v2.grep_pattern, app.grep_caret(), |m| {
+            app.say(m).into_owned()
+        })
+    })
 }
 
 /// `runs` of the query as spans, each folded run as its label in the place
