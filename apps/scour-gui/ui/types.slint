@@ -538,18 +538,3 @@ export struct Spliced {
     text: string,
     caret: int,
 }
-
-/// A piece of the content pattern drawn as a capsule behind its letters:
-/// where it stands, in characters, and what it is (`phrase`, `or`, `not`).
-export struct GrepCap {
-    col: int,
-    len: int,
-    kind: string,
-}
-
-/// An operator of the content pattern drawn in its own colour over itself.
-export struct GrepOp {
-    col: int,
-    ch: string,
-    kind: string,
-}

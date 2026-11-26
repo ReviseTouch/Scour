@@ -8,10 +8,12 @@ import { Theme, Fonts } from "theme.slint";
 export { Theme, Fonts }
 import { DragTray } from "tray.slint";
 export { DragTray }
+import { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow, GrepInk, GrepPill, GrepMenu } from "grep-parts.slint";
+export { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { GrepCap, GrepOp, Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
-export { GrepCap, GrepOp, Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
@@ -203,9 +205,34 @@ export component MainWindow inherits Window {
     in property <bool> grep-case;
     in property <bool> grep-binary;
     in property <bool> grep-markup;
-    // The content pattern's pieces and operators, as Rust reads them.
+    // The content field as drawn: its letters, capsules and what they hold,
+    // the selection and the caret, placed by Rust (`grep_field.rs`).
+    in property <[GrepRun]> grep-runs;
     in property <[GrepCap]> grep-caps;
-    in property <[GrepOp]> grep-ops;
+    in property <[GrepBit]> grep-bits;
+    in property <[GrepSel]> grep-sels;
+    in property <length> grep-caret-x;
+    callback grep-advance(length, length);
+    callback grep-caret(int, int);
+    callback grep-hit(length) -> int;
+    callback grep-hover(length);
+    // The capsule under the pointer, and what its pill offers.
+    in property <int> grep-hov: -1;
+    in property <length> grep-hov-x;
+    in property <bool> grep-hov-not;
+    in property <bool> grep-hov-fz;
+    in property <bool> grep-hov-fz-on;
+    callback grep-act(string);
+    // Rust puts the caret: the byte offset, and a count that says "now".
+    in property <int> grep-put-at;
+    in property <int> grep-put;
+    changed grep-put => { grep-input.set-selection-offsets(self.grep-put-at, self.grep-put-at); }
+    // What `:` offers at the caret; empty, it is closed.
+    in property <[GrepRow]> grep-menu;
+    in property <length> grep-menu-x;
+    in-out property <int> grep-menu-sel;
+    callback grep-menu-pick(int);
+    callback grep-menu-close();
     in property <int> grep-focus-ask;
     in property <string> grep-summary;
     in property <string> grep-empty;
@@ -2253,9 +2280,40 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        Rectangle {
+                        // The pattern as drawn: capsules and the letters of the
+                        // piece being written, over one invisible line that
+                        // holds the text, the keys and the input method, as
+                        // the query does. Rust places every part.
+                        grep-area := Rectangle {
                             horizontal-stretch: 1;
                             clip: true;
+                            // Slid left so the caret stays in sight.
+                            property <length> shift: max(0px, root.grep-caret-x + 16px - self.width);
+                            property <bool> lit: true;
+                            // Forty characters of each face, to measure one.
+                            property <length> adv: gruler.preferred-width / 40;
+                            property <length> small: gsmall.preferred-width / 40;
+                            changed adv => { root.grep-advance(self.adv, self.small); }
+                            changed small => { root.grep-advance(self.adv, self.small); }
+                            init => { root.grep-advance(self.adv, self.small); }
+                            gruler := Text {
+                                visible: false;
+                                text: "0000000000000000000000000000000000000000";
+                                font-family: Fonts.mono;
+                                font-size: 14px;
+                            }
+                            gsmall := Text {
+                                visible: false;
+                                text: "0000000000000000000000000000000000000000";
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                font-weight: 600;
+                            }
+                            gblink := Timer {
+                                interval: 530ms;
+                                running: grep-input.has-focus;
+                                triggered => { grep-area.lit = !grep-area.lit; }
+                            }
                             if root.grep-pattern == "": Text {
                                 width: parent.width;
                                 height: parent.height;
@@ -2266,43 +2324,56 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
-                            // Behind the letters, each piece's capsule; over
-                            // them, each operator in its colour. The letters
-                            // stay where the field puts them: the caret and the
-                            // selection are the field's own. Only while the
-                            // pattern fits, since the field scrolls past that.
-                            property <length> gadv: gruler.preferred-width / 40;
-                            property <bool> fits: root.grep-pattern.character-count * self.gadv < self.width - 8px;
-                            gruler := Text {
-                                visible: false;
-                                text: "0000000000000000000000000000000000000000";
-                                font-family: Fonts.mono;
-                                font-size: 14px;
-                            }
-                            for c in root.grep-caps: Rectangle {
-                                visible: parent.fits;
-                                x: c.col * parent.gadv - 4px;
-                                width: c.len * parent.gadv + 8px;
-                                height: 24px;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 6px;
-                                border-width: 1px;
-                                background: c.kind == "not" ? Theme.cap-neg : c.kind == "phrase" ? Theme.cap : Theme.panel;
-                                border-color: c.kind == "not" ? Theme.cap-neg-ring : Theme.cap-ring;
+                            GrepInk {
+                                width: parent.width;
+                                height: parent.height;
+                                runs: root.grep-runs;
+                                caps: root.grep-caps;
+                                bits: root.grep-bits;
+                                sels: root.grep-sels;
+                                hov: root.grep-hov;
+                                shift: grep-area.shift;
                             }
                             grep-input := TextInput {
-                                width: parent.width;
+                                x: 0px;
+                                width: max(parent.width, self.preferred-width);
                                 height: parent.height;
                                 text <=> root.grep-pattern;
                                 font-family: Fonts.mono;
                                 font-size: 14px;
-                                color: Theme.ink;
-                                selection-background-color: Theme.selection;
-                                selection-foreground-color: Theme.ink;
+                                color: transparent;
+                                text-cursor-width: 0px;
+                                selection-background-color: transparent;
+                                selection-foreground-color: transparent;
                                 single-line: true;
                                 vertical-alignment: center;
                                 edited => { root.grep-edited(self.text); }
+                                cursor-position-changed(p) => {
+                                    root.grep-caret(self.anchor-position-byte-offset, self.cursor-position-byte-offset);
+                                    grep-area.lit = true;
+                                    gblink.restart();
+                                }
                                 key-pressed(e) => {
+                                    // While `:` offers something, the arrows, Enter,
+                                    // Tab and Escape are its own; Escape leaves the `:`.
+                                    if (root.grep-menu.length > 0) {
+                                        if (e.text == Key.DownArrow) {
+                                            root.grep-menu-sel = min(root.grep-menu-sel + 1, root.grep-menu.length - 1);
+                                            return accept;
+                                        }
+                                        if (e.text == Key.UpArrow) {
+                                            root.grep-menu-sel = max(root.grep-menu-sel - 1, 0);
+                                            return accept;
+                                        }
+                                        if (e.text == Key.Return || e.text == Key.Tab) {
+                                            root.grep-menu-pick(root.grep-menu-sel);
+                                            return accept;
+                                        }
+                                        if (e.text == Key.Escape) {
+                                            root.grep-menu-close();
+                                            return accept;
+                                        }
+                                    }
                                     if (e.text == Key.Escape) {
                                         root.grep-toggled();
                                         return accept;
@@ -2314,16 +2385,42 @@ export component MainWindow inherits Window {
                                     return reject;
                                 }
                             }
-                            for o in root.grep-ops: Text {
-                                visible: parent.fits;
-                                x: o.col * parent.gadv;
-                                width: parent.gadv;
-                                height: parent.height;
-                                text: o.ch;
-                                font-family: Fonts.mono;
-                                font-size: 14px;
-                                vertical-alignment: center;
-                                color: o.kind == "not" ? Theme.q-not : o.kind == "quote" ? Theme.q-glob : Theme.q-key;
+                            // Presses and the pointer, by where things are drawn:
+                            // a capsule pressed puts the caret at its end.
+                            TouchArea {
+                                mouse-cursor: text;
+                                property <int> anchor: 0;
+                                changed mouse-x => {
+                                    if (self.pressed) {
+                                        grep-input.set-selection-offsets(self.anchor,
+                                            root.grep-hit(self.mouse-x + grep-area.shift));
+                                    } else if (self.has-hover) {
+                                        root.grep-hover(self.mouse-x + grep-area.shift);
+                                    }
+                                }
+                                changed has-hover => {
+                                    if (!self.has-hover) { root.grep-hover(-1px); }
+                                }
+                                pointer-event(e) => {
+                                    if (e.kind != PointerEventKind.down || e.button != PointerEventButton.left) { return; }
+                                    grep-input.focus();
+                                    let o = root.grep-hit(self.mouse-x + grep-area.shift);
+                                    if (e.modifiers.shift) {
+                                        grep-input.set-selection-offsets(grep-input.anchor-position-byte-offset, o);
+                                        return;
+                                    }
+                                    self.anchor = o;
+                                    grep-input.set-selection-offsets(o, o);
+                                }
+                            }
+                            // Painted last, so a letter cannot cover it.
+                            Rectangle {
+                                x: root.grep-caret-x - grep-area.shift - 1px;
+                                y: (parent.height - self.height) / 2;
+                                width: 2px;
+                                height: 18px;
+                                background: Theme.q-bad;
+                                visible: grep-input.has-focus && grep-area.lit && root.grep-sels.length == 0;
                             }
                         }
                         // The ways of reading, as one group, centred in the
@@ -4588,6 +4685,27 @@ export component MainWindow inherits Window {
             }
         }
 
+        }
+
+        // Over the content capsule under the pointer, and what `:` offers at
+        // the content field's caret: above everything, as the lens is.
+        if root.grep-open: GrepPill {
+            x: clamp(grep-area.absolute-position.x + root.grep-hov-x - grep-area.shift - self.width + 4px,
+                4px, root.width - self.width - 4px);
+            y: grep-area.absolute-position.y + (grep-area.height - 24px) / 2 - self.height + 1px;
+            on: root.grep-hov >= 0;
+            fz: root.grep-hov-fz;
+            fz-on: root.grep-hov-fz-on;
+            not: root.grep-hov-not;
+            act(what) => { root.grep-act(what); }
+        }
+        if root.grep-open && root.grep-menu.length > 0: GrepMenu {
+            x: clamp(grep-area.absolute-position.x + root.grep-menu-x - grep-area.shift - 12px,
+                8px, root.width - self.width - 8px);
+            y: grep-area.absolute-position.y + grep-area.height + 4px;
+            rows: root.grep-menu;
+            sel: root.grep-menu-sel;
+            pick(i) => { root.grep-menu-pick(i); }
         }
 
         // The lens: under the term the caret is on, expanding to a 2-column

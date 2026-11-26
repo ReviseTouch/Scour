@@ -31,6 +31,8 @@ pub struct GrepUi {
     pub selected: i32,
     /// Asked, and not answered yet.
     pub reading: bool,
+    /// The field as drawn: caret, capsules, the pill and what `:` offers.
+    pub field: crate::grep_field::Field,
 }
 
 /// The query listed this many files: the line says how many it would read.
@@ -67,47 +69,8 @@ fn home_form(p: &str) -> String {
     crate::qlens::home_path(&home, p)
 }
 
-/// The content pattern's pieces as capsules and its operators in colour, as
-/// the search reads them; only a text pattern has pieces.
-fn style_pattern(w: &MainWindow, pattern: &str, mode: GrepMode) {
-    let (mut caps, mut ops) = (Vec::new(), Vec::new());
-    if mode == GrepMode::Text {
-        let chars: Vec<char> = pattern.chars().collect();
-        for p in scour_ui::pattern::pieces(pattern) {
-            let kind = match p.kind {
-                scour_ui::pattern::PieceKind::Word => None,
-                scour_ui::pattern::PieceKind::Phrase => Some("phrase"),
-                scour_ui::pattern::PieceKind::Or => Some("or"),
-                scour_ui::pattern::PieceKind::Not => Some("not"),
-            };
-            if let Some(kind) = kind {
-                caps.push(crate::ui::GrepCap {
-                    col: p.start as i32,
-                    len: (p.end - p.start) as i32,
-                    kind: kind.into(),
-                });
-            }
-            for i in p.ops {
-                let ch = chars[i];
-                ops.push(crate::ui::GrepOp {
-                    col: i as i32,
-                    ch: ch.to_string().into(),
-                    kind: match ch {
-                        '!' => "not",
-                        '"' => "quote",
-                        _ => "or",
-                    }
-                    .into(),
-                });
-            }
-        }
-    }
-    w.set_grep_caps(ModelRc::new(VecModel::from(caps)));
-    w.set_grep_ops(ModelRc::new(VecModel::from(ops)));
-}
-
 pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, append: bool) {
-    style_pattern(w, &s.grep.pattern, s.grep.mode);
+    crate::grep_field::redraw(w, s, cat);
     if !s.grep.open || s.grep.pattern.is_empty() {
         s.grep.generation += 1;
         s.grep.files.clear();
@@ -379,6 +342,7 @@ pub fn wire(
     link: &Rc<Link>,
     cat: &Rc<RefCell<Rc<Catalogue>>>,
 ) {
+    crate::grep_field::wire(window, state, link, cat);
     {
         let (weak, state, link, cat) = (
             window.as_weak(),

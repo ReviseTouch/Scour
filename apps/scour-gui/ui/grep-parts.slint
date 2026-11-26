@@ -1,0 +1,292 @@
+// The content field's drawing: its capsules, the letters of the piece being
+// written, the pill over a capsule and what `:` offers. Rust places every
+// part (`grep_lay.rs`); the invisible input under it holds the text.
+
+import { Theme, Fonts } from "theme.slint";
+import { PairButton } from "widgets.slint";
+
+/// Letters drawn as typed: `role` 0 plain, 1 `|` `;` `(` `)`, 2 `!`, 3 a
+/// quote, 4 `~`.
+export struct GrepRun {
+    text: string,
+    x: length,
+    role: int,
+}
+
+/// A piece of the pattern drawn as a capsule; `hw` is its head's width,
+/// nought for a plain word.
+export struct GrepCap {
+    x: length,
+    w: length,
+    hw: length,
+    head: string,
+    not: bool,
+}
+
+/// What a capsule holds: 0 an inner capsule's ground, 1 a word, 2 the quiet
+/// "or" / "and", 3 a mark (≈, quotes).
+export struct GrepBit {
+    x: length,
+    w: length,
+    kind: int,
+    text: string,
+    not: bool,
+}
+
+export struct GrepSel {
+    x: length,
+    w: length,
+}
+
+/// A line of what `:` offers: its picture, name, what it does, its sign.
+export struct GrepRow {
+    icon: string,
+    label: string,
+    about: string,
+    sign: string,
+}
+
+export component GrepInk inherits Rectangle {
+    in property <[GrepRun]> runs;
+    in property <[GrepCap]> caps;
+    in property <[GrepBit]> bits;
+    in property <[GrepSel]> sels;
+    in property <int> hov: -1;
+    in property <length> shift;
+
+    for c[i] in root.caps: Rectangle {
+        x: c.x - root.shift;
+        y: (root.height - self.height) / 2;
+        width: c.w;
+        height: 24px;
+        border-radius: 6px;
+        border-width: 1px;
+        property <brush> ring: c.not ? Theme.cap-neg-ring : Theme.cap-read-ring;
+        background: c.not ? Theme.cap-neg : Theme.cap-read;
+        border-color: i == root.hov ? Theme.ink-3 : self.ring;
+        if c.hw > 0: Rectangle {
+            x: 0px;
+            width: c.hw;
+            opacity: 0.55;
+            background: parent.ring;
+            border-top-left-radius: 5px;
+            border-bottom-left-radius: 5px;
+        }
+        if c.hw > 0: Rectangle {
+            x: c.hw;
+            width: 1px;
+            background: parent.ring;
+        }
+        if c.hw > 0: Text {
+            x: 6px;
+            height: parent.height;
+            text: c.head;
+            color: c.not ? Theme.q-not : Theme.q-bad;
+            font-family: Fonts.mono;
+            font-size: 10.5px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    for b in root.bits: Rectangle {
+        x: b.x - root.shift;
+        width: b.w;
+        if b.kind == 0: Rectangle {
+            y: (root.height - 18px) / 2;
+            height: 18px;
+            border-radius: 4px;
+            background: Theme.panel-2;
+            opacity: 0.75;
+        }
+        if b.kind != 0: Text {
+            height: root.height;
+            text: b.text;
+            font-family: Fonts.mono;
+            font-size: b.kind == 2 ? 10.5px : 14px;
+            font-weight: b.kind == 1 ? 500 : 600;
+            vertical-alignment: center;
+            color: b.kind == 2 ? Theme.ink-3
+                : b.not ? Theme.q-not
+                : b.kind == 3 ? Theme.q-bad : Theme.ink;
+        }
+    }
+    for s in root.sels: Rectangle {
+        x: s.x - root.shift;
+        y: (root.height - self.height) / 2;
+        width: s.w;
+        height: 20px;
+        background: Theme.selection;
+    }
+    for r in root.runs: Text {
+        x: r.x - root.shift;
+        height: root.height;
+        text: r.text;
+        font-family: Fonts.mono;
+        font-size: 14px;
+        font-weight: r.role == 0 ? 500 : 600;
+        vertical-alignment: center;
+        color: r.role == 2 ? Theme.q-not
+            : r.role == 3 ? Theme.q-glob
+            : r.role == 1 || r.role == 4 ? Theme.q-key : Theme.ink;
+    }
+}
+
+// Over a capsule: take it out, exclude it or not, a letter off or not. The
+// buttons press on the way down, so the field keeps the keyboard.
+export component GrepPill inherits Rectangle {
+    // A capsule is under the pointer.
+    in property <bool> on;
+    in property <bool> fz;
+    in property <bool> fz-on;
+    in property <bool> not;
+    callback act(string);
+    property <bool> fz-hov;
+    out property <bool> over: bridge.has-hover || self.fz-hov || neg.hovered || drop.hovered;
+    // Kept a moment after the pointer leaves, so it can be reached.
+    property <bool> keep;
+    property <bool> active: root.on || root.over;
+    changed active => {
+        if (self.active) {
+            self.keep = true;
+        }
+    }
+    Timer {
+        interval: 220ms;
+        running: !root.active && root.keep;
+        triggered => { root.keep = false; }
+    }
+    visible: root.active || root.keep;
+    width: row.preferred-width + 4px;
+    height: 26px;
+    border-radius: 13px;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.line;
+    drop-shadow-blur: 4px;
+    drop-shadow-color: #00000030;
+    drop-shadow-offset-y: 1px;
+    bridge := TouchArea {
+        x: -8px;
+        y: -4px;
+        width: parent.width + 16px;
+        height: parent.height + 12px;
+    }
+    row := HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        if root.fz: PairButton {
+            label: "≈";
+            on: root.fz-on;
+            changed hovered => { root.fz-hov = self.hovered; }
+            pressed => { root.act("fz"); }
+        }
+        neg := PairButton {
+            label: root.not ? "+" : "!";
+            kind: 1;
+            pressed => { root.act("neg"); }
+        }
+        drop := PairButton {
+            label: "✕";
+            kind: 2;
+            pressed => {
+                root.keep = false;
+                root.act("drop");
+            }
+        }
+    }
+}
+
+// What `:` offers at the caret, in the query launcher's look.
+export component GrepMenu inherits Rectangle {
+    in property <[GrepRow]> rows;
+    in property <int> sel;
+    callback pick(int);
+    width: 320px;
+    height: body.preferred-height;
+    background: Theme.panel-2;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    border-radius: 10px;
+    clip: true;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #0000005c;
+    drop-shadow-offset-y: 6px;
+    TouchArea {}
+    body := VerticalLayout {
+        padding-top: 4px;
+        padding-bottom: 4px;
+        for r[i] in root.rows: Rectangle {
+            height: 40px;
+            background: i == root.sel ? Theme.selection : t.has-hover ? Theme.hover : transparent;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 7px;
+                        border-width: 1px;
+                        background: Theme.cap-read;
+                        border-color: Theme.cap-read-ring;
+                        if r.icon == "approx": Image {
+                            x: 6px;
+                            y: 6px;
+                            width: 16px;
+                            height: 16px;
+                            source: @image-url("icons/tools/lens-fuzzy.svg");
+                            colorize: Theme.q-bad;
+                        }
+                        if r.icon != "approx": Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: r.icon == "quote" ? "\u{201c}\u{201d}" : r.icon == "or" ? "∨"
+                                : r.icon == "not" ? "⊘" : "Aa";
+                            color: Theme.q-bad;
+                            font-size: r.icon == "case" ? 11px : 15px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: r.label;
+                        color: Theme.ink;
+                        font-size: 13.5px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: r.about;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        overflow: elide;
+                    }
+                }
+                Text {
+                    width: 34px;
+                    text: r.sign;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+            t := TouchArea {
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        root.pick(i);
+                    }
+                }
+            }
+        }
+    }
+}

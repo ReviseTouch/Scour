@@ -35,6 +35,8 @@ mod autostart;
 mod disks;
 mod drag;
 mod frame;
+mod grep_field;
+mod grep_lay;
 mod grep_ui;
 mod hotkey;
 mod install;
