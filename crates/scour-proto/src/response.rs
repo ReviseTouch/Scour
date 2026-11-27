@@ -130,6 +130,7 @@ pub enum Response {
         folders: Vec<FolderState>,
     },
     Preview(scour_preview::Look),
+    Flow(scour_flow::Flow),
     Thumbnails(scour_thumbs::Made),
     Explain {
         /// The query as it was understood.

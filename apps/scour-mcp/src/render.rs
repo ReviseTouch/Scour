@@ -206,6 +206,8 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        // No tool asks for it; the words of it, should one.
+        Response::Flow(f) => f.text(),
         // Marked: only one of the two halves can be edited at all.
         Response::Rules {
             builtin_paths,

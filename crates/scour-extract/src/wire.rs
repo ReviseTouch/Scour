@@ -8,11 +8,18 @@ use std::io::{self, Read, Write};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Words(String),
+    /// A word processor's document as a preview draws it: `scour-flow`'s
+    /// model as JSON, asked for with [`FLOW`] before the format.
+    Flow(String),
     /// It opened and holds no text.
     NoText,
     /// It would not open; the reason, for a log.
     Failed(String),
 }
+
+/// A request whose format starts with this asks for the document's flow, not
+/// its words: `flow:docx`.
+pub const FLOW: &str = "flow:";
 
 /// Larger frames are refused: a peer that says more is not one of ours.
 const MOST: u64 = 512 << 20;
@@ -44,6 +51,7 @@ pub fn write_answer(w: &mut impl Write, answer: &Answer) -> io::Result<()> {
         Answer::Words(text) => (0, text.as_bytes()),
         Answer::NoText => (1, b""),
         Answer::Failed(why) => (2, why.as_bytes()),
+        Answer::Flow(json) => (3, json.as_bytes()),
     };
     w.write_all(&[tag])?;
     frame(w, body)?;
@@ -57,6 +65,7 @@ pub fn read_answer(r: &mut impl Read) -> io::Result<Answer> {
     Ok(match tag {
         0 => Answer::Words(text),
         1 => Answer::NoText,
+        3 => Answer::Flow(text),
         _ => Answer::Failed(text),
     })
 }
@@ -112,6 +121,7 @@ mod tests {
             Answer::Words("şey".into()),
             Answer::NoText,
             Answer::Failed("why".into()),
+            Answer::Flow("{\"blocks\":[]}".into()),
         ] {
             let mut pipe = Vec::new();
             write_answer(&mut pipe, &answer).unwrap();

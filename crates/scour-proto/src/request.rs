@@ -164,6 +164,12 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line: Option<u64>,
     },
+    /// A word processor's document as a preview draws it: its paragraphs,
+    /// tables and pictures, flowing to the panel's width. Read by an extractor,
+    /// as a document's words are; fenced like `preview`.
+    Flow {
+        path: String,
+    },
     /// What the walk is told to skip, and what a person may change about it. The
     /// built-in and configured exclusions cannot be edited, so they stay apart from
     /// what a window added. No counts: what a rule excludes is not in the index.
@@ -342,6 +348,7 @@ impl Request {
             | Request::Places {}
             | Request::Volumes {}
             | Request::Preview { .. }
+            | Request::Flow { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
             | Request::Grep { .. }
@@ -376,6 +383,7 @@ impl Request {
             | Request::Postpone { .. }
             | Request::Choose { .. }
             | Request::Preview { .. }
+            | Request::Flow { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
             | Request::Grep { .. }
@@ -416,6 +424,7 @@ impl Request {
             Request::Postpone { .. } => "postpone",
             Request::Choose { .. } => "choose",
             Request::Preview { .. } => "preview",
+            Request::Flow { .. } => "flow",
             Request::Thumbnails { .. } => "thumbnails",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",

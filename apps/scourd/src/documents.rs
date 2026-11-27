@@ -20,6 +20,8 @@ use pool::Pool;
 /// Kept when nobody said: a gigabyte of compressed text is a few hundred
 /// thousand documents.
 const DEFAULT_MB: u32 = 1024;
+/// A document larger than this is not drawn: its text still shows.
+const MOST_FLOW_BYTES: u64 = 64 << 20;
 /// How often the cache is written out and its dead text weighed.
 const TIDY_EVERY: Duration = Duration::from_secs(300);
 
@@ -155,6 +157,28 @@ impl Documents {
         }
     }
 
+    /// A word processor's document as a preview draws it, read by an
+    /// extractor; held to the model's bounds here, whatever it sent.
+    pub fn flow(&self, path: &Path) -> Result<scour_flow::Flow, String> {
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !scour_flow::flows(extension) {
+            return Err("not a document that flows".into());
+        }
+        let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+        if len > MOST_FLOW_BYTES {
+            return Err("too large to draw".into());
+        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let format = format!("{}{extension}", scour_extract::wire::FLOW);
+        match self.pool.extract(&format, &bytes) {
+            Answer::Flow(json) => serde_json::from_str::<scour_flow::Flow>(&json)
+                .map(scour_flow::Flow::bounded)
+                .map_err(|e| e.to_string()),
+            Answer::Failed(why) => Err(why),
+            Answer::Words(_) | Answer::NoText => Err("the extractor did not draw it".into()),
+        }
+    }
+
     /// Every text taken so far written out: on the way down, so the last
     /// minutes' documents are not read again after a restart.
     pub fn flush(&self) {
@@ -204,7 +228,8 @@ impl Texts for Documents {
                 (DocText::Words(words.clone()), Kept::Words(words))
             }
             Answer::NoText => (DocText::NoText, Kept::NoText),
-            Answer::Failed(_) => (
+            // A flow answers only a flow's request: here, nonsense.
+            Answer::Failed(_) | Answer::Flow(_) => (
                 DocText::Broken,
                 Kept::Failed {
                     version: readers_version(),

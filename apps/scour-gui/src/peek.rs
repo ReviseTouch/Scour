@@ -368,6 +368,7 @@ impl ClonedModel for Option<&DocUi> {
 
 /// Clear any active multi-page document session on the UI thread.
 pub fn clear(w: &MainWindow) {
+    crate::flowing::clear(w);
     DOC.with(|cell| *cell.borrow_mut() = None);
     if w.get_peek_pages().row_count() > 0 {
         w.set_peek_pages(ModelRc::default());

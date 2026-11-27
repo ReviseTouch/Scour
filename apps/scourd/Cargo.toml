@@ -39,6 +39,7 @@ scour-places        = { workspace = true }
 scour-volumes       = { workspace = true }
 scour-thumbs        = { workspace = true }
 scour-preview       = { workspace = true }
+scour-flow          = { workspace = true }
 scour-source-fs     = { workspace = true }
 scour-extract       = { workspace = true }
 scour-textcache     = { workspace = true }

@@ -247,6 +247,9 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             }
         }
+        // No CLI command asks for a flow: a terminal draws the text, which
+        // `preview` prints. The words of it, should one.
+        Response::Flow(f) => print!("{}", f.text()),
         // No CLI command asks for thumbnails; the arm exists because the match
         // is exhaustive, and prints only the paths that now have a picture.
         Response::Thumbnails(made) => {

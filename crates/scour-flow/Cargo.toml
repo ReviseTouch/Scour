@@ -1,0 +1,22 @@
+[package]
+name        = "scour-flow"
+description = "A word processor's document as text that flows to the width it is shown at: the model, and its drawing as HTML."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **`serde` alone.** The model is filled in `scour-doctext`, in the extractor's
+# process, from a library that parses what anybody can put on a disk; it is
+# carried by the protocol and drawn by the faces. None of them may pull a
+# document reader in through it, so it reads no file and knows no format.
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

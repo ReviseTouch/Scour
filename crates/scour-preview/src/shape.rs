@@ -61,6 +61,12 @@ pub struct Look {
     pub from: u64,
     #[serde(default)]
     pub first_line: u64,
+    /// A word processor's document that can be drawn as it flows, with its
+    /// paragraphs, tables and pictures: asked for with `Request::Flow`. The
+    /// text in `head` stands until it comes. Set by the service, which holds
+    /// the reader.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flow: bool,
 }
 
 /// [`look_at`], and when it is text, the stretch around a place in it rather

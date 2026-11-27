@@ -34,6 +34,7 @@ pub(crate) use wording::*;
 mod autostart;
 mod disks;
 mod drag;
+mod flowing;
 mod frame;
 mod grep_field;
 mod grep_lay;
@@ -1108,6 +1109,7 @@ fn apply(
                 Response::Preview(look) => {
                     show_peek(w, cat, link, &path, &look);
                 }
+                Response::Flow(flow) => flowing::show(w, &path, flow),
                 Response::Stat(entry) => peek_facts(w, cat, &entry),
                 _ => {}
             }

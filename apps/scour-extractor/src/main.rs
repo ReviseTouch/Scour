@@ -23,6 +23,16 @@ fn main() {
 }
 
 fn answer(format: &str, cap: u64, bytes: &[u8]) -> Answer {
+    if let Some(extension) = format.strip_prefix(wire::FLOW) {
+        return match std::panic::catch_unwind(|| scour_doctext::flow(bytes, extension)) {
+            Ok(Ok(flow)) => match serde_json::to_string(&flow) {
+                Ok(json) => Answer::Flow(json),
+                Err(e) => Answer::Failed(e.to_string()),
+            },
+            Ok(Err(why)) => Answer::Failed(why),
+            Err(_) => Answer::Failed("the reader panicked".into()),
+        };
+    }
     let Some(format) = Format::named(format) else {
         return Answer::Failed(format!("no reader for {format}"));
     };
@@ -43,5 +53,10 @@ mod tests {
     fn an_unknown_format_and_a_broken_file_are_answered() {
         assert!(matches!(answer("xyz", 10, b""), Answer::Failed(_)));
         assert!(matches!(answer("pdf", 10, b"%PDF-junk"), Answer::Failed(_)));
+        assert!(matches!(
+            answer("flow:docx", 10, b"PK junk"),
+            Answer::Failed(_)
+        ));
+        assert!(matches!(answer("flow:xlsx", 10, b""), Answer::Failed(_)));
     }
 }

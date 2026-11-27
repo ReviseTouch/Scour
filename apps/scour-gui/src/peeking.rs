@@ -610,6 +610,12 @@ pub(super) fn show_peek(
     w.set_peek_shot(rows::blank());
     w.set_peek_has_shot(false);
 
+    // A word processor's document: its text now, drawn as it flows when it comes.
+    if look.flow {
+        link.send(Ask::Flow {
+            path: path.to_owned(),
+        });
+    }
     if look.shape == "text" && !look.head.is_empty() {
         w.set_peek_note(slint::SharedString::new());
         rail(w, look, &shown);

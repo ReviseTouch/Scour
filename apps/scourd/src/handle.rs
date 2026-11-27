@@ -215,12 +215,33 @@ fn run(
             let Ok(_as) = crate::as_owner::for_a_read() else {
                 return Err(scour_core::Error::PermissionDenied { path });
             };
-            Response::Preview(scour_preview::look_near(
-                &scour_core::path::to_path(&entry.path),
-                entry.is_dir,
-                at,
-                line,
-            ))
+            let native = scour_core::path::to_path(&entry.path);
+            let mut look = scour_preview::look_near(&native, entry.is_dir, at, line);
+            // Where its pages are not drawn, a word processor's document flows,
+            // when there is an extractor to read it.
+            look.flow = !entry.is_dir
+                && !scour_preview::office::can_convert()
+                && crate::documents::shared().is_some()
+                && native
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(scour_flow::flows);
+            Response::Preview(look)
+        }
+        Request::Flow { path } => {
+            let entry = engine.stat(&path)?;
+            let Ok(_as) = crate::as_owner::for_a_read() else {
+                return Err(scour_core::Error::PermissionDenied { path });
+            };
+            let Some(documents) = crate::documents::shared() else {
+                return Err(scour_core::Error::unsupported(
+                    "no extractor is installed to read documents",
+                ));
+            };
+            match documents.flow(&scour_core::path::to_path(&entry.path)) {
+                Ok(flow) => Response::Flow(flow),
+                Err(why) => return Err(scour_core::Error::Io { detail: why }),
+            }
         }
         // The same fence as `preview`, and it matters more: this runs a program
         // on the file. Its mtime is what the thumbnail standard requires. An

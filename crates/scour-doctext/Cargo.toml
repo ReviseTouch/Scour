@@ -11,11 +11,14 @@ publish.workspace      = true
 [lints]
 workspace = true
 
-# **Nothing of Scour's.** Linked by `apps/scour-extractor` alone: these
+# **Nothing of Scour's but a model.** Linked by `apps/scour-extractor` alone: these
 # libraries parse what anybody can put on a disk, so they run in a process
 # that may crash, and the service never links them. Pinned exactly — each
 # release of a 0.x library is a change to measure (`docs/bench/phase-0.md`).
 [dependencies]
 pdf_oxide    = { version = "=0.3.78", default-features = false }
 office_oxide = { version = "=0.1.17", default-features = false }
+# The one thing of Scour's: the model a word processor's document is drawn
+# from, which is `serde` alone and reads nothing (`crates/scour-flow`).
+scour-flow   = { workspace = true }
 mail-parser  = { version = "=0.11.9", default-features = false, features = ["full_encoding"] }

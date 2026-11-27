@@ -116,6 +116,10 @@ pub enum Ask {
     PeekFacts {
         path: String,
     },
+    /// A word processor's document as it flows, read by the service's extractor.
+    Flow {
+        path: String,
+    },
     /// What the preview shows of a folder, from the index and with no file read:
     /// its heaviest folders (`slot` 0), its heaviest files (1), its newest (2).
     PeekDir {
@@ -385,6 +389,7 @@ impl Freshness {
             // Dropped on arrival instead: the reply carries its path.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
+            | Ask::Flow { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
@@ -474,6 +479,7 @@ impl Link {
             // And this one reads the head of a file off a disk.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
+            | Ask::Flow { .. }
             | Ask::PeekDir { .. }
             | Ask::Lens { .. }
             | Ask::Narrow { .. }
@@ -610,6 +616,7 @@ fn spawn_lane(
                 | Ask::Biggest { path }
                 | Ask::Peek { path, .. }
                 | Ask::PeekFacts { path }
+                | Ask::Flow { path }
                 | Ask::PeekDir { path, .. } => path.clone(),
                 _ => String::new(),
             };
@@ -755,6 +762,7 @@ fn spawn_lane(
                     (0, Request::Preview { path, at, line }, Lane::Peek)
                 }
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
+                Ask::Flow { path } => (0, Request::Flow { path }, Lane::Peek),
                 Ask::PeekDir { request, .. } => (0, request, Lane::PeekDir),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Volumes => (0, Request::Volumes {}, Lane::Volumes),

@@ -20,7 +20,9 @@ const BEHIND_THE_ENGINE: &[&str] = &["scour-grep", "scour-dupes", "scour-export"
 const FACES: &[&str] = &["scour", "scour-gui", "scour-tui", "scour-web", "scour-mcp"];
 
 /// Crates that know nothing of Scour, so another program could take them.
-/// `scour-extract` is the one thing they may share: it reads containers.
+/// They may share two: `scour-extract`, which reads containers, and
+/// `scour-flow`, the model of a document that flows (`serde` alone), which the
+/// extractor's reader fills.
 const LEAVES: &[&str] = &[
     "scour-chart",
     "scour-clip",
@@ -28,6 +30,7 @@ const LEAVES: &[&str] = &[
     "scour-doctext",
     "scour-dupes",
     "scour-extract",
+    "scour-flow",
     "scour-grep",
     "scour-hotkey",
     "scour-icon",
@@ -43,7 +46,7 @@ const LEAVES: &[&str] = &[
     "scour-trash",
     "scour-volumes",
 ];
-const LEAVES_MAY_USE: &[&str] = &["scour-extract"];
+const LEAVES_MAY_USE: &[&str] = &["scour-extract", "scour-flow"];
 
 /// Every workspace crate and the `scour-*` crates it links outside tests and
 /// build scripts, on any target.

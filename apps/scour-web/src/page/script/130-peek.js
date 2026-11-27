@@ -654,6 +654,17 @@
             e.src = url;
             e.type = "application/pdf";
             shown(e);
+          } else if (meta.flow) {
+            /* A word processor's document, as it flows: a page of its own that
+               runs nothing (the frame and the answer are both sandboxed). */
+            const frame = document.createElement("iframe");
+            frame.className = "pflow";
+            frame.setAttribute("sandbox", "");
+            frame.setAttribute("referrerpolicy", "no-referrer");
+            frame.title = f.name;
+            frame.src = SERVICE.peekUrl(full, { flow: 1 });
+            shown(frame);
+            peekBody.classList.add("flow");
           } else if (meta.shape === "text") {
             /* Around the first find, not from the head: in a large file it can
                be megabytes in, past anything the head shows. */

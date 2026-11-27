@@ -5478,6 +5478,7 @@ dependencies = [
  "mail-parser",
  "office_oxide",
  "pdf_oxide",
+ "scour-flow",
 ]
 
 [[package]]
@@ -5538,6 +5539,15 @@ version = "0.2.0-alpha.12"
 dependencies = [
  "scour-doctext",
  "scour-extract",
+ "serde_json",
+]
+
+[[package]]
+name = "scour-flow"
+version = "0.2.0-alpha.12"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5563,6 +5573,7 @@ dependencies = [
  "clap",
  "copypasta",
  "i-slint-backend-winit",
+ "i-slint-common",
  "image",
  "rfd",
  "scour-chart",
@@ -5571,6 +5582,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-drag",
+ "scour-flow",
  "scour-hotkey",
  "scour-i18n",
  "scour-icon",
@@ -5722,6 +5734,7 @@ name = "scour-proto"
 version = "0.2.0-alpha.12"
 dependencies = [
  "scour-core",
+ "scour-flow",
  "scour-places",
  "scour-preview",
  "scour-settings",
@@ -5853,6 +5866,7 @@ dependencies = [
  "scour-client",
  "scour-config",
  "scour-core",
+ "scour-flow",
  "scour-hotkey",
  "scour-i18n",
  "scour-icon",
@@ -5884,6 +5898,7 @@ dependencies = [
  "scour-dupes",
  "scour-engine",
  "scour-extract",
+ "scour-flow",
  "scour-grep",
  "scour-hotkey",
  "scour-icon",

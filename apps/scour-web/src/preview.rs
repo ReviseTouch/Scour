@@ -70,8 +70,29 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
                         && !scour_thumbs::never_for(entry.kind().token())),
                 // Whether there is a previewer, so the button leads somewhere.
                 "native": QUICKLOOK.get().and_then(|q| q.as_ref()).is_some(),
+                // A word processor's document that flows: `?flow=1`.
+                "flow": look.flow,
             }),
         );
+        return;
+    }
+
+    // A word processor's document, drawn by this program as a page of its own.
+    if req.param("flow") == Some("1") {
+        match call(
+            client,
+            Request::Flow {
+                path: entry.path.clone(),
+            },
+        ) {
+            Ok(Response::Flow(flow)) => {
+                if let Err(e) = send_flow(stream, &flow) {
+                    http::fail(stream, "500 Internal Server Error", &e.to_string());
+                }
+            }
+            Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+            Err(e) => http::fail(stream, "415 Unsupported Media Type", &e),
+        }
         return;
     }
 
@@ -122,6 +143,27 @@ const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
      X-Content-Type-Options: nosniff\r\n\
      Content-Security-Policy: sandbox; default-src 'none'\r\n\
      Connection: close\r\n";
+
+/// A flow's page. Its own policy, not [`PREVIEW_HEADERS`]': the page has
+/// pictures, as `data:` URLs, and styles, inline — and still no script, nothing
+/// fetched, and an opaque origin of its own.
+fn send_flow(stream: &mut TcpStream, flow: &scour_flow::Flow) -> std::io::Result<()> {
+    let page = scour_flow::html(flow);
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Content-Security-Policy: sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'\r\n\
+         Referrer-Policy: no-referrer\r\n\
+         Connection: close\r\n\r\n",
+        page.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(page.as_bytes())?;
+    stream.flush()
+}
 
 /// The head of a text file, or the stretch around `at` (a byte) or `line`
 /// (counted from one): where a content search found something.

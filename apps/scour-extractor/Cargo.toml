@@ -16,3 +16,4 @@ workspace = true
 [dependencies]
 scour-doctext = { workspace = true }
 scour-extract = { workspace = true }
+serde_json    = { workspace = true }

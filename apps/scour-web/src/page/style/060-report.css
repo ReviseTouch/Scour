@@ -253,6 +253,9 @@
   .peek-body .cap1 { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
   .peek-body audio { width: 100%; }
   .peek-body embed { width: 100%; height: 100%; border: 0; }
+  /* A document that flows: its own page, white paper edge to edge. */
+  .peek-body.flow { padding: 0; align-items: stretch; background: #fff; }
+  .peek-body .pflow { flex: 1; width: 100%; height: 100%; border: 0; background: #fff; }
   .peek-body .none {
     text-align: center; color: var(--ink-3); font-size: 12px; line-height: 1.6;
   }

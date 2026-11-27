@@ -25,8 +25,13 @@ pub fn is_office(path: &Path) -> bool {
 }
 
 /// True when LibreOffice or (on Windows) Microsoft Office can render PDFs.
+///
+/// **Never on Linux and the like** (27 November): seconds a document is not
+/// what a preview is for. A word processor's document flows there instead
+/// (`scour-flow`), and a sheet or a slide shows its text. Windows and macOS
+/// keep their pages.
 pub fn can_convert() -> bool {
-    soffice().is_some() || ms_office_available()
+    cfg!(any(windows, target_os = "macos")) && (soffice().is_some() || ms_office_available())
 }
 
 /// Convert an Office document to a cached PDF, returning its path.

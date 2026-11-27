@@ -254,6 +254,38 @@ export struct PeekPage {
     shot: image,
 }
 
+// A table's cell in a document that flows: its text and its share of the row.
+export struct FlowCell {
+    text: styled-text,
+    share: float,
+    shade: color,
+    shaded: bool,
+}
+
+// One line of a document that flows, as the preview draws it: a paragraph
+// (`kind` 0), a table's row (1), a picture (2) or a break (3). Sizes are in
+// ems of the body's text.
+export struct FlowRow {
+    kind: int,
+    text: styled-text,
+    size: float,
+    // 0 left, 1 centre, 2 right.
+    align: int,
+    indent: float,
+    before: float,
+    after: float,
+    mark: string,
+    shade: color,
+    shaded: bool,
+    cells: [FlowCell],
+    ruled: bool,
+    // A table's last row, which draws the table's bottom edge.
+    last: bool,
+    picture: image,
+    pic-w: float,
+    pic-h: float,
+}
+
 // One bar of the time ribbon: how many files fall in it, and which of the six
 // age bands it is — the same band the rows' dates are painted with.
 export struct Bar {

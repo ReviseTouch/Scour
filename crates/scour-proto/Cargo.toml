@@ -17,6 +17,7 @@ scour-settings = { workspace = true }
 scour-places        = { workspace = true }
 scour-volumes       = { workspace = true }
 scour-preview       = { workspace = true }
+scour-flow          = { workspace = true }
 scour-thumbs        = { workspace = true }
 serde      = { workspace = true }
 

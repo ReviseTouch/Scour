@@ -13,6 +13,7 @@ members = [
     "crates/scour-client",
     "crates/scour-i18n",
     "crates/scour-preview",
+    "crates/scour-flow",
     "crates/scour-dupes",
     "crates/scour-grep",
     "crates/scour-extract",
@@ -78,7 +79,8 @@ scour-source-fs     = { path = "crates/scour-source-fs" }
 scour-config        = { path = "crates/scour-config" }
 scour-i18n          = { path = "crates/scour-i18n" }
 scour-preview       = { path = "crates/scour-preview" }
-scour-dupes         = { path = "crates/scour-dupes" }
+scour-flow          = { path = "crates/scour-flow" }
+scour-dupes        = { path = "crates/scour-dupes" }
 scour-grep          = { path = "crates/scour-grep" }
 scour-extract       = { path = "crates/scour-extract" }
 scour-doctext       = { path = "crates/scour-doctext" }

@@ -1,0 +1,138 @@
+// A word processor's document as the preview draws it: white paper, its
+// paragraphs, tables and pictures flowing to the panel's width (`scour-flow`).
+
+import { FlowRow, FlowCell } from "types.slint";
+import { ListView } from "std-widgets.slint";
+
+// Paper is paper in a dark theme too: the document's own colours are for it.
+global Paper {
+    out property <color> ink: #1f2328;
+    out property <color> rule: #9aa0a6;
+    out property <color> faint: #d0d7de;
+    out property <length> margin: 16px;
+}
+
+component FlowLine {
+    in property <FlowRow> line;
+    in property <length> em;
+
+    VerticalLayout {
+        if root.line.kind == 0: Rectangle {
+            background: root.line.shaded ? root.line.shade : transparent;
+            HorizontalLayout {
+                padding-left: Paper.margin + root.line.indent * root.em;
+                padding-right: Paper.margin;
+                padding-top: root.line.before * root.em;
+                padding-bottom: root.line.after * root.em;
+                if root.line.mark != "": Text {
+                    text: root.line.mark;
+                    width: 1.6 * root.em;
+                    color: Paper.ink;
+                    font-size: root.line.size * root.em;
+                    vertical-alignment: top;
+                }
+                StyledText {
+                    text: root.line.text;
+                    default-color: Paper.ink;
+                    default-font-size: root.line.size * root.em;
+                    horizontal-alignment: root.line.align == 1 ? center : root.line.align == 2 ? right : left;
+                    // An empty paragraph is a line of space, as it is in the document.
+                    min-height: root.line.size * root.em * 1.35;
+                }
+            }
+        }
+
+        // Each cell draws its top and left edges, the row its right one, and the
+        // table's last row its bottom: one pixel wherever two cells meet.
+        if root.line.kind == 1: Rectangle {
+            HorizontalLayout {
+                padding-left: Paper.margin;
+                padding-right: Paper.margin;
+                for cell in root.line.cells: Rectangle {
+                    width: cell.share * (root.width - 2 * Paper.margin);
+                    background: cell.shaded ? cell.shade : transparent;
+                    VerticalLayout {
+                        padding-left: 5px;
+                        padding-right: 5px;
+                        padding-top: 3px;
+                        padding-bottom: 3px;
+                        StyledText {
+                            text: cell.text;
+                            default-color: Paper.ink;
+                            default-font-size: 0.95 * root.em;
+                        }
+                    }
+                    if root.line.ruled: Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Paper.rule;
+                    }
+                    if root.line.ruled: Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: 1px;
+                        height: parent.height;
+                        background: Paper.rule;
+                    }
+                }
+            }
+            if root.line.ruled: Rectangle {
+                x: parent.width - Paper.margin - 1px;
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                background: Paper.rule;
+            }
+            if root.line.ruled && root.line.last: Rectangle {
+                x: Paper.margin;
+                y: parent.height - 1px;
+                width: parent.width - 2 * Paper.margin;
+                height: 1px;
+                background: Paper.rule;
+            }
+        }
+
+        if root.line.kind == 2: HorizontalLayout {
+            padding-left: Paper.margin;
+            padding-right: Paper.margin;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            alignment: start;
+            Image {
+                source: root.line.picture;
+                width: min(root.line.pic-w * root.em, root.width - 2 * Paper.margin);
+                height: self.width * root.line.pic-h / max(0.01, root.line.pic-w);
+                image-fit: contain;
+            }
+        }
+
+        if root.line.kind == 3: Rectangle {
+            height: 21px;
+            Rectangle {
+                x: Paper.margin;
+                y: 10px;
+                width: parent.width - 2 * Paper.margin;
+                height: 1px;
+                background: Paper.faint;
+            }
+        }
+    }
+}
+
+export component FlowView inherits Rectangle {
+    in property <[FlowRow]> rows;
+    // The body's size: everything else is in ems of it.
+    in property <length> em: 13px;
+    background: #ffffff;
+
+    ListView {
+        width: parent.width;
+        height: parent.height;
+        for row in root.rows: FlowLine {
+            line: row;
+            em: root.em;
+        }
+    }
+}
