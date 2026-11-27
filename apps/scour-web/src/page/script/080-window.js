@@ -238,7 +238,6 @@
         tr.className = "ghost";
         tr.removeAttribute("data-path");
         tr.removeAttribute("title");
-        tr.style.animationDelay = "";
         // From the second cell on: the first holds the freshness rule, which
         // is an element rather than text, and emptying it takes the rule away.
         if (tr.__nm) tr.__nm.textContent = "";
@@ -254,7 +253,6 @@
     // fact the panel shows.
     tr.__row = f;
     tr.className = f.fresh ? "fresh" : "";
-    tr.style.animationDelay = f.fresh ? `-${Date.now() - f.fresh}ms` : "";
     if (tr.dataset.path !== full) {
       tr.dataset.path = full;
       tr.title = full;

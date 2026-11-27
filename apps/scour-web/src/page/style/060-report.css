@@ -162,6 +162,9 @@
     display: flex; align-items: center; justify-content: center;
     padding: calc(var(--u) * 3);
   }
+  /* While a selection is made in the preview, nothing else can join it. */
+  body.peek-selecting { user-select: none; }
+  body.peek-selecting .peek-body { user-select: text; }
   /* Text fills the panel; a picture is centred in it. */
   .peek-body.text { display: block; padding: 0; }
   .peek-body pre {

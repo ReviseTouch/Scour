@@ -96,8 +96,8 @@
     dropRows(start, WINDOW);
     rows.forEach((f, i) => {
       const p = fullPath(f);
-      /* The moment it arrived, not a flag: the row is redrawn while it is
-         highlighted and the fade has to carry on rather than restart. */
+      /* The moment it arrived, not a flag: `armFresh` takes the tint off by
+         its age, however often the row is redrawn meanwhile. */
       if (arrivals.has(p)) f.fresh = arrivals.get(p);
       LIST.rows.set(start + i, f);
       LIST.seen.set(p, (LIST.seen.get(p) || 0) + 1);

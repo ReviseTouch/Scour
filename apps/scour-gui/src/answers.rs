@@ -241,8 +241,9 @@ pub(super) fn search(cx: &Cx, got: Got) {
             }
         }
     }
-    // Slint's `animate` interpolates when a property *changes*, and the
-    // arrival wash is 1.6 s.
+    // The arrival wash stays 1.6 s and goes at once: two frames, where a
+    // fade drew every frame of it (2026-11-27: 28–48 % of a core while files
+    // arrived at the top of the list).
     if any_fresh {
         let model: Rc<rows::Rows> = Rc::clone(rows);
         slint::Timer::single_shot(std::time::Duration::from_millis(1600), move || {

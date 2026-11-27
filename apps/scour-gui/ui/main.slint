@@ -512,8 +512,6 @@ export component MainWindow inherits Window {
     in property <[Slot]> slots;
     /// The first row the slots cover, set by Rust with them.
     in property <int> slot-from;
-    /// The list moved a moment ago; set and cleared by Rust.
-    in property <bool> moving;
     /// How many slots the list wants: a screenful, a row half off the top, and
     /// one each way to spare. Read by Rust, which places them.
     out property <int> pool: Math.ceil(list.visible-height / Theme.row-height) + 3;
@@ -1389,7 +1387,6 @@ export component MainWindow inherits Window {
                     border-bottom-right-radius: root.grep-open ? 0px : 8px;
                     border-width: Theme.hair;
                     border-color: input.has-focus ? Theme.focus : Theme.line;
-                    animate border-color { duration: 120ms; }
                     // One number for every layer: the runs, the capsules, the
                     // caret and a press are all placed from it.
                     // Past the scope chip, which stands at the start of the
@@ -3244,15 +3241,10 @@ export component MainWindow inherits Window {
                             }
 
                             // The arrival wash: translucent, so a row that is both
-                            // new and selected shows both, and it fades away. Not
-                            // while the list moves: a slot handed from a new row
-                            // to an old one would fade on the wrong row.
+                            // new and selected shows both. No fade: nothing here
+                            // is animated, each frame of one is a frame drawn.
                             Rectangle {
                                 background: here.fresh ? Theme.t0.with-alpha(0.22) : transparent;
-                                animate background {
-                                    duration: root.moving ? 0ms : 1600ms;
-                                    easing: ease-out;
-                                }
                             }
 
                             // Where the keyboard is, which is not what is selected:
@@ -3516,7 +3508,6 @@ export component MainWindow inherits Window {
                                     background: cell.fresh
                                         ? Theme.t0.with-alpha(0.22)
                                         : transparent;
-                                    animate background { duration: 1600ms; easing: ease-out; }
                                 }
 
                                 // And where the keyboard is — see the table's
@@ -3840,7 +3831,6 @@ export component MainWindow inherits Window {
                         background: grab.pressed ? Theme.ink-2
                             : grab.has-hover ? Theme.ink-3 : Theme.line;
                         visible: root.sb-span > 0px;
-                        animate background { duration: 120ms; }
                     }
 
                     grab := TouchArea {

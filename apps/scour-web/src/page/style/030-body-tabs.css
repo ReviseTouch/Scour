@@ -46,8 +46,9 @@
   }
   .tabplus:hover { background: var(--hover); }
   .rail { overflow-y: auto; min-height: 0; }
-  /* The previous query's counts, dimmed; the 0.12s delay stops a flicker. */
-  .rail.settling { opacity: .55; transition: opacity .18s ease-in .12s; }
+  /* The previous query's counts, dimmed: in one step, 0.12 s late, so a
+     quick answer never dims them at all. */
+  .rail.settling { opacity: .55; transition: opacity 0s .12s; }
   @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }
 
   .rail {

@@ -48,7 +48,7 @@
   let freshTimer = null;
   /* What turned up and when, bounded by the highlight's own length. */
   const arrivals = new Map();
-  const FRESH_MS = 1800;       /* and it must outlast the CSS animation */
+  const FRESH_MS = 1600;       /* as long as the window's */
 
   /* How many times its own cost a background refresh waits: on 1.35 M matches
    * the three-second count refresh took 930 ms each time, and at ten it can

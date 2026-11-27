@@ -10,7 +10,7 @@
   @media (max-width: 620px) { .lens.lens-place .lp-grid { grid-template-columns: 1fr; } .lens.lens-place .lp-left { display: none; } }
   .lp-top { flex: none; padding-top: 10px; border-bottom: 1px solid var(--line); }
   .lp-strip { display: flex; gap: 2px; height: 10px; margin: 0 12px; border-radius: 5px; overflow: hidden; }
-  .lp-strip .seg { flex: 0 1 0; min-width: 4px; cursor: pointer; transition: opacity .15s; }
+  .lp-strip .seg { flex: 0 1 0; min-width: 4px; cursor: pointer; }
   .lp-strip .seg.dim { opacity: .22; }
   .lp-strip-l {
     display: flex; justify-content: space-between; gap: 10px; padding: 4px 12px 8px;
@@ -64,12 +64,10 @@
   .lp-tile .st::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
   .lp-tile .st.live::before { background: var(--t0); }
   .lp-tile .st.polled::before { background: var(--t3); }
-  .lp-tile .st.walking::before { background: var(--focus); animation: lp-pulse 1s infinite; }
+  .lp-tile .st.walking::before { background: var(--focus); }
   .lp-tile .st.asking::before { background: var(--q-bad); }
   .lp-tile .st.partly::before { background: none; box-shadow: inset 0 0 0 1.5px var(--t3); }
   .lp-tile .st.off::before { background: none; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
-  @keyframes lp-pulse { 50% { opacity: .35; } }
-  @media (prefers-reduced-motion: reduce) { .lp-tile .st.walking::before { animation: none; } .lp-strip .seg { transition: none; } }
   .lp-tile .ask { font: 500 11.5px/1.35 var(--sans); color: var(--ink-2); }
   .lp-tile .acts { display: flex; flex-wrap: wrap; gap: 5px; }
   .lp-btn {

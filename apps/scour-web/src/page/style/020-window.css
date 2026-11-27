@@ -36,7 +36,6 @@
     height: 34px; padding: 0 10px;
     border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
     color: var(--ink-2); font: 500 12.5px/1 var(--sans); cursor: pointer;
-    transition: border-color .12s, background .12s, color .12s;
   }
   .qtrig .gi { font: 600 13px/1 var(--mono); color: var(--ink-3); }
   .qtrig:hover, .qfilter:hover, .qfilter[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
@@ -518,7 +517,7 @@
   .lp-dir > :not(.wbar) { position: relative; z-index: 1; }
   .lp-dir .dn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12.5px var(--mono); }
   .lp-dir .dm { font: 500 11px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
-  .lp-dir .da { display: inline-flex; gap: 3px; opacity: .55; transition: opacity .1s; flex: none; }
+  .lp-dir .da { display: inline-flex; gap: 3px; opacity: .55; flex: none; }
   .lp-dir:hover .da, .lp-dir.on .da { opacity: 1; }
   .lp-dir .da button {
     width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 5px;
@@ -612,13 +611,13 @@
   .meter .ms  { color: var(--ink-3); font-weight: 600; }
   .meter .sep { color: var(--line); }
   .meter #rows.reading { color: var(--q-key); font-weight: 600; }
-  /* The one thing on the line that turns: files are being read. */
+  /* Files are being read: a ring, still — a turning one is a frame drawn
+     every frame for as long as the reading lasts. */
   .meter #rows.reading::before {
     content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
     vertical-align: -1px; border: 2px solid var(--line); border-top-color: var(--q-key);
-    border-radius: 50%; animation: reading-turns .8s linear infinite;
+    border-radius: 50%;
   }
-  @keyframes reading-turns { to { transform: rotate(360deg); } }
   .meter .reread {
     flex: none; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px;
     background: none; color: var(--ink-2); font: inherit; cursor: pointer;

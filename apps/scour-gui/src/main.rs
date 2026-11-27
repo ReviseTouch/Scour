@@ -810,22 +810,9 @@ fn main() -> Result<()> {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let weak = window.as_weak();
-        // Restarted on every move, so it fires a moment after the last one.
-        let still = Rc::new(slint::Timer::default());
         window.on_moved(move || {
             stir(&state, &link);
             if let Some(w) = weak.upgrade() {
-                w.set_moving(true);
-                let weak = w.as_weak();
-                still.start(
-                    slint::TimerMode::SingleShot,
-                    std::time::Duration::from_millis(300),
-                    move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_moving(false);
-                        }
-                    },
-                );
                 place(&w, &slots);
                 follow(&w, &state, &link, &rows);
             }

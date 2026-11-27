@@ -54,7 +54,7 @@ test('expensive refreshes never overlap and keep the final update', async () => 
 function listContext() {
   const c = context();
   Object.assign(c, {
-    WINDOW: 200, KEEP_WINDOWS: 32, AHEAD_WINDOWS: 2, FRESH_MS: 1800,
+    WINDOW: 200, KEEP_WINDOWS: 32, AHEAD_WINDOWS: 2, FRESH_MS: 1600,
     LIST: { rows: new Map(), seen: new Map(), at: new Map(), pending: new Map(), total: 20000, exact: true },
     arrivals: new Map(), fullPath: f => `${f.path}/${f.name}`, armFresh() {},
     reach: () => c.LIST.total, range: [0, 60], visibleRange: () => c.range,

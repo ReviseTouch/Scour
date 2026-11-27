@@ -20,27 +20,16 @@
   tbody tr.spacer:hover, tbody tr.ghost:hover { background: none; }
   tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
 
-  /* Fading over 1.6 s, as an overlay's opacity and never the row's
-     `background`: animating that costs 36.2% of a core against 22.4%. The
-     delay is inherited, so a repaint carries a half-finished fade. */
+  /* An arrival's tint, on an overlay so a selected row shows both; it comes
+     off when `armFresh` takes the class away. No fade: nothing in Scour is
+     animated, a fade is every frame of it drawn. */
   tbody tr.fresh { position: relative; z-index: 0; }
   tbody tr.fresh::after {
     content: ""; position: absolute; inset: 0; z-index: -1;
     pointer-events: none;
     background: color-mix(in srgb, var(--t0) 22%, transparent);
-    will-change: opacity;
-    animation: arrived 1.6s ease-out forwards;
-    animation-delay: inherit;
   }
   tbody tr.fresh td:first-child { box-shadow: inset 2px 0 0 var(--t0); }
-  @keyframes arrived {
-    from { opacity: 1; }
-    to   { opacity: 0; }
-  }
-  /* No tint at all: `animation: none` would park the overlay at full opacity. */
-  @media (prefers-reduced-motion: reduce) {
-    tbody tr.fresh::after { display: none; }
-  }
 
   /* A popover: a step off the ground, a soft far shadow, 32 px rows and
      13.5 px labels — the window's menu, measure for measure. */

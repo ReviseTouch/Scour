@@ -6,6 +6,24 @@
   const peekName = document.getElementById("peek-name");
   const peekFacts = document.getElementById("peek-facts");
   const peekFound = document.getElementById("peek-found");
+  /* A selection begun in the preview stays in it, and Ctrl+A there takes its
+     text alone: the rest of the page is out of its reach until a press
+     elsewhere. A drag that left the text ran up through the whole page. */
+  document.addEventListener("mousedown", (e) => {
+    document.body.classList.toggle("peek-selecting", peekBody.contains(e.target));
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || (e.key !== "a" && e.key !== "A")) return;
+    if (peek.hidden || !document.body.classList.contains("peek-selecting")) return;
+    if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+    e.preventDefault();
+    const all = document.createRange();
+    all.selectNodeContents(peekBody);
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(all);
+  });
+
   /* Where the file holds the text a `content:` query asked for. */
   function peekFoundOf(f) {
     const found = (f && f.found) || [];
