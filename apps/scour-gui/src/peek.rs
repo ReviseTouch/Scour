@@ -46,6 +46,9 @@ enum Task {
         path: String,
         is_image: bool,
         px: u32,
+        /// Where the first find falls, as a share of the document's text;
+        /// below zero when nothing was searched for.
+        at: f32,
         waiting_on_service: bool,
         reading_note: String,
         nothing_note: String,
@@ -146,6 +149,7 @@ fn run_open(
     path: String,
     is_image: bool,
     px: u32,
+    at: f32,
     waiting: bool,
     reading: String,
     nothing: String,
@@ -158,9 +162,12 @@ fn run_open(
         if !q.is_current(seq) {
             return;
         }
-        let first_n = (doc.info.pages as usize).min(2);
-        let mut initial = Vec::with_capacity(first_n);
-        for p in 1..=(first_n as u32) {
+        // The two pages the view opens on: where the find is, if there is one.
+        let pages = doc.info.pages.max(1);
+        let start = first_page(at, pages);
+        let last = (start + 1).min(pages);
+        let mut initial = Vec::with_capacity(2);
+        for p in start..=last {
             if !q.is_current(seq) {
                 return;
             }
@@ -270,6 +277,7 @@ fn worker() -> &'static Arc<Queue> {
                             path,
                             is_image,
                             px,
+                            at,
                             waiting_on_service,
                             reading_note,
                             nothing_note,
@@ -282,6 +290,7 @@ fn worker() -> &'static Arc<Queue> {
                                     path,
                                     is_image,
                                     px,
+                                    at,
                                     waiting_on_service,
                                     reading_note,
                                     nothing_note,
@@ -408,11 +417,21 @@ pub fn scrolled(w: &MainWindow, center: usize) {
     }
 }
 
+/// The page, counted from one, that holds `at` (a share of the text), or the
+/// first when there is no find.
+fn first_page(at: f32, pages: u32) -> u32 {
+    if at < 0.0 {
+        return 1;
+    }
+    ((at * pages as f32) as u32 + 1).clamp(1, pages)
+}
+
 /// Resolve the visual preview of `req.path` off the drawing thread.
 pub fn request(w: &MainWindow, req: Request<'_>) {
     let path = req.path.to_owned();
     let is_image = req.is_image;
     let px = req.px;
+    let at = w.get_peek_doc_at();
     let waiting_on_service = req.waiting_on_service;
     let reading_note = req.reading_note;
     let nothing_note = req.nothing_note;
@@ -422,6 +441,7 @@ pub fn request(w: &MainWindow, req: Request<'_>) {
         path,
         is_image,
         px,
+        at,
         waiting_on_service,
         reading_note,
         nothing_note,
@@ -434,6 +454,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_first_page_is_the_one_the_find_falls_on() {
+        assert_eq!(first_page(-1.0, 5), 1);
+        assert_eq!(first_page(0.0, 5), 1);
+        assert_eq!(first_page(0.53, 5), 3);
+        assert_eq!(first_page(0.999, 5), 5);
+        assert_eq!(first_page(1.0, 5), 5);
+        assert_eq!(first_page(0.5, 1), 1);
+    }
+
+    #[test]
     fn a_newer_open_supersedes_pending_open_and_pages() {
         let q = Queue::new();
         let s1 = q.push_open(|seq| Task::Open {
@@ -441,6 +471,7 @@ mod tests {
             path: "/a.pdf".into(),
             is_image: false,
             px: 480,
+            at: -1.0,
             waiting_on_service: false,
             reading_note: String::new(),
             nothing_note: String::new(),
@@ -459,6 +490,7 @@ mod tests {
             path: "/b.docx".into(),
             is_image: false,
             px: 480,
+            at: -1.0,
             waiting_on_service: false,
             reading_note: String::new(),
             nothing_note: String::new(),

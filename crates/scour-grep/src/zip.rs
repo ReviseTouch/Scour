@@ -30,6 +30,9 @@ struct EntryMeta {
     local_offset: u64,
     prio: u8,
     role: Role,
+    /// The document's whole running text, one entry of it (a word processor's
+    /// body): a find's place in it is its place in the document.
+    body: bool,
 }
 
 impl EntryMeta {
@@ -45,6 +48,7 @@ impl EntryMeta {
             local_offset: e.local_offset,
             prio: 2,
             role: Role::PlainStream,
+            body: false,
         }
     }
 
@@ -309,11 +313,19 @@ impl ZipScratch {
                 );
                 if ok {
                     tally.uncomp_spent += xml_raw.len();
-                    if let Some(cdata) = udf_cdata(&xml_raw) {
+                    let from = tally.hits.len();
+                    let text_len = if let Some(cdata) = udf_cdata(&xml_raw) {
                         scan_bytes(cdata, Kind::Text, label, pattern, opts, tally);
+                        cdata.len()
                     } else {
                         strip_xml(&xml_raw, &mut self.xml, cap);
                         scan_bytes(&self.xml, Kind::Text, label, pattern, opts, tally);
+                        self.xml.len()
+                    };
+                    if e.body && depth == 0 {
+                        for hit in &mut tally.hits[from..] {
+                            hit.text_len = Some(text_len as u64);
+                        }
                     }
                 }
                 self.out = xml_raw;
@@ -489,6 +501,7 @@ fn collect_in_chunk(
                     text: String::new(),
                     at: (0, 0),
                     marks: Vec::new(),
+                    text_len: None,
                 });
                 tally.more = false;
             }
@@ -506,6 +519,7 @@ fn collect_in_chunk(
             text,
             at,
             marks: vec![at],
+            text_len: None,
         });
     }
 }
@@ -520,6 +534,9 @@ pub(crate) fn search_whole(text: &[u8], pattern: &Pattern, opts: &Options) -> Ou
         uncomp_spent: 0,
     };
     scan_bytes(text, Kind::Text, None, pattern, opts, &mut tally);
+    for hit in &mut tally.hits {
+        hit.text_len = Some(text.len() as u64);
+    }
     if tally.hits.is_empty() && !tally.more {
         Outcome::Clean
     } else {
@@ -630,6 +647,7 @@ fn triage(entries: &mut Vec<EntryMeta>, names: &[u8], allow_bin: bool, markup: b
                 n == b"content.xml"
             };
             if keep {
+                e.body = n == b"word/document.xml" || (has_odf_udf && n == b"content.xml");
                 e.role = if n == b"xl/workbook.xml" {
                     Role::SheetNames
                 } else {

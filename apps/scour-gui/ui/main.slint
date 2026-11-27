@@ -25,7 +25,7 @@ export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { HeldPanel, HeldLine, SortLine, MemLine, RunLine, ResourcePanel } from "resources.slint";
 export { HeldPanel, HeldLine, SortLine, MemLine, RunLine }
-import { Shade, PeekButton, PeekIcon, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, PeekButton, PeekIcon, PeekRail, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
 export component MainWindow inherits Window {
@@ -423,6 +423,10 @@ export component MainWindow inherits Window {
     /// A press on the rail outside the stretch shown, as a share, and the rail's
     /// height: read around that place.
     callback peek-reread(float, length);
+    /// A document's finds as shares of its text, and where to open it: the
+    /// first of them, or -1 for its start.
+    in property <[float]> peek-doc-marks;
+    in property <float> peek-doc-at: -1;
     /// A folder: what the index knows of it, its heaviest and its newest.
     in property <bool> peek-dir;
     in property <string> peek-dir-said;
@@ -4093,8 +4097,19 @@ export component MainWindow inherits Window {
                                 root.peek-page-scrolled(self.current-page);
                             }
 
+                            // Opened where the first find is, as a share of the
+                            // document: the pages near it are drawn first.
+                            // `changed` does not fire for the place it opens on.
+                            init => {
+                                if (root.peek-doc-at >= 0) {
+                                    doc-view.viewport-y = -max(0px,
+                                        root.peek-doc-at * root.peek-pages.length * self.slot-h - doc-view.height / 3);
+                                    root.peek-page-scrolled(self.current-page);
+                                }
+                            }
+
                             doc-view := ListView {
-                                width: parent.width;
+                                width: parent.width - (root.peek-doc-marks.length > 0 ? 14px : 0px);
                                 height: parent.height;
                                 for page[idx] in root.peek-pages: Rectangle {
                                     width: doc-view.visible-width;
@@ -4128,8 +4143,27 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            // The finds over the whole document, by where they fall
+                            // in its text: a page of similar length each, near enough.
+                            if root.peek-doc-marks.length > 0: PeekRail {
+                                x: parent.width - 14px;
+                                height: parent.height;
+                                marks: root.peek-doc-marks;
+                                property <length> tall: max(1px, root.peek-pages.length * doc-box.slot-h);
+                                seen-top: -doc-view.viewport-y / self.tall;
+                                seen-tall: doc-view.height / self.tall;
+                                go(r, pressed) => {
+                                    doc-view.viewport-y = -clamp(r * self.tall - doc-view.height / 2,
+                                        0px, max(0px, self.tall - doc-view.height));
+                                }
+                                wheel(dy) => {
+                                    doc-view.viewport-y = clamp(doc-view.viewport-y + dy,
+                                        min(0px, doc-view.height - self.tall), 0px);
+                                }
+                            }
+
                             Rectangle {
-                                x: parent.width - self.width - 18px;
+                                x: parent.width - self.width - 18px - (root.peek-doc-marks.length > 0 ? 14px : 0px);
                                 y: 10px;
                                 width: page-badge.preferred-width + 14px;
                                 height: 22px;
@@ -4232,91 +4266,32 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // The rail, after Colpan's minimap: the finds as ticks,
-                            // the stretch shown as a band when it is not the whole
-                            // file, where the eye is as a box. A press inside the
-                            // band goes there, the place in the middle; outside it,
-                            // that place is read. Nothing on it moves by itself.
-                            peek-rail := Rectangle {
+                            // The rail: a press inside the stretch shown goes there,
+                            // the place in the middle; outside it, that place is read.
+                            PeekRail {
                                 x: parent.width - 14px;
-                                width: 14px;
                                 height: parent.height;
-                                background: Theme.panel-2;
+                                marks: root.peek-rail;
+                                far: root.peek-far;
+                                band0: root.peek-band0;
+                                band1: root.peek-band1;
                                 property <float> span: max(0.0001, root.peek-band1 - root.peek-band0);
-                                property <float> seen-top: root.peek-band0
+                                seen-top: root.peek-band0
                                     + (-peek-flick.viewport-y / max(1px, peek-flick.viewport-height)) * self.span;
-                                property <float> seen-tall: max(0.025,
-                                    (peek-flick.height / max(1px, peek-flick.viewport-height)) * self.span);
-
-                                Rectangle {
-                                    x: 0px;
-                                    width: 1px;
-                                    height: parent.height;
-                                    background: Theme.line-soft;
-                                }
-                                if root.peek-band1 - root.peek-band0 < 0.999: Rectangle {
-                                    y: parent.height * root.peek-band0;
-                                    height: parent.height * peek-rail.span;
-                                    background: Theme.line-soft;
-                                }
-                                for r in root.peek-far: Rectangle {
-                                    x: 3px;
-                                    width: parent.width - 6px;
-                                    y: parent.height * r - 1px;
-                                    height: 3px;
-                                    border-radius: 1.5px;
-                                    background: Theme.t0;
-                                    opacity: 0.55;
-                                }
-                                for r in root.peek-rail: Rectangle {
-                                    x: 3px;
-                                    width: parent.width - 6px;
-                                    y: parent.height * r - 1px;
-                                    height: 3px;
-                                    border-radius: 1.5px;
-                                    background: Theme.t0;
-                                }
-                                Rectangle {
-                                    x: 1px;
-                                    width: parent.width - 2px;
-                                    y: parent.height * peek-rail.seen-top;
-                                    height: parent.height * peek-rail.seen-tall;
-                                    border-radius: 3px;
-                                    background: Theme.ink.with-alpha(0.09);
-                                    border-width: 1px;
-                                    border-color: Theme.ink.with-alpha(0.14);
-                                }
-                                rail-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    function go(y: length, pressed: bool) {
-                                        if (self.height <= 0px) {
-                                            return;
-                                        }
-                                        let r = clamp(y / self.height, 0, 1);
-                                        if (r >= root.peek-band0 && r <= root.peek-band1) {
-                                            let inner = (r - root.peek-band0) / peek-rail.span;
-                                            peek-flick.viewport-y = clamp(
-                                                -(inner * peek-flick.viewport-height - peek-flick.height / 2),
-                                                min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
-                                        } else if (pressed) {
-                                            root.peek-reread(r, self.height);
-                                        }
-                                    }
-                                    pointer-event(e) => {
-                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                                            self.go(self.mouse-y, true);
-                                        }
-                                    }
-                                    moved => {
-                                        if (self.pressed) {
-                                            self.go(self.mouse-y, false);
-                                        }
-                                    }
-                                    scroll-event(e) => {
-                                        peek-flick.viewport-y = clamp(peek-flick.viewport-y + e.delta-y,
+                                seen-tall: (peek-flick.height / max(1px, peek-flick.viewport-height)) * self.span;
+                                go(r, pressed) => {
+                                    if (r >= root.peek-band0 && r <= root.peek-band1) {
+                                        peek-flick.viewport-y = clamp(
+                                            -((r - root.peek-band0) / self.span * peek-flick.viewport-height
+                                                - peek-flick.height / 2),
                                             min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
-                                        return accept;
+                                    } else if (pressed) {
+                                        root.peek-reread(r, self.height);
                                     }
+                                }
+                                wheel(dy) => {
+                                    peek-flick.viewport-y = clamp(peek-flick.viewport-y + dy,
+                                        min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
                                 }
                             }
                         }

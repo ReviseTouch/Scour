@@ -312,3 +312,36 @@ fn a_document_s_markup_is_searched_only_when_asked() {
     }
     assert!(matches!(read("karar", true), Outcome::Found { .. }));
 }
+
+#[test]
+fn a_find_in_a_document_s_body_knows_the_body_s_length() {
+    let docx = make_zip(&[
+        ("[Content_Types].xml", 8, b"<Types/>"),
+        (
+            "word/document.xml",
+            8,
+            b"<w:document><w:body><w:p><w:t>bir iki uc dort karar bes</w:t></w:p></w:body></w:document>",
+        ),
+        ("word/header1.xml", 8, b"<w:hdr><w:t>ust karar</w:t></w:hdr>"),
+    ]);
+    let first = |word: &str, bytes: &[u8], name: &str| match one(
+        text(word),
+        Options::default(),
+        name,
+        bytes,
+    ) {
+        Outcome::Found { hits, .. } => hits[0].clone(),
+        other => panic!("{word}: {other:?}"),
+    };
+    // The body's find, placed in the body; the header's, on every page, is not.
+    let body = first("dort", &docx, "a.docx");
+    let len = body.text_len.expect("the body's length");
+    assert!(body.offset < len, "{body:?}");
+    assert_eq!(first("ust", &docx, "a.docx").text_len, None);
+    // A slide is one page of many: its own text says nothing of where it falls.
+    let pptx = make_zip(&[
+        ("ppt/presentation.xml", 0, b"<p/>"),
+        ("ppt/slides/slide1.xml", 8, b"<a:t>karar</a:t>"),
+    ]);
+    assert_eq!(first("karar", &pptx, "a.pptx").text_len, None);
+}

@@ -283,6 +283,7 @@ fn every_response_round_trips() {
                     text: "unsafe {".into(),
                     at: (0, 6),
                     marks: vec![(0, 6)],
+                    text_len: Some(9_000),
                 }],
                 more: true,
             }],

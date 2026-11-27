@@ -19,6 +19,10 @@ pub struct Hit {
     /// overlapping ones joined: `at` among them. A line holding two of the
     /// words shows both.
     pub marks: Vec<(u32, u32)>,
+    /// A document searched in the text taken out of it: that text's length,
+    /// which `offset` is in. Where in the document the find is, as a share of
+    /// it, is the one place a preview of its pages can be taken to.
+    pub text_len: Option<u64>,
 }
 
 /// What a file's first bytes say it is.

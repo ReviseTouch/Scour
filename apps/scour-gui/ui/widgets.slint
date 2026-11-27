@@ -1309,6 +1309,79 @@ export component Shade inherits Rectangle {
     }
 }
 
+// The rail beside a preview, after Colpan's minimap: the finds as ticks —
+// dimmer ones outside the stretch shown — that stretch as a band when it is
+// not the whole of the file, where the eye is as a box. It decides nothing:
+// a press, a drag and the wheel are handed to whoever holds what scrolls.
+export component PeekRail inherits Rectangle {
+    in property <[float]> marks;
+    in property <[float]> far;
+    in property <float> band0: 0;
+    in property <float> band1: 1;
+    in property <float> seen-top;
+    in property <float> seen-tall: 1;
+    /// A share of the rail: pressed, or dragged to.
+    callback go(float, bool);
+    callback wheel(length);
+    width: 14px;
+    background: Theme.panel-2;
+    Rectangle {
+        x: 0px;
+        width: 1px;
+        height: parent.height;
+        background: Theme.line-soft;
+    }
+    if root.band1 - root.band0 < 0.999: Rectangle {
+        y: parent.height * root.band0;
+        height: parent.height * (root.band1 - root.band0);
+        background: Theme.line-soft;
+    }
+    for r in root.far: Rectangle {
+        x: 3px;
+        width: parent.width - 6px;
+        y: parent.height * r - 1px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Theme.t0;
+        opacity: 0.55;
+    }
+    for r in root.marks: Rectangle {
+        x: 3px;
+        width: parent.width - 6px;
+        y: parent.height * r - 1px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Theme.t0;
+    }
+    Rectangle {
+        x: 1px;
+        width: parent.width - 2px;
+        y: parent.height * root.seen-top;
+        height: parent.height * max(0.025, root.seen-tall);
+        border-radius: 3px;
+        background: Theme.ink.with-alpha(0.09);
+        border-width: 1px;
+        border-color: Theme.ink.with-alpha(0.14);
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && self.height > 0px) {
+                root.go(clamp(self.mouse-y / self.height, 0, 1), true);
+            }
+        }
+        moved => {
+            if (self.pressed && self.height > 0px) {
+                root.go(clamp(self.mouse-y / self.height, 0, 1), false);
+            }
+        }
+        scroll-event(e) => {
+            root.wheel(e.delta-y);
+            return accept;
+        }
+    }
+}
+
 // A button in the preview's heading: the menu's own drawing, named on hover
 // by whoever places it. Under the hand only its ground changes.
 export component PeekIcon inherits Rectangle {

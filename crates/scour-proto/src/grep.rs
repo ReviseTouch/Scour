@@ -103,4 +103,8 @@ pub struct GrepHit {
     /// them. Absent from an older service: `at` alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<(u32, u32)>,
+    /// A document searched in the text taken out of it: that text's length,
+    /// which `offset` is in. Absent for a file searched as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_len: Option<u64>,
 }

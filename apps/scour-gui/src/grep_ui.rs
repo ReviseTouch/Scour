@@ -332,7 +332,12 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
     w.set_peek_found(ModelRc::new(VecModel::from(found)));
     // Around the first find, which a file large enough to matter holds far
     // past its head; every find goes on the rail beside the text.
-    crate::peeking::finds(gf.hits.iter().map(|h| (h.line, Some(h.offset))).collect());
+    crate::peeking::finds(
+        gf.hits
+            .iter()
+            .map(|h| (h.line, Some(h.offset), h.text_len))
+            .collect(),
+    );
     let first = gf.hits.first();
     link.send(Ask::Peek {
         path: gf.path.clone(),

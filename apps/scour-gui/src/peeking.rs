@@ -98,12 +98,12 @@ pub(super) fn peek(
         });
     } else {
         // A `content:` query's finds, by line: the text opens on the first.
-        let found: Vec<(Option<u64>, Option<u64>)> = rows
+        let found: Vec<Find> = rows
             .found_at(selected.max(0) as usize)
             .iter()
             .map(|f| match f.line.strip_prefix('@') {
-                Some(at) => (None, at.parse().ok()),
-                None => (f.line.parse().ok(), None),
+                Some(at) => (None, at.parse().ok(), None),
+                None => (f.line.parse().ok(), None, None),
             })
             .collect();
         let first = found.first().copied().unwrap_or_default();
@@ -117,16 +117,34 @@ pub(super) fn peek(
     link.send(Ask::PeekFacts { path });
 }
 
+/// A find of the file in the preview: its line and its byte, either unknown,
+/// and for a document searched in its text, that text's length.
+pub(super) type Find = (Option<u64>, Option<u64>, Option<u64>);
+
 thread_local! {
-    /// The finds of the file in the preview, as (line, byte), either unknown;
-    /// and its length, from the last answer: what the rail is drawn from.
-    static FINDS: RefCell<Vec<(Option<u64>, Option<u64>)>> = const { RefCell::new(Vec::new()) };
+    /// The finds of the file in the preview, and its length from the last
+    /// answer: what the rail is drawn from.
+    static FINDS: RefCell<Vec<Find>> = const { RefCell::new(Vec::new()) };
     static LEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// The finds of the file the preview is about to show.
-pub(super) fn finds(found: Vec<(Option<u64>, Option<u64>)>) {
+pub(super) fn finds(found: Vec<Find>) {
     FINDS.with(|f| *f.borrow_mut() = found);
+}
+
+/// A document's finds as shares of its text, for the rail beside its pages,
+/// and the first of them to open it at.
+fn doc_marks(w: &MainWindow) {
+    let marks: Vec<f32> = FINDS.with(|f| {
+        f.borrow()
+            .iter()
+            .filter_map(|&(_, offset, len)| Some(offset? as f32 / len?.max(1) as f32))
+            .map(|r| r.clamp(0.0, 1.0))
+            .collect()
+    });
+    w.set_peek_doc_at(marks.first().copied().unwrap_or(-1.0));
+    w.set_peek_doc_marks(ModelRc::new(VecModel::from(marks)));
 }
 
 /// The rail beside the text, after Colpan's minimap: the stretch shown as a
@@ -153,7 +171,11 @@ fn rail(w: &MainWindow, look: &scour_preview::Look, shown: &str) {
     let mut inside = Vec::new();
     let mut far = Vec::new();
     FINDS.with(|f| {
-        for &(line, offset) in f.borrow().iter() {
+        for &(line, offset, doc) in f.borrow().iter() {
+            // A document's byte is in its text, not in what is shown.
+            if doc.is_some() {
+                continue;
+            }
             let at = match (offset, line) {
                 (Some(o), _) if o >= look.from && o < look.from + bytes => Some(o - look.from),
                 (Some(o), _) => {
@@ -188,7 +210,8 @@ pub(super) fn reread(w: &MainWindow, link: &Link, ratio: f32, rail_px: f32) {
     let near = FINDS.with(|f| {
         f.borrow()
             .iter()
-            .filter_map(|&(_, o)| o)
+            .filter(|&&(_, _, doc)| doc.is_none())
+            .filter_map(|&(_, o, _)| o)
             .map(|o| ((o as f32 / len as f32 - ratio).abs() * rail_px, o))
             .filter(|(d, _)| *d < 8.0)
             .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -219,6 +242,8 @@ pub(super) fn head_of(w: &MainWindow, cat: &Catalogue, path: &str, is_dir: bool,
 /// row's answers come is its name, its kind's picture, and nothing of the old.
 fn blank(w: &MainWindow) {
     peek::clear(w);
+    w.set_peek_doc_marks(ModelRc::default());
+    w.set_peek_doc_at(-1.0);
     w.set_peek_shot(rows::blank());
     w.set_peek_has_shot(false);
     w.set_peek_shot_said(slint::SharedString::new());
@@ -591,6 +616,7 @@ pub(super) fn show_peek(
         return false;
     }
 
+    doc_marks(w);
     let px = ((480.0 * w.window().scale_factor()) as u32).clamp(256, 1024);
     let direct_image = look.shape == "image" && has_direct_image_ext(path);
     let paged = scour_preview::doc::is_paged(&scour_core::path::to_path(path));
