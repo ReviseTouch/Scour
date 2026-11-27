@@ -490,6 +490,7 @@ fn main() -> Result<()> {
     window.set_typos_said(typos_said(&cat.borrow(), &window.get_typos_choice()).into());
     window.set_rail_shown(kept.rail_shown);
     window.set_ribbon_shown(kept.ribbon_shown);
+    window.set_peek_office_text(kept.office_view == "text");
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {

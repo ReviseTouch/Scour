@@ -116,6 +116,14 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_folder_watch_labels(list(&["Watched", "Walked only"]));
     w.set_set_preview(t(cat, "Preview"));
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
+    w.set_set_office(t(cat, "Documents in the preview"));
+    w.set_set_office_note(t(
+        cat,
+        "Word, Excel and PowerPoint files: drawn as they look, or as their plain text.",
+    ));
+    w.set_office_labels(list(&["Drawn", "Text"]));
+    w.set_word_office_drawn(t(cat, "Drawn"));
+    w.set_word_office_text(t(cat, "Text"));
     w.set_set_service(t(cat, "Windows service"));
     draw_service(w, cat);
     w.set_set_refresh(t(cat, "Refresh the list every"));

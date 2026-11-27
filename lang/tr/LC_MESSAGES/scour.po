@@ -3367,3 +3367,12 @@ msgstr "Bulunanlar nerede: oraya gitmek için basın"
 
 msgid "line {n}"
 msgstr "satır {n}"
+
+msgid "Documents in the preview"
+msgstr "Önizlemede belgeler"
+
+msgid "Word, Excel and PowerPoint files: drawn as they look, or as their plain text."
+msgstr "Word, Excel ve PowerPoint dosyaları: göründükleri gibi çizilmiş ya da düz metin olarak."
+
+msgid "Drawn"
+msgstr "Çizim"

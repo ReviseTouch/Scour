@@ -326,6 +326,17 @@
   .peek-sum { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
   .peek-sum > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .peek-sum > span b { color: var(--ink); font-weight: 600; }
+  /* Drawn or its text: a border on the chosen one, and on the one under the
+     hand; always a pixel, so nothing moves. */
+  .peek-view { display: flex; gap: 2px; flex: none; margin-left: auto; }
+  .peek-view[hidden] { display: none; }
+  .peek-view:not([hidden]) + #peek-more { margin-left: 0; }
+  .peek-view button {
+    border-radius: 5px; padding: 2px 6px; cursor: pointer;
+    border: 1px solid transparent; background: none; color: var(--ink-3); font: 11.5px var(--sans);
+  }
+  .peek-view button:hover { border-color: var(--line); color: var(--ink); }
+  .peek-view button[aria-pressed="true"] { border-color: var(--line); color: var(--ink); font-weight: 600; }
   #peek-more {
     margin-left: auto; flex: none; cursor: pointer;
     border: 1px solid transparent; background: none; border-radius: 5px; padding: 2px 6px;

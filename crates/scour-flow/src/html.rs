@@ -47,8 +47,8 @@ color:#1f2328;background:#fff;overflow-wrap:break-word}\
 p{margin:0;min-height:1.45em}\
 .h{font-weight:600}\
 .mk{display:inline-block;width:1.6em;margin-left:-1.6em}\
-table{border-collapse:collapse;width:100%;table-layout:fixed;margin:.4em 0}\
-td{vertical-align:top;padding:.15em .35em}\
+table{border-collapse:collapse;width:100%;table-layout:fixed;margin:.4em 0;font-size:.92em}\
+td{vertical-align:top;padding:.15em .3em}\
 table.r td{border:1px solid #9aa0a6}\
 tr.hd td{font-weight:600}\
 img{display:block;max-width:100%;height:auto;margin:.4em 0}\

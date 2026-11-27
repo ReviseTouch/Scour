@@ -242,6 +242,7 @@ pub(super) fn head_of(w: &MainWindow, cat: &Catalogue, path: &str, is_dir: bool,
 /// row's answers come is its name, its kind's picture, and nothing of the old.
 fn blank(w: &MainWindow) {
     peek::clear(w);
+    w.set_peek_can_flow(false);
     w.set_peek_doc_marks(ModelRc::default());
     w.set_peek_doc_at(-1.0);
     w.set_peek_shot(rows::blank());
@@ -610,8 +611,10 @@ pub(super) fn show_peek(
     w.set_peek_shot(rows::blank());
     w.set_peek_has_shot(false);
 
-    // A word processor's document: its text now, drawn as it flows when it comes.
-    if look.flow {
+    // An Office document: its text now, drawn when it comes — unless its text
+    // is what was chosen.
+    w.set_peek_can_flow(look.flow);
+    if look.flow && !w.get_peek_office_text() {
         link.send(Ask::Flow {
             path: path.to_owned(),
         });

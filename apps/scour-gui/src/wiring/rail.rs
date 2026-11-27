@@ -602,6 +602,29 @@ pub(crate) fn wire(wiring: &Wiring) {
         });
     }
 
+    // Drawn or its text: kept for every face, and the document on show
+    // redrawn the chosen way.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(link);
+        window.on_peek_office_text_picked(move |text| {
+            let Some(w) = weak.upgrade() else { return };
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    office_view: Some(if text { "text" } else { "" }.into()),
+                    ..Default::default()
+                },
+            });
+            if text {
+                crate::flowing::clear(&w);
+            } else if w.get_peek_can_flow() {
+                link.send(Ask::Flow {
+                    path: w.get_peek_path().to_string(),
+                });
+            }
+        });
+    }
+
     {
         let weak = window.as_weak();
         window.on_peek_sheet_picked(move |i| {

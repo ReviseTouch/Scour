@@ -32,6 +32,8 @@ pub struct Change {
     pub accents_exact: Option<bool>,
     /// `off`, `always`, or `""` to offer. See [`Settings::typos`].
     pub typos: Option<String>,
+    /// `text`, or `""` to draw. See [`Settings::office_view`].
+    pub office_view: Option<String>,
     pub typos_strict: Option<bool>,
     pub field_words: Option<bool>,
     pub dupes_open: Option<bool>,
@@ -178,6 +180,10 @@ impl Change {
         }
         if let Some(v) = self.typos {
             to.typos = v;
+        }
+        // Only what a face can draw: anything else is the default.
+        if let Some(v) = self.office_view {
+            to.office_view = if v == "text" { v } else { String::new() };
         }
         if let Some(v) = self.typos_strict {
             to.typos_strict = v;

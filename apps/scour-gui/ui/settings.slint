@@ -74,6 +74,11 @@ export component SettingsPage inherits Rectangle {
     callback columns-clicked(length, length);
     in property <string> set-preview;
     in property <string> set-preview-note;
+    in property <string> set-office;
+    in property <string> set-office-note;
+    in property <[string]> office-labels;
+    in property <bool> office-text;
+    callback office-picked(bool);
     in property <bool> preview-on;
     callback peek-toggled();
     in property <string> set-refresh;
@@ -559,6 +564,17 @@ export component SettingsPage inherits Rectangle {
                                                 root.peek-toggled();
                                             }
                                         }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-office;
+                                    note: root.set-office-note;
+                                    Choice {
+                                        labels: root.office-labels;
+                                        values: ["drawn", "text"];
+                                        value: root.office-text ? "text" : "drawn";
+                                        picked(v) => { root.office-picked(v == "text"); }
                                     }
                                 }
                                 Rectangle { height: Theme.hair; background: Theme.line; }

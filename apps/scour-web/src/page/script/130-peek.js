@@ -14,6 +14,30 @@
   const peekInfo = document.getElementById("peek-info");
   const peekSum = document.getElementById("peek-sum");
   const peekMore = document.getElementById("peek-more");
+  const peekView = document.getElementById("peek-view");
+  /* Drawn or its text, for an Office document: kept for every face, and the
+     document on show drawn again the chosen way. */
+  function officeText() {
+    return !!(KEPT && KEPT.office_view === "text");
+  }
+  function showPeekView(flow) {
+    peekView.hidden = !flow;
+    for (const b of peekView.querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", String((b.dataset.v === "text") === officeText()));
+    }
+  }
+  function setOfficeView(v) {
+    KEPT = { ...(KEPT || {}), office_view: v };
+    keep({ office_view: v });
+    if (PEEK.row) {
+      PEEK.path = null;
+      drawPeek(PEEK.row);
+    }
+  }
+  peekView.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b && (b.dataset.v === "text") !== officeText()) setOfficeView(b.dataset.v);
+  });
   const peekFacts = document.getElementById("peek-facts");
   const peekFound = document.getElementById("peek-found");
   /* A selection begun in the preview stays in it, and Ctrl+A there takes its
@@ -620,6 +644,7 @@
     peekActsOf(f.is_dir ? "folder" : "file", 1);
     peekInfoOf(f);
     peekFoundOf(f);
+    showPeekView(false);
     clearTimeout(PEEK.timer);
     if (PEEK.ctrl) PEEK.ctrl.abort();
     showKind(f);
@@ -635,6 +660,7 @@
       SERVICE.peek(full, ctrl.signal)
         .then((meta) => {
           if (ctrl.signal.aborted) return;
+          showPeekView(!!meta.flow);
           const url = SERVICE.peekUrl(full);
           const shown = (el) => {
             peekBody.className = "peek-body";
@@ -654,7 +680,7 @@
             e.src = url;
             e.type = "application/pdf";
             shown(e);
-          } else if (meta.flow) {
+          } else if (meta.flow && !officeText()) {
             /* A word processor's document, as it flows: a page of its own that
                runs nothing (the frame and the answer are both sandboxed). */
             const frame = document.createElement("iframe");

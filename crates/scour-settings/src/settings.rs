@@ -162,6 +162,11 @@ pub struct Settings {
     /// its mistakes, `off` does neither. Not validated here.
     #[serde(default)]
     pub typos: String,
+    /// How a Word, Excel or PowerPoint file is previewed: `""` drawn as it
+    /// looks (its paragraphs, sheets or slides), `text` its plain text. Changed
+    /// beside the preview itself and in the settings.
+    #[serde(default)]
+    pub office_view: String,
     /// A misspelling is forgiven only past a word's first four letters, so a
     /// longer word never finds more than a shorter one. Off by default: a
     /// mistake is forgiven anywhere in a match that begins at a word.

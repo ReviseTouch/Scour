@@ -70,6 +70,10 @@
       if ((v === "on") !== (peekToggle.getAttribute("aria-pressed") === "true")) peekToggle.click();
       drawSettings();
     });
+    seg("seg-office", [["", T("Drawn")], ["text", T("Text")]], k.office_view === "text" ? "text" : "", (v) => {
+      setOfficeView(v);
+      drawSettings();
+    });
     seg("seg-refresh",
       [["1", T("1 s")], ["2", T("2 s")], ["5", T("5 s")], ["15", T("15 s")], ["60", T("1 min")]],
       String(k.refresh_every || 2),

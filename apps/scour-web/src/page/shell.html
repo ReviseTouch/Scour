@@ -297,6 +297,7 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Layout"></div></div><div class="seg" id="seg-layout"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Documents in the preview"></div><div class="desc" data-t="Word, Excel and PowerPoint files: drawn as they look, or as their plain text."></div></div><div class="seg" id="seg-office"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Refresh the list every"></div><div class="desc" data-t="While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."></div></div><div class="seg" id="seg-refresh"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="System icons"></div><div class="desc" data-t="The desktop's own file and folder icons instead of built-in glyphs."></div></div><div class="seg" id="seg-sysicons"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Sidebar"></div><div class="desc" data-t="Places, types and sizes beside the list. The filter strip and the lens do the same from the bar."></div></div><div class="seg" id="seg-rail"></div></div>
@@ -457,6 +458,7 @@
         <div class="peek-found" id="peek-found" hidden></div>
         <div class="peek-info" id="peek-info">
           <div class="peek-sum"><span id="peek-sum"></span>
+            <span class="peek-view" id="peek-view" role="group" hidden><button type="button" data-v="" data-t="Drawn"></button><button type="button" data-v="text" data-t="Text"></button></span>
             <button type="button" id="peek-more" aria-controls="peek-facts" aria-expanded="false"></button></div>
           <dl class="peek-facts" id="peek-facts" hidden></dl>
         </div>

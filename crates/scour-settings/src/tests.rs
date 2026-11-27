@@ -403,3 +403,26 @@ fn memory_is_given_back_at_once_on_a_small_machine_unless_somebody_chose() {
     change.apply(&mut s);
     assert_eq!(s.release_after(32 << 30), Duration::from_secs(60));
 }
+
+/// A document is drawn unless text was asked for; nothing else is kept.
+#[test]
+fn the_office_view_is_drawn_or_text_and_nothing_else() {
+    let mut s = Settings::default();
+    assert_eq!(s.office_view, "");
+    Change {
+        office_view: Some("text".into()),
+        ..Change::default()
+    }
+    .apply(&mut s);
+    assert_eq!(s.office_view, "text");
+    Change {
+        office_view: Some("pictures".into()),
+        ..Change::default()
+    }
+    .apply(&mut s);
+    assert_eq!(s.office_view, "");
+    // No opinion leaves it.
+    s.office_view = "text".into();
+    Change::default().apply(&mut s);
+    assert_eq!(s.office_view, "text");
+}

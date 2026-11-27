@@ -371,6 +371,13 @@ export component MainWindow inherits Window {
     in property <bool> peek-book;
     // A presentation's slides, drawn as cards.
     in property <bool> peek-deck;
+    // An Office document in the preview, and whether such a one is shown as
+    // its plain text rather than drawn: kept for every face.
+    in property <bool> peek-can-flow;
+    in-out property <bool> peek-office-text;
+    in property <string> word-office-drawn: "Drawn";
+    in property <string> word-office-text: "Text";
+    callback peek-office-text-picked(bool);
     in property <[string]> peek-sheets;
     in property <int> peek-sheet;
     in property <[GridRowView]> peek-grid;
@@ -883,6 +890,9 @@ export component MainWindow inherits Window {
     in property <string> set-columns-push;
     in property <string> set-preview;
     in property <string> set-preview-note;
+    in property <string> set-office;
+    in property <string> set-office-note;
+    in property <[string]> office-labels: ["Drawn", "Text"];
     in property <bool> preview-on;
     /// How much bigger or smaller than the desktop everything is drawn: the
     /// settings' row and Ctrl + / Ctrl - say the same thing. `zoom-choice` is
@@ -4582,6 +4592,37 @@ export component MainWindow inherits Window {
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
                                 }
+                                // Drawn or its text: only for a document that can be drawn.
+                                if root.peek-can-flow: HorizontalLayout {
+                                    spacing: 2px;
+                                    padding-right: 6px;
+                                    for opt in [
+                                        { label: root.word-office-drawn, text: false },
+                                        { label: root.word-office-text, text: true },
+                                    ]: Rectangle {
+                                        property <bool> on: opt.text == root.peek-office-text;
+                                        width: opt-said.preferred-width + 12px;
+                                        border-radius: 5px;
+                                        border-width: 1px;
+                                        border-color: self.on || opt-touch.has-hover ? Theme.line : transparent;
+                                        opt-said := Text {
+                                            text: opt.label;
+                                            color: parent.on || opt-touch.has-hover ? Theme.ink : Theme.ink-3;
+                                            font-size: 11.5px;
+                                            font-weight: parent.on ? 600 : 400;
+                                            vertical-alignment: center;
+                                        }
+                                        opt-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                if (!parent.on) {
+                                                    root.peek-office-text = opt.text;
+                                                    root.peek-office-text-picked(opt.text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 Rectangle {
                                     width: more-said.preferred-width + 12px;
                                     border-radius: 5px;
@@ -5786,6 +5827,14 @@ export component MainWindow inherits Window {
         columns-clicked(a0, a1) => { root.columns-clicked(a0, a1); }
         set-preview: root.set-preview;
         set-preview-note: root.set-preview-note;
+        set-office: root.set-office;
+        set-office-note: root.set-office-note;
+        office-labels: root.office-labels;
+        office-text: root.peek-office-text;
+        office-picked(text) => {
+            root.peek-office-text = text;
+            root.peek-office-text-picked(text);
+        }
         preview-on: root.preview-on;
         peek-toggled() => { root.peek-toggled(); }
         set-refresh: root.set-refresh;
