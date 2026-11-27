@@ -1,7 +1,9 @@
   /* The scope chip: where the query looks, at the left of the field. Its
      height sits inside the first line, so the bar keeps its own. */
+  /* As wide as what it says, up to a limit: "Everywhere" in a fixed 136 px was
+     half empty. The query beside it moves when the scope is changed, and only then. */
   .qscope {
-    flex: none; align-self: flex-start; margin-top: 4px; height: 28px; width: 136px;
+    flex: none; align-self: flex-start; margin-top: 4px; height: 28px; max-width: 160px;
     display: inline-flex; align-items: center; gap: 6px; padding: 0 9px 0 7px;
     border: 1px solid var(--line); border-radius: 7px; background: var(--ground);
     color: var(--ink-2); font: 600 12px/1 var(--sans); cursor: pointer;

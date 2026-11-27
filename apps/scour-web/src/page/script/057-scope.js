@@ -12,10 +12,11 @@
     return { dots: chipDots(tiles, placeScope(text, home)), spots: spots(text, home, tiles) };
   }
 
-  /* As many names as the chip's width holds, the rest as "+k". */
+  /* As many names as the chip's widest holds, the rest as "+k". */
   function scopeLabel(list) {
     const nm = scopeChip.querySelector(".nm");
-    const room = nm ? nm.clientWidth : 0;
+    const widest = parseFloat(getComputedStyle(scopeChip).maxWidth);
+    const room = nm && isFinite(widest) ? widest - (scopeChip.offsetWidth - nm.offsetWidth) : 0;
     const n = list.filter((s) => !s.not).length;
     if (!room || n <= 1) return chipLabel(list, n, T("Everywhere"));
     const ctx = (scopeLabel.ctx ||= document.createElement("canvas").getContext("2d"));
@@ -33,7 +34,7 @@
       '<i class="dot' + (d.asking ? " ask" : d.lit ? "" : " dim") + '" style="--c:var(--disk-' + d.kind + ')"></i>').join("") + "</span>";
     if (!scopeChip.querySelector(".nm")) scopeChip.innerHTML = dotsHtml + '<span class="nm"></span>';
     const label = scopeLabel(list);
-    // A fixed width, so the field does not move as the names change: all of them here.
+    // Every name in the tooltip, however few the chip shows.
     const title = T("Where it searches") + ": " + chipLabel(list, list.length, T("Everywhere"));
     const html = dotsHtml + '<span class="nm">' + escape_(label) + "</span>";
     if (html + title === scopeDrawn) return;

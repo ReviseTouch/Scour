@@ -5123,6 +5123,33 @@ export component MainWindow inherits Window {
 
         }
 
+        // A press beside the lens puts it away, as one beside any popup does:
+        // under the field and to its left. Not over the field, where a press
+        // moves the caret and the lens follows the term under it; not to its
+        // right, where the buttons that open a lens would need a second press.
+        if root.lens-open: TouchArea {
+            x: 0px;
+            y: field.absolute-position.y + field.height;
+            width: parent.width;
+            height: max(0px, parent.height - self.y);
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.lens-close();
+                }
+            }
+        }
+        if root.lens-open: TouchArea {
+            x: 0px;
+            y: field.absolute-position.y;
+            width: field.absolute-position.x;
+            height: field.height;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.lens-close();
+                }
+            }
+        }
+
         // Over the content capsule under the pointer, and what `:` offers at
         // the content field's caret: above everything, as the lens is.
         if root.grep-open: GrepPill {

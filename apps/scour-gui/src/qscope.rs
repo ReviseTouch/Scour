@@ -20,7 +20,7 @@ pub struct Chip {
 }
 
 /// Names the chip's line holds before it says `+k`; one when two would not
-/// fit its fixed width, which elides at about ten letters.
+/// fit its widest, which elides at about ten letters.
 const NAMES: usize = 2;
 const ROOM: usize = 10;
 

@@ -313,8 +313,9 @@ export component ScopeChip inherits Rectangle {
     in property <string> label;
     callback pressed();
     height: 26px;
-    // One width, whatever it says: the query beside it never shifts.
-    width: 124px;
+    // As wide as what it says, to a limit: "Everywhere" in a fixed 124px was
+    // half empty. The query beside it moves when the scope changes, only then.
+    width: min(160px, chip-row.preferred-width);
     border-radius: 7px;
     border-width: Theme.hair;
     border-color: chip-hit.has-hover ? Theme.ink-3 : Theme.line;

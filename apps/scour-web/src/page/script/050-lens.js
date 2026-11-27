@@ -709,4 +709,13 @@
     lensLaunch();
   });
   q.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== q) lensClose(); }, 0));
+  /* A press anywhere but the query, the lens, the pills over them and the
+     buttons that open a lens puts it away, and does what it does besides. The
+     blur above missed every press that keeps the query's focus — a chip, a
+     bar — and left the lens open over what was pressed. */
+  document.addEventListener("mousedown", (e) => {
+    if (!LENS || !(e.target instanceof Element)) return;
+    if (e.target.closest("#lens, .qline, .qacts, #qtriggers, .rowmenu")) return;
+    lensClose();
+  }, true);
 
