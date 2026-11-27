@@ -97,6 +97,12 @@ export global Clip {
     callback paste-into(string, int, int, bool) -> Spliced;
 }
 
+// How many halves a caret blinks after it last moved, then stays lit: a
+// minute at the desktop's 530ms, an even count so it ends shown.
+export global Caret {
+    out property <int> halves: 114;
+}
+
 // The report's two ramps, by index. A brush cannot travel in a model: which
 // scheme is showing is decided here, and Rust sends the step instead.
 export global Tones {

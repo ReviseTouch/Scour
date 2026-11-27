@@ -44,7 +44,7 @@
   /* The caret and the selection, drawn over the layer, as the query bar's. */
   .gdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
   .gdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }
-  .gdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; animation: qblink 1.06s steps(1) infinite; }
+  .gdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; animation: qblink 1.06s steps(1) 57; }
   @media (prefers-reduced-motion: reduce) { .gdecor .qcaret { animation: none; } }
   /* The pill and the launcher float over the page, placed by the script. */
   .qacts.gacts { position: fixed; z-index: 70; }

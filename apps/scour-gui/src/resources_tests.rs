@@ -57,6 +57,7 @@ fn answer() -> Resources {
             peak: 480 * MB,
             total: 32 << 30,
             available: 21 << 30,
+            ..Memory::default()
         },
         cpu: Cpu {
             service_ms: 1_000,
@@ -339,6 +340,34 @@ fn memory_rows_are_shares_of_the_largest_with_the_peak_as_a_ghost() {
     quiet.running.clear();
     assert!(mem_lines(&quiet, &cat).is_empty());
     assert_eq!(machine(&quiet, &cat), None);
+    // A service that says its own and its mapped pages: two lines, no peak,
+    // and only its own counted as Scour's.
+    let mut split = r.clone();
+    split.memory.own = 20 * MB;
+    split.memory.mapped = 45 * MB;
+    let rows = mem_lines(&split, &cat);
+    let said: Vec<(&str, &str, &str)> = rows
+        .iter()
+        .map(|m| (m.label.as_str(), m.note.as_str(), m.value.as_str()))
+        .collect();
+    assert_eq!(
+        said[..2],
+        [
+            ("Service", "", "20.0 MB"),
+            (
+                "Index pages",
+                "a cache the system takes back when it needs to",
+                "45.0 MB"
+            ),
+        ]
+    );
+    assert_eq!(rows[0].ghost, 0.0);
+    // Of the window's 50 MB, the largest line now.
+    assert!((rows[1].share - 45.0 / 50.0).abs() < 1e-6);
+    assert_eq!(
+        machine(&split, &cat).expect("says").us_said,
+        "Scour 98.0 MB"
+    );
 }
 
 #[test]

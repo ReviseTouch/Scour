@@ -43,6 +43,9 @@ pub struct QueryBar {
     /// as label, count and the term a press writes.
     pub narrow_for: String,
     narrow_total: u64,
+    /// Moved by each new ask and each hiding: a wait still running for an
+    /// older one sends nothing.
+    narrow_gen: u64,
     /// The line switched off in the settings: nothing is asked for it.
     pub narrow_off: bool,
     pub narrow_pinned: bool,
@@ -517,23 +520,67 @@ fn show_rescue(w: &MainWindow, qb: &QueryBar, cat: &Catalogue) {
 /// written anywhere — had the two walks re-run behind each refresh: 1.3 s of
 /// the service's CPU and 280 MB of its memory, for chips nobody had touched.
 /// Only crossing the two the line needs asks again.
-pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total: u64) {
+///
+/// **After [`NARROW_IDLE_MS`] of quiet**, as the page's `narrowSoon`: the walks
+/// cost the service 60–520 ms a query, and asked on every key they were 74 % of
+/// a core while typing, against 3.5 % without them (measured 2026-11-27).
+pub fn narrow(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    cat: &Catalogue,
+    total: u64,
+) {
+    let Some(asks) = narrow_asks(w, &mut state.borrow_mut(), cat, total) else {
+        return;
+    };
+    if asks.is_empty() {
+        return;
+    }
+    let (mine, revision) = {
+        let s = state.borrow();
+        (s.qb.narrow_gen, s.query_revision)
+    };
+    let (state, link) = (Rc::clone(state), Rc::clone(link));
+    slint::Timer::single_shot(
+        std::time::Duration::from_millis(NARROW_IDLE_MS),
+        move || {
+            let s = state.borrow();
+            if s.qb.narrow_gen != mine || s.query_revision != revision {
+                return;
+            }
+            drop(s);
+            for ask in asks {
+                link.send(ask);
+            }
+        },
+    );
+}
+
+/// How long the query has to stay as it is before the narrowing line asks.
+const NARROW_IDLE_MS: u64 = 250;
+
+/// The line put back for the query in sight, and what it is to ask, or
+/// `None` when it is already asked for it.
+fn narrow_asks(w: &MainWindow, s: &mut State, cat: &Catalogue, total: u64) -> Option<Vec<Ask>> {
     // The empty query too: the line is always there under the bar, and its
     // two walks are 180 ms and 300 ms once a window opens (MEASUREMENTS,
     // 2026-11-22), not the second they were.
     if s.qb.narrow_off || s.qb.narrow_hidden {
+        s.qb.narrow_gen += 1;
         if !s.qb.chips.is_empty() {
             s.qb.chips.clear();
             show_chips(w, &s.qb, cat);
         }
         w.set_narrow_shown(false);
-        return;
+        return Some(Vec::new());
     }
     w.set_narrow_shown(true);
     let text = s.query.clone();
     if s.qb.narrow_for == text && (s.qb.narrow_total < 2) == (total < 2) {
-        return;
+        return None;
     }
+    s.qb.narrow_gen += 1;
     s.qb.narrow_for = text.clone();
     s.qb.narrow_total = total;
     s.qb.narrow_facets = None;
@@ -542,11 +589,12 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
     s.qb.chips.clear();
     show_chips(w, &s.qb, cat);
     let ts = lens::terms(&text);
+    let mut asks = Vec::new();
     if total < 2 || lens::reads(&text) {
-        return;
+        return Some(asks);
     }
     let revision = s.query_revision;
-    link.send(Ask::Narrow {
+    asks.push(Ask::Narrow {
         query_revision: revision,
         slot: 0,
         request: scour_proto::Request::Facets {
@@ -563,7 +611,7 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
     // What each size band would leave: one count apiece, asked beside the rest.
     if !ts.iter().any(|t| t.field == Some("size") && !t.not) {
         for (i, (term, _)) in SIZE_CHIPS.iter().enumerate() {
-            link.send(Ask::Narrow {
+            asks.push(Ask::Narrow {
                 query_revision: revision,
                 slot: 2 + i as u32,
                 request: scour_proto::Request::Count {
@@ -579,7 +627,7 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
             .iter()
             .any(|t| matches!(t.field, Some("under" | "parent")))
     {
-        link.send(Ask::Narrow {
+        asks.push(Ask::Narrow {
             query_revision: revision,
             slot: 1,
             // Every child, not the top eight: the answer ranks them by bytes
@@ -592,6 +640,7 @@ pub fn narrow(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, total
             },
         });
     }
+    Some(asks)
 }
 
 /// The size bands a chip offers, as the term and the msgid that names them.
@@ -1609,7 +1658,7 @@ fn wire_v2(
                 }
                 s.qb.narrow_total.max(100)
             };
-            narrow(&w, &mut state.borrow_mut(), &link, &cat.borrow(), total);
+            narrow(&w, &state, &link, &cat.borrow(), total);
         });
     }
 }

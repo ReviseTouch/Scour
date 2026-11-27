@@ -252,6 +252,8 @@ fn every_response_round_trips() {
             memory: crate::Memory {
                 service: 65 << 20,
                 peak: 480 << 20,
+                own: 20 << 20,
+                mapped: 45 << 20,
                 total: 32 << 30,
                 available: 20 << 30,
             },

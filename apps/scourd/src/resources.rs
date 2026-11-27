@@ -219,6 +219,8 @@ mod sys {
         Memory {
             service: kb(&me, "VmRSS:"),
             peak: kb(&me, "VmHWM:"),
+            own: kb(&me, "RssAnon:") + kb(&me, "RssShmem:") + kb(&me, "VmSwap:"),
+            mapped: kb(&me, "RssFile:"),
             total: kb(&all, "MemTotal:"),
             available: kb(&all, "MemAvailable:"),
         }
@@ -350,6 +352,8 @@ mod sys {
         fn this_process_is_measured() {
             let m = memory();
             assert!(m.service > 0 && m.peak >= m.service && m.total >= m.available);
+            // Resident is the two halves, less what is swapped out.
+            assert!(m.own > 0 && m.mapped > 0 && m.own + m.mapped >= m.service);
             let c = cpu();
             assert!(c.total >= c.busy && c.threads > 0);
         }

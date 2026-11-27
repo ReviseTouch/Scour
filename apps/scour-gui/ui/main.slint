@@ -25,7 +25,7 @@ export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { HeldPanel, HeldLine, SortLine, MemLine, RunLine, ResourcePanel } from "resources.slint";
 export { HeldPanel, HeldLine, SortLine, MemLine, RunLine }
-import { Shade, FacetRow, Clip, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
 export component MainWindow inherits Window {
@@ -1408,6 +1408,8 @@ export component MainWindow inherits Window {
                     // middle of the box as it always did.
                     property <length> top: (field.height - root.q-shown * root.q-pitch) / 2;
                     property <bool> caret-lit: true;
+                    // Halves blinked since the caret last moved.
+                    property <int> blinked: 0;
                     property <bool> pair-keep: false;
                     property <bool> pair-active: root.hov-on || pair.over;
                     changed pair-active => {
@@ -1426,12 +1428,14 @@ export component MainWindow inherits Window {
 
                     // This window draws its own caret: on Linux Slint's takes
                     // its colour from `TextInput::color`, which is transparent
-                    // here. 530ms is the desktop's own blink rate.
+                    // here. 530ms is the desktop's own blink rate. A minute
+                    // untouched and it stays lit: each half is a frame drawn.
                     blink := Timer {
                         interval: 530ms;
-                        running: input.has-focus;
+                        running: input.has-focus && field.blinked < Caret.halves;
                         triggered => {
                             field.caret-lit = !field.caret-lit;
+                            field.blinked += 1;
                         }
                     }
 
@@ -1763,12 +1767,16 @@ export component MainWindow inherits Window {
                         // Typing restarts the lit half: a caret blinking while
                         // letters arrive reads as a dropped keystroke.
                         field.caret-lit = true;
+                        field.blinked = 0;
                         blink.restart();
                     }
                     changed has-focus => {
                         if (!self.has-focus) {
                             root.lens-close();
                             root.plus-asked = false;
+                        } else {
+                            field.caret-lit = true;
+                            field.blinked = 0;
                         }
                         root.q-focus-moved();
                     }
@@ -2289,6 +2297,7 @@ export component MainWindow inherits Window {
                             // Slid left so the caret stays in sight.
                             property <length> shift: max(0px, root.grep-caret-x + 16px - self.width);
                             property <bool> lit: true;
+                            property <int> blinked: 0;
                             // Forty characters of each face, to measure one.
                             property <length> adv: gruler.preferred-width / 40;
                             property <length> small: gsmall.preferred-width / 40;
@@ -2310,8 +2319,11 @@ export component MainWindow inherits Window {
                             }
                             gblink := Timer {
                                 interval: 530ms;
-                                running: grep-input.has-focus;
-                                triggered => { grep-area.lit = !grep-area.lit; }
+                                running: grep-input.has-focus && grep-area.blinked < Caret.halves;
+                                triggered => {
+                                    grep-area.lit = !grep-area.lit;
+                                    grep-area.blinked += 1;
+                                }
                             }
                             if root.grep-pattern == "": Text {
                                 width: parent.width;
@@ -2348,9 +2360,14 @@ export component MainWindow inherits Window {
                                 single-line: true;
                                 vertical-alignment: center;
                                 edited => { root.grep-edited(self.text); }
+                                changed has-focus => {
+                                    grep-area.lit = true;
+                                    grep-area.blinked = 0;
+                                }
                                 cursor-position-changed(p) => {
                                     root.grep-caret(self.anchor-position-byte-offset, self.cursor-position-byte-offset);
                                     grep-area.lit = true;
+                                    grep-area.blinked = 0;
                                     gblink.restart();
                                 }
                                 key-pressed(e) => {

@@ -68,6 +68,8 @@
       PROGRAMS: T("Running"),
       SERVICE: T("Service"),
       PEAK: T("at most {n} since it started"),
+      INDEX_PAGES: T("Index pages"),
+      GIVEN_BACK: T("a cache the system takes back when it needs to"),
       MACHINE_MEMORY: T("{used} of {total} in use"),
       OTHERS: T("other programs"),
       CORE: T("{n}% of one core"),
@@ -76,6 +78,23 @@
       OPEN_HINT: T("What Scour keeps on this machine"),
       UNREADABLE: T("this system does not say"),
     };
+  }
+
+  /* `service_lines`: the service's memory as the panel lists it, its own
+     then the index's mapped pages; one line with its peak from a service
+     that does not say the two. */
+  function resServiceLines(m) {
+    const w = resWords();
+    const line = (label, note, bytes, peak) => ({ label, note, bytes, peak });
+    if (!m.own && !m.mapped) {
+      return m.service ? [line(w.SERVICE, m.peak ? w.PEAK : "", m.service, m.peak)] : [];
+    }
+    return [line(w.SERVICE, "", m.own || 0, 0), line(w.INDEX_PAGES, w.GIVEN_BACK, m.mapped || 0, 0)]
+      .filter((l) => l.bytes > 0);
+  }
+  /* `service_held`: what the service adds to the memory Scour holds. */
+  function resServiceHeld(m) {
+    return m.own ? m.own : m.service;
   }
 
   /* `{name}` filled in a word already translated. */

@@ -662,6 +662,24 @@ test('shares are of one core and of the machine (resources.rs)', () => {
   assert.equal(c.resShares(b, a), null);
 });
 
+test('the index pages are a line of their own and not held (resources.rs)', () => {
+  const c = resourcesModel();
+  // the_index_pages_are_a_line_of_their_own_and_not_held
+  const MB = 2 ** 20;
+  const both = c.resServiceLines({ service: 360 * MB, peak: 528 * MB, own: 47 * MB, mapped: 313 * MB });
+  assert.deepEqual(RJ(both), [
+    { label: 'Service', note: '', bytes: 47 * MB, peak: 0 },
+    { label: 'Index pages', note: "a cache the system takes back when it needs to", bytes: 313 * MB, peak: 0 },
+  ]);
+  assert.equal(c.resServiceHeld({ service: 360 * MB, own: 47 * MB }), 47 * MB);
+  // An older service: one line with its peak, all of it held.
+  const one = c.resServiceLines({ service: 360 * MB, peak: 528 * MB });
+  assert.deepEqual(RJ(one.map((l) => [l.note, l.peak])), [['at most {n} since it started', 528 * MB]]);
+  assert.equal(c.resServiceHeld({ service: 360 * MB }), 360 * MB);
+  assert.deepEqual(RJ(c.resServiceLines({ service: 0, peak: 0, own: 0, mapped: 0 })), []);
+  assert.equal(c.resServiceLines({ service: 0, peak: 0, own: 5, mapped: 0 }).length, 1);
+});
+
 test('uptime is said in its two largest units, and bars never vanish (resources.rs)', () => {
   const c = resourcesModel();
   // uptime_is_said_in_its_two_largest_units

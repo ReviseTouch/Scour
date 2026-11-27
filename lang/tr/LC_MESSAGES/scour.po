@@ -3287,6 +3287,12 @@ msgstr "Servis"
 msgid "at most {n} since it started"
 msgstr "açıldığından beri en çok {n}"
 
+msgid "Index pages"
+msgstr "İndeks sayfaları"
+
+msgid "a cache the system takes back when it needs to"
+msgstr "önbellek, sistem gerekince geri alır"
+
 msgid "{used} of {total} in use"
 msgstr "kullanımda {used} / {total}"
 

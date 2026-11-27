@@ -49,7 +49,7 @@
       .filter(([p]) => p && p.count > 0);
   }
   /* What the pill and the memory heading say: the service and those programs. */
-  const resOurs = (r) => r.memory.service + resPrograms(r).reduce((s, [p]) => s + p.bytes, 0);
+  const resOurs = (r) => resServiceHeld(r.memory) + resPrograms(r).reduce((s, [p]) => s + p.bytes, 0);
 
   function resPills(r) {
     const w = resWords();
@@ -129,14 +129,18 @@
         `<span><i class="oth"></i>${escape_(w.OTHERS)} ${escape_(resBytes(others))}</span>` +
         `<span>${escape_(said)}</span></div></div>`;
     }
-    const bars = resBars([m.peak, m.service, ...running.map(([p]) => p.bytes)]);
+    const service = resServiceLines(m);
+    const bars = resBars([...service.flatMap((l) => [l.peak, l.bytes]), ...running.map(([p]) => p.bytes)]);
     const row = (word, small, bytes, share, ghost) =>
       `<div class="rp-mrow"><div class="w">${escape_(word)}${small ? ` <small>${escape_(small)}</small>` : ""}</div>` +
       `<div class="v">${escape_(resBytes(bytes))}</div><div class="mbar">` +
       (ghost ? `<u style="width:${(ghost * 100).toFixed(1)}%"></u>` : "") +
       `<i style="width:${(share * 100).toFixed(1)}%"></i></div></div>`;
-    if (m.service) html += row(w.SERVICE, m.peak ? resFill(w.PEAK, { n: resBytes(m.peak) }) : "", m.service, bars[1], bars[0]);
-    running.forEach(([p, label], i) => { html += row(label, "", p.bytes, bars[2 + i], 0); });
+    service.forEach((l, i) => {
+      html += row(l.label, l.note && resFill(l.note, { n: resBytes(l.peak) }), l.bytes, bars[2 * i + 1], bars[2 * i]);
+    });
+    const after = 2 * service.length;
+    running.forEach(([p, label], i) => { html += row(label, "", p.bytes, bars[after + i], 0); });
     return html;
   }
 

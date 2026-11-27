@@ -385,6 +385,7 @@ fn main() -> Result<()> {
     let config = scour_config::Config::load_or_default().0;
     // A window from a desktop entry has nowhere for standard error to go.
     crash_log(&config.state_dir());
+    still_caret();
     // Not the one window: the page and the terminal open one per drag, and it
     // needs no service.
     if !args.drag.is_empty() {

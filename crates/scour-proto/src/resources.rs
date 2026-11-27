@@ -78,6 +78,14 @@ pub struct Memory {
     /// The service's resident memory now, and the most it has held.
     pub service: u64,
     pub peak: u64,
+    /// What the service holds of its own, in memory or swapped out; and the
+    /// files it has mapped in, the index's pages above all, which are the
+    /// system's cache: it takes them back when it needs the memory. Both 0
+    /// where the system does not say, and `service` is then all there is.
+    #[serde(default)]
+    pub own: u64,
+    #[serde(default)]
+    pub mapped: u64,
     /// The machine's memory, and how much of it is free to use.
     pub total: u64,
     pub available: u64,

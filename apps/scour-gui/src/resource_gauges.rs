@@ -18,37 +18,37 @@ const SPARK_FLOOR: f32 = 10.0;
 
 /// What the service and Scour's other programs hold together.
 pub(crate) fn scour_bytes(r: &Resources) -> u64 {
-    r.memory.service + r.running.iter().map(|x| x.bytes).sum::<u64>()
+    says::service_held(r.memory.service, r.memory.own)
+        + r.running.iter().map(|x| x.bytes).sum::<u64>()
 }
 
-/// The memory rows: the service with its peak as a ghost, then each kind of
-/// Scour's programs. Each bar is a share of the largest figure among them.
+/// The memory rows: the service's as `service_lines` lists them, then each
+/// kind of Scour's programs. Each bar is a share of the largest figure.
 pub(crate) fn mem_lines(r: &Resources, cat: &Catalogue) -> Vec<MemLine> {
     let m = r.memory;
+    let service = says::service_lines(m.service, m.peak, m.own, m.mapped);
     let scale = r
         .running
         .iter()
         .map(|x| x.bytes)
-        .chain([m.peak, m.service])
+        .chain(service.iter().flat_map(|l| [l.bytes, l.peak]))
         .max()
         .unwrap_or(0)
         .max(1) as f32;
-    let mut out = Vec::new();
-    if m.service > 0 {
-        out.push(MemLine {
-            label: t(cat, says::SERVICE),
-            note: if m.peak > 0 {
-                t(cat, says::PEAK)
-                    .replace("{n}", &compact_bytes(m.peak))
-                    .into()
-            } else {
+    let mut out: Vec<MemLine> = service
+        .iter()
+        .map(|l| MemLine {
+            label: t(cat, l.label),
+            note: if l.note.is_empty() {
                 SharedString::new()
+            } else {
+                t(cat, l.note).replace("{n}", &compact_bytes(l.peak)).into()
             },
-            value: compact_bytes(m.service).into(),
-            share: m.service as f32 / scale,
-            ghost: m.peak as f32 / scale,
-        });
-    }
+            value: compact_bytes(l.bytes).into(),
+            share: l.bytes as f32 / scale,
+            ghost: l.peak as f32 / scale,
+        })
+        .collect();
     for (kind, label) in says::RUNNING {
         if let Some(x) = r.running.iter().find(|x| x.kind == kind && x.count > 0) {
             out.push(MemLine {

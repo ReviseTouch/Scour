@@ -114,8 +114,9 @@
   .rp-sysnote i.us { background: var(--q-key); }
   .rp-sysnote i.oth { background: var(--ink-3); opacity: .35; }
   .rp-mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; font-size: 12.5px; }
-  .rp-mrow .w { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-  .rp-mrow .w small { color: var(--ink-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The name whole; a note that does not fit beside it goes under it. */
+  .rp-mrow .w { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; white-space: nowrap; }
+  .rp-mrow .w small { max-width: 100%; color: var(--ink-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rp-mrow .v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
   .rp-mrow .mbar { grid-column: 1 / -1; position: relative; height: 4px; border-radius: 2px; background: var(--line-soft); }
   .rp-mrow .mbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--q-key); border-radius: 2px; }

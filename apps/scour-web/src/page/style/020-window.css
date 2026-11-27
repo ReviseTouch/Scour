@@ -214,7 +214,7 @@
   /* The caret and the selection, drawn over the layer, under the textarea. */
   .qdecor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
   .qdecor .qsel { position: absolute; background: color-mix(in srgb, var(--focus) 28%, transparent); border-radius: 3px; }
-  .qdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--q-key); border-radius: 1px; animation: qblink 1.06s steps(1) infinite; }
+  .qdecor .qcaret { position: absolute; width: 2px; margin-left: -1px; background: var(--q-key); border-radius: 1px; animation: qblink 1.06s steps(1) 57; }
   @keyframes qblink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .qdecor .qcaret { animation: none; } }
   /* Role → colour is the frontend's only job; the engine sends the spans. */

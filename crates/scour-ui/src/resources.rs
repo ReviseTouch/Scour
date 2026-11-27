@@ -176,6 +176,8 @@ pub const PROCESSOR: &str = "Processor";
 pub const PROGRAMS: &str = "Running";
 pub const SERVICE: &str = "Service";
 pub const PEAK: &str = "at most {n} since it started";
+pub const INDEX_PAGES: &str = "Index pages";
+pub const GIVEN_BACK: &str = "a cache the system takes back when it needs to";
 pub const MACHINE_MEMORY: &str = "{used} of {total} in use";
 pub const OTHERS: &str = "other programs";
 pub const CORE: &str = "{n}% of one core";
@@ -232,6 +234,54 @@ pub fn uptime(ms: u64) -> (&'static str, u64, u64) {
     }
 }
 
+/// A line of the service's memory: its words, its bytes, and the peak drawn
+/// behind it (0 for none). The note may hold `{n}`, the peak said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceLine {
+    pub label: &'static str,
+    pub note: &'static str,
+    pub bytes: u64,
+    pub peak: u64,
+}
+
+/// The service's memory as the panel lists it, from the wire's `Memory`: its
+/// own, then the index's pages it has mapped in. Most of what it has resident
+/// is those pages, which hold nobody's memory (measured 2026-11-27: 47 MB of
+/// 360). The peak is of both together, so it goes with neither. A service
+/// that does not say the two is one line, all of it, with its peak.
+pub fn service_lines(service: u64, peak: u64, own: u64, mapped: u64) -> Vec<ServiceLine> {
+    let line = |label, note, bytes, peak| ServiceLine {
+        label,
+        note,
+        bytes,
+        peak,
+    };
+    if own == 0 && mapped == 0 {
+        if service == 0 {
+            return Vec::new();
+        }
+        return vec![line(
+            SERVICE,
+            if peak > 0 { PEAK } else { "" },
+            service,
+            peak,
+        )];
+    }
+    [
+        line(SERVICE, "", own, 0),
+        line(INDEX_PAGES, GIVEN_BACK, mapped, 0),
+    ]
+    .into_iter()
+    .filter(|l| l.bytes > 0)
+    .collect()
+}
+
+/// What the service adds to the memory Scour holds: its own, the mapped pages
+/// left out as the system counts them free; all of it where it does not say.
+pub fn service_held(service: u64, own: u64) -> u64 {
+    if own > 0 { own } else { service }
+}
+
 /// Each size's share of the largest, for the bars under the rows: the largest
 /// fills its bar, and nothing that is something is drawn as nothing.
 pub fn bars(bytes: &[u64]) -> Vec<f32> {
@@ -283,6 +333,36 @@ mod tests {
         // The same answer twice, and a service that started again in between.
         assert_eq!(shares(&a, &a), None);
         assert_eq!(shares(&b, &a), None);
+    }
+
+    #[test]
+    fn the_index_pages_are_a_line_of_their_own_and_not_held() {
+        const MB: u64 = 1 << 20;
+        let both = service_lines(360 * MB, 528 * MB, 47 * MB, 313 * MB);
+        assert_eq!(
+            both,
+            [
+                ServiceLine {
+                    label: SERVICE,
+                    note: "",
+                    bytes: 47 * MB,
+                    peak: 0
+                },
+                ServiceLine {
+                    label: INDEX_PAGES,
+                    note: GIVEN_BACK,
+                    bytes: 313 * MB,
+                    peak: 0
+                },
+            ]
+        );
+        assert_eq!(service_held(360 * MB, 47 * MB), 47 * MB);
+        // An older service: one line with its peak, all of it held.
+        let one = service_lines(360 * MB, 528 * MB, 0, 0);
+        assert_eq!((one.len(), one[0].note, one[0].peak), (1, PEAK, 528 * MB));
+        assert_eq!(service_held(360 * MB, 0), 360 * MB);
+        assert!(service_lines(0, 0, 0, 0).is_empty());
+        assert_eq!(service_lines(0, 0, 5, 0).len(), 1);
     }
 
     #[test]

@@ -1273,7 +1273,16 @@ fn resources(r: &scour_proto::Resources) {
         println!("{what}   {}", h.path);
     }
     let m = &r.memory;
-    if m.service > 0 {
+    // The index's mapped pages apart, as the panels list them.
+    if m.own > 0 || m.mapped > 0 {
+        println!(
+            "memory     service {} · index pages {} (a cache the system takes back) · machine {} of {} in use",
+            size(m.own),
+            size(m.mapped),
+            size(m.total.saturating_sub(m.available)),
+            size(m.total)
+        );
+    } else if m.service > 0 {
         println!(
             "memory     service {} (at most {}) · machine {} of {} in use",
             size(m.service),

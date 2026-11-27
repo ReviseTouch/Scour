@@ -77,6 +77,54 @@ pub(super) fn wayland_found_again() {
     }
 }
 
+/// The winit backend with Slint's own text cursor held still. Every field here
+/// draws its own caret (`text-cursor-width: 0px`), yet the hidden one flashed
+/// on Slint's timer: a redraw every 500 ms for as long as a field had focus,
+/// twenty frames in ten idle seconds (2026-11-27). Under a `SLINT_BACKEND`
+/// that is not winit's, Slint chooses as it always did.
+pub(super) fn still_caret() {
+    use slint::PlatformError;
+    use slint::platform::{Clipboard, EventLoopProxy, Platform, WindowAdapter};
+
+    struct Still(i_slint_backend_winit::Backend);
+
+    impl Platform for Still {
+        fn create_window_adapter(&self) -> Result<std::rc::Rc<dyn WindowAdapter>, PlatformError> {
+            self.0.create_window_adapter()
+        }
+        fn run_event_loop(&self) -> Result<(), PlatformError> {
+            self.0.run_event_loop()
+        }
+        fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+            self.0.new_event_loop_proxy()
+        }
+        fn set_clipboard_text(&self, text: &str, clipboard: Clipboard) {
+            self.0.set_clipboard_text(text, clipboard);
+        }
+        fn clipboard_text(&self, clipboard: Clipboard) -> Option<String> {
+            self.0.clipboard_text(clipboard)
+        }
+        fn open_url(&self, url: &str) -> Result<(), PlatformError> {
+            self.0.open_url(url)
+        }
+        fn cursor_flash_cycle(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
+        }
+    }
+
+    let chosen = std::env::var("SLINT_BACKEND").unwrap_or_default();
+    let renderer = match chosen.as_str() {
+        "" | "winit" => None,
+        other => match other.strip_prefix("winit-") {
+            Some(renderer) => Some(renderer),
+            None => return,
+        },
+    };
+    if let Ok(backend) = i_slint_backend_winit::Backend::new_with_renderer_by_name(renderer) {
+        let _ = slint::platform::set_platform(Box::new(Still(backend)));
+    }
+}
+
 /// The lock a running window holds: a socket beside the service's, removed on
 /// exit.
 #[cfg(unix)]
