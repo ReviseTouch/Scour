@@ -137,12 +137,13 @@
   .peek[hidden] { display: none; }
   /* What it is and where: the name wraps, the folder under it as parts. */
   .peek-head {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    gap: 2px calc(var(--u) * 2);
-    padding: calc(var(--u) * 2.5) calc(var(--u) * 2) calc(var(--u) * 2.25) calc(var(--u) * 3.5);
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: start; gap: 0 calc(var(--u) * 1.5);
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 1.5) calc(var(--u) * 1.25) calc(var(--u) * 3.5);
     border-bottom: 1px solid var(--line);
     flex: none;
   }
+  .peek-head .nm { padding-top: 5px; }
   .peek-head .nm {
     min-width: 0;
     font-size: 12.5px; font-weight: 600; color: var(--ink);
@@ -159,7 +160,7 @@
   #peek-close:hover { color: var(--ink); border-color: var(--line); }
   #peek-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .peek-head .crumbs {
-    grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0 1px;
+    grid-column: 1 / -1; margin-top: -2px; display: flex; flex-wrap: wrap; gap: 0 1px;
     font: 11.5px/1.5 var(--mono); color: var(--ink-3);
   }
   .peek-head .crumbs .cr {
@@ -169,14 +170,17 @@
   .peek-head .crumbs .cr:hover { color: var(--q-key); background: var(--cap); }
 
   /* What can be done: always there, always in the same place. */
-  /* Each as wide as its words, the rest shared: a short "Open" leaves the
-     longer two room, and they cut only in a panel dragged narrow. */
-  .peek-acts {
-    flex: none; display: flex; gap: 5px; padding: 8px;
-    background: var(--panel); border-bottom: 1px solid var(--line);
+  /* The buttons beside the name: drawings, named on hover. Under the hand only
+     their ground changes. */
+  .peek-acts { display: flex; gap: 1px; }
+  .peek-acts .pi {
+    width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; cursor: pointer;
+    display: grid; place-items: center; background: none; color: var(--ink-2);
+    font: 15px/1 var(--sans);
   }
-  .peek-acts .act { flex: 1 1 auto; min-width: 0; }
-  .peek-acts .act.more { flex: 0 0 34px; }
+  .peek-acts .pi:hover { background: var(--line-soft); color: var(--ink); }
+  .peek-acts .pi:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .peek-acts .pi svg { width: 16px; height: 16px; }
   .peek .act {
     height: 30px; padding: 0 6px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--line); background: var(--panel); color: var(--ink-2);
@@ -184,9 +188,6 @@
   }
   .peek .act:hover { color: var(--ink); border-color: var(--ink-3); }
   .peek .act:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .peek .act.first { background: var(--cap); border-color: var(--cap-ring); color: var(--q-key); font-weight: 600; }
-  .peek .act kbd { font: 10.5px var(--mono); color: var(--ink-3); margin-left: 5px; }
-  .peek .act.more { padding: 0; font-size: 15px; }
 
   .peek-body {
     flex: 1; min-height: 80px; overflow: auto;

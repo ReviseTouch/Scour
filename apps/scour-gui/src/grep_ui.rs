@@ -305,8 +305,9 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
     w.set_grep_sel(fi);
     s.peek_path = gf.path.clone();
     w.set_peeking(true);
-    w.set_peek_name(scour_ui::path::leaf(&gf.path).into());
-    w.set_peek_path(gf.path.as_str().into());
+    // The heading the list's rows get, path and buttons with it: written here
+    // only the name came, under it an empty band and a lone "⋯".
+    crate::peeking::head_of(w, cat, &gf.path, false, "");
     let found: Vec<Found> = gf
         .hits
         .iter()
@@ -329,7 +330,6 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
         })
         .collect();
     w.set_peek_found(ModelRc::new(VecModel::from(found)));
-    w.set_peek_note(cat.get("reading…").as_ref().into());
     link.send(Ask::Peek {
         path: gf.path.clone(),
     });

@@ -25,7 +25,7 @@ export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { HeldPanel, HeldLine, SortLine, MemLine, RunLine, ResourcePanel } from "resources.slint";
 export { HeldPanel, HeldLine, SortLine, MemLine, RunLine }
-import { Shade, PeekButton, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, PeekButton, PeekIcon, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
 export component MainWindow inherits Window {
@@ -387,6 +387,9 @@ export component MainWindow inherits Window {
     out property <length> peek-adv: peek-ruler.preferred-width / 40;
     /// Three of the menu's lines, then the whole menu.
     in property <[PeekAct]> peek-acts;
+    /// A button pressed: on the row the list has selected, or on the file the
+    /// content search is showing.
+    callback peek-pick(string);
     in property <string> word-peek-menu: "The whole menu";
     /// The kind, for the picture that stands while the file is read.
     in property <string> peek-ktoken;
@@ -3916,9 +3919,11 @@ export component MainWindow inherits Window {
                     padding-left: 1px;
                     spacing: 0px;
 
-                    // What it is and where: the name wrapped rather than
-                    // truncated — the end of a name is what tells two versions
-                    // apart — the way out, and the folder as parts.
+                    // What it is, where, and what can be done: the name with
+                    // the menu's own buttons as drawings beside it — named on
+                    // hover — and the way out; under them the folder as parts.
+                    // The name wraps rather than cuts: its end is what tells
+                    // two versions apart.
                     Rectangle {
                         background: Theme.panel-2;
 
@@ -3930,13 +3935,13 @@ export component MainWindow inherits Window {
 
                         VerticalLayout {
                             padding-left: 14px;
-                            padding-right: 8px;
-                            padding-top: 8px;
-                            padding-bottom: 7px;
-                            spacing: 3px;
+                            padding-right: 6px;
+                            padding-top: 6px;
+                            padding-bottom: 5px;
+                            spacing: 0px;
 
                             HorizontalLayout {
-                                spacing: 6px;
+                                spacing: 1px;
 
                                 Text {
                                     text: root.peek-name;
@@ -3947,12 +3952,71 @@ export component MainWindow inherits Window {
                                     overflow: elide;
                                     vertical-alignment: center;
                                     max-height: 34px;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Rectangle {
+                                    width: 6px;
+                                }
+
+                                for act[i] in root.peek-acts: VerticalLayout {
+                                    alignment: start;
+                                    peek-icon := PeekIcon {
+                                        icon: act.icon;
+                                        clicked => { root.peek-pick(act.id); }
+                                        changed hover => {
+                                            if (self.hover) {
+                                                root.tip-owner = -40 - i;
+                                                root.tip-mono = false;
+                                                root.tip-pending = act.label;
+                                                root.tip-x = self.absolute-position.x;
+                                                root.tip-y = self.absolute-position.y + self.height + 4px;
+                                            } else if (root.tip-owner == -40 - i) {
+                                                root.tip-owner = -1;
+                                                root.tip-pending = "";
+                                                root.tip-text = "";
+                                            }
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: start;
+                                    PeekIcon {
+                                        glyph: "⋯";
+                                        clicked => {
+                                            if (root.grep-active) {
+                                                root.big-menu-at(root.peek-path,
+                                                    self.absolute-position.x + self.width,
+                                                    self.absolute-position.y + self.height + 4px);
+                                            } else {
+                                                root.menu-at(root.selected,
+                                                    self.absolute-position.x + self.width,
+                                                    self.absolute-position.y + self.height + 4px);
+                                            }
+                                        }
+                                        changed hover => {
+                                            if (self.hover) {
+                                                root.tip-owner = -39;
+                                                root.tip-mono = false;
+                                                root.tip-pending = root.word-peek-menu;
+                                                root.tip-x = self.absolute-position.x;
+                                                root.tip-y = self.absolute-position.y + self.height + 4px;
+                                            } else if (root.tip-owner == -39) {
+                                                root.tip-owner = -1;
+                                                root.tip-pending = "";
+                                                root.tip-text = "";
+                                            }
+                                        }
+                                    }
                                 }
 
                                 VerticalLayout {
                                     alignment: start;
                                     Tool {
                                         glyph: "×";
+                                        width: 26px;
+                                        height: 26px;
                                         clicked => {
                                             root.peek-toggled();
                                         }
@@ -3992,40 +4056,6 @@ export component MainWindow inherits Window {
                                             clicked => { root.peek-crumb(c.path); }
                                         }
                                     }
-                                }
-                            }
-                        }
-                    }
-
-                    // What can be done: three of the menu's own lines and the
-                    // whole menu, always there and in the same place.
-                    Rectangle {
-                        height: 47px;
-                        background: Theme.panel;
-
-                        Rectangle {
-                            y: parent.height - 1px;
-                            height: 1px;
-                            background: Theme.line;
-                        }
-
-                        HorizontalLayout {
-                            padding: 8px;
-                            spacing: 5px;
-                            for act[i] in root.peek-acts: PeekButton {
-                                label: act.label;
-                                first: i == 0;
-                                enter: act.enter;
-                                clicked => { root.menu-pick(act.id); }
-                            }
-                            peek-more := PeekButton {
-                                label: "⋯";
-                                width: 34px;
-                                horizontal-stretch: 0;
-                                clicked => {
-                                    root.menu-at(root.selected,
-                                        self.absolute-position.x + self.width,
-                                        self.absolute-position.y + self.height + 4px);
                                 }
                             }
                         }
@@ -5929,7 +5959,9 @@ export component MainWindow inherits Window {
     // Back to the top in one click, once the list has left it: how many files
     // arrived above meanwhile, when some did. Over the list's corner, above
     // everything but the menu.
-    if root.first-row > 0 && root.panel == "": top-pill := Rectangle {
+    // Not over a content search's stream of files: `first-row` is the list's
+    // behind it, and a list scrolled before the search showed the pill over one file.
+    if root.first-row > 0 && root.panel == "" && !root.grep-active: top-pill := Rectangle {
         x: (root.grid ? tiles.absolute-position.x + tiles.width : list.absolute-position.x + list.width)
             - self.width - 14px;
         y: (root.grid ? tiles.absolute-position.y + tiles.height : list.absolute-position.y + list.height)

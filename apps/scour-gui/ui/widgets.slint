@@ -1308,3 +1308,34 @@ export component Shade inherits Rectangle {
         background: rgba(0, 0, 0, root.alpha);
     }
 }
+
+// A button in the preview's heading: the menu's own drawing, named on hover
+// by whoever places it. Under the hand only its ground changes.
+export component PeekIcon inherits Rectangle {
+    in property <string> icon;
+    in property <string> glyph;
+    out property <bool> hover: touch.has-hover;
+    callback clicked();
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: touch.has-hover ? Theme.hover : transparent;
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    if root.icon != "": MenuIcon {
+        name: root.icon;
+        x: 5px;
+        y: 5px;
+        width: 16px;
+        height: 16px;
+        colorize: touch.has-hover ? Theme.ink : Theme.ink-2;
+    }
+    if root.icon == "": Text {
+        text: root.glyph;
+        color: touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: 15px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

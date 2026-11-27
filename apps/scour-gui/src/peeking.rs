@@ -70,24 +70,16 @@ pub(super) fn peek(
         s.peek_path = path.clone();
         s.peek_dir = DirParts::default();
     }
-    blank(w);
     if path.is_empty() {
+        blank(w);
         w.set_peek_name(slint::SharedString::new());
         w.set_peek_path(slint::SharedString::new());
         w.set_peek_crumbs(ModelRc::default());
         w.set_peek_acts(ModelRc::default());
         return;
     }
-    w.set_peek_name(scour_ui::path::leaf(&path).into());
-    w.set_peek_path(path.as_str().into());
-    w.set_peek_crumbs(crumbs(w, scour_ui::path::folder(&path)));
-    w.set_peek_acts(acts(cat, is_dir, false, 1));
-    w.set_peek_ktoken(
-        rows.ktoken_at(selected.max(0) as usize)
-            .unwrap_or_default()
-            .into(),
-    );
-    w.set_peek_dir(is_dir);
+    let ktoken = rows.ktoken_at(selected.max(0) as usize).unwrap_or_default();
+    head_of(w, cat, &path, is_dir, &ktoken);
     w.set_peek_found(rows.found_at(selected.max(0) as usize));
     if is_dir {
         // Once the hand has stopped: a folder's answers cost the service a
@@ -108,6 +100,19 @@ pub(super) fn peek(
         link.send(Ask::Peek { path: path.clone() });
     }
     link.send(Ask::PeekFacts { path });
+}
+
+/// The heading of one file's preview — its name, its folder as parts, the
+/// buttons for one row — with the rest emptied: for the list's row and for the
+/// file a content search shows, which the list does not hold.
+pub(super) fn head_of(w: &MainWindow, cat: &Catalogue, path: &str, is_dir: bool, ktoken: &str) {
+    blank(w);
+    w.set_peek_name(scour_ui::path::leaf(path).into());
+    w.set_peek_path(path.into());
+    w.set_peek_crumbs(crumbs(w, scour_ui::path::folder(path)));
+    w.set_peek_acts(acts(cat, is_dir, false, 1));
+    w.set_peek_ktoken(ktoken.into());
+    w.set_peek_dir(is_dir);
 }
 
 /// Everything a row's preview said, taken away: what stands until the new
@@ -202,6 +207,7 @@ fn acts(cat: &Catalogue, is_dir: bool, many: bool, n: usize) -> ModelRc<PeekAct>
                 id: (*id).into(),
                 label: t(cat, it.msgid).replace("{n}", &grouped(n as u64)).into(),
                 enter: it.key == "Enter",
+                icon: it.icon.into(),
             })
         })
         .collect();

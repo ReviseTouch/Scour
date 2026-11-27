@@ -140,27 +140,26 @@
 
   /* ---- what can be done: three of the menu's own lines, and the menu ---- */
 
+  /* Beside the name, as the menu's own drawings, named on hover: a row of
+     their own cost the content a line. */
   function peekActsOf(shape, n) {
     const fits = (w) => (shape === "many" ? w === "many" : w === "one" || w === shape);
-    const buttons = (PEEK_BUTTONS[shape] || []).map((id, i) => {
+    const buttons = (PEEK_BUTTONS[shape] || []).map((id) => {
       const it = MENU.find((m) => m.id === id && fits(m.when));
       const b = document.createElement("button");
       b.type = "button";
-      b.className = i === 0 ? "act first" : "act";
+      b.className = "pi";
       b.dataset.act = id;
-      const said = it ? T(it.msgid, { n: fmt(n) }) : id;
-      b.append(said);
+      const said = it ? T(it.msgid, { n: fmt(n) }) + (it.key === "Enter" ? "  ↵" : "") : id;
       b.title = said;
-      if (it && it.key === "Enter") {
-        const k = document.createElement("kbd");
-        k.textContent = "↵";
-        b.append(k);
-      }
+      b.setAttribute("aria-label", said);
+      /* The drawing is the build's own, never a file's. */
+      b.innerHTML = it && MENU_ICONS[it.icon] ? MENU_ICONS[it.icon] : "";
       return b;
     });
     const more = document.createElement("button");
     more.type = "button";
-    more.className = "act more";
+    more.className = "pi more";
     more.dataset.act = "menu";
     more.textContent = "⋯";
     more.title = T("The whole menu");

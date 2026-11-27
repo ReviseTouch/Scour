@@ -61,6 +61,20 @@ pub(crate) fn wire(wiring: &Wiring) {
         });
     }
 
+    // A button of the preview: the menu's own act, on the list's row — or on
+    // the file a content search shows, which is no row of the list.
+    {
+        let menu_path = Rc::clone(menu_path);
+        let weak = window.as_weak();
+        window.on_peek_pick(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            let file =
+                (w.get_grep_active() && !w.get_peek_many()).then(|| w.get_peek_path().to_string());
+            *menu_path.borrow_mut() = file;
+            w.invoke_menu_pick(id);
+        });
+    }
+
     // The same menu over one of the report's heaviest files. It is about that
     // one path, not about the list's selection, which is a different set.
     {
