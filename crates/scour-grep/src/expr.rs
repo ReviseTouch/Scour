@@ -4,7 +4,7 @@
 use crate::budget::Budget;
 use crate::ground::Ground;
 use crate::near::Forgive;
-use crate::pattern::{BadPattern, Needle, Pattern, Term};
+use crate::pattern::{BadPattern, Letters, Needle, Pattern, Term};
 use std::sync::Arc;
 
 use crate::scan::{Enter, File, Options, Outcome, Scanner};
@@ -20,8 +20,8 @@ pub struct Expr {
 
 impl Expr {
     /// [`Expr::forgiving`] with no mistake forgiven: `~word` is the word.
-    pub fn new(needle: &Needle, exact_case: bool) -> Result<Expr, BadPattern> {
-        Self::forgiving(needle, exact_case, |_| 0)
+    pub fn new(needle: &Needle, letters: impl Into<Letters>) -> Result<Expr, BadPattern> {
+        Self::forgiving(needle, letters, |_| 0)
     }
 
     /// Parse `needle`. `Needle::Text` supports `;` / `|` (OR), whitespace (AND),
@@ -30,15 +30,16 @@ impl Expr {
     /// tilde itself).
     pub fn forgiving(
         needle: &Needle,
-        exact_case: bool,
+        letters: impl Into<Letters>,
         forgive: Forgive,
     ) -> Result<Expr, BadPattern> {
+        let letters = letters.into();
         match needle {
             Needle::Regex(_) | Needle::Bytes(_) | Needle::Wild { .. } => Ok(Expr {
-                must: vec![Pattern::new(needle, exact_case)?],
+                must: vec![Pattern::new(needle, letters)?],
                 forbid: None,
             }),
-            Needle::Text(raw) => Self::parse_text(raw, exact_case, forgive),
+            Needle::Text(raw) => Self::parse_text(raw, letters, forgive),
         }
     }
 
@@ -46,29 +47,30 @@ impl Expr {
     pub fn from_clauses(
         must_clauses: &[Vec<String>],
         forbid_terms: &[String],
-        exact_case: bool,
+        letters: impl Into<Letters>,
         forgive: Forgive,
     ) -> Result<Expr, BadPattern> {
+        let letters = letters.into();
         let read = |pieces: &[String]| -> Vec<Term> {
             pieces.iter().map(|p| term(p, false, forgive)).collect()
         };
         let must: Vec<Vec<Term>> = must_clauses.iter().map(|c| read(c)).collect();
-        Self::from_terms(&must, &read(forbid_terms), exact_case)
+        Self::from_terms(&must, &read(forbid_terms), letters)
     }
 
     fn from_terms(
         must_clauses: &[Vec<Term>],
         forbid_terms: &[Term],
-        exact_case: bool,
+        letters: Letters,
     ) -> Result<Expr, BadPattern> {
         let mut must = Vec::with_capacity(must_clauses.len());
         for clause in must_clauses {
-            must.push(Pattern::any_term(clause, exact_case)?);
+            must.push(Pattern::any_term(clause, letters)?);
         }
         let forbid = if forbid_terms.is_empty() {
             None
         } else {
-            Some(Pattern::any_term(forbid_terms, exact_case)?)
+            Some(Pattern::any_term(forbid_terms, letters)?)
         };
         if must.is_empty() && forbid.is_none() {
             return Err(BadPattern::Empty);
@@ -76,7 +78,7 @@ impl Expr {
         Ok(Expr { must, forbid })
     }
 
-    fn parse_text(input: &str, exact_case: bool, forgive: Forgive) -> Result<Expr, BadPattern> {
+    fn parse_text(input: &str, letters: Letters, forgive: Forgive) -> Result<Expr, BadPattern> {
         if input.is_empty() {
             return Err(BadPattern::Empty);
         }
@@ -106,7 +108,7 @@ impl Expr {
                 }
             }
         }
-        Self::from_terms(&must_clauses, &forbid_terms, exact_case)
+        Self::from_terms(&must_clauses, &forbid_terms, letters)
     }
 
     /// Evaluate the expression across `files`, reading surviving candidates only.

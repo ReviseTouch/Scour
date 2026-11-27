@@ -321,7 +321,10 @@ impl Contents {
         let expr = Expr::from_clauses(
             &reading.plan.must,
             &reading.plan.forbid,
-            false,
+            scour_grep::Letters {
+                exact_case: false,
+                exact_accents: reading.plan.rest.exact_accents,
+            },
             scour_core::mistakes_allowed,
         )
         .map_err(|e| Error::QuerySyntax {

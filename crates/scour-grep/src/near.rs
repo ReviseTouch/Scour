@@ -40,10 +40,15 @@ pub(crate) struct Near {
 
 impl Near {
     /// None when the encoding cannot write the word.
-    pub(crate) fn new(word: &str, edits: u8, encoding: Encoding, exact_case: bool) -> Option<Near> {
+    pub(crate) fn new(
+        word: &str,
+        edits: u8,
+        encoding: Encoding,
+        letters: crate::pattern::Letters,
+    ) -> Option<Near> {
         let atoms = word
             .chars()
-            .map(|c| atom(c, encoding, exact_case))
+            .map(|c| atom(c, encoding, letters))
             .collect::<Option<Vec<String>>>()?;
         let first = word.chars().next()?;
         let mut ascii = String::from(r"\x00-\x2F\x3A-\x40\x5B-\x60\x7B-\x7F");

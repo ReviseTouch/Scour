@@ -25,7 +25,7 @@ pub use expr::Expr;
 pub use ground::{Ground, readers};
 pub use near::Forgive;
 pub use order::Order;
-pub use pattern::{BadPattern, Needle, Pattern};
+pub use pattern::{BadPattern, Letters, Needle, Pattern};
 pub use scan::{Enter, File, Options, Outcome, Scanner, Skip};
 pub use surefoot::Medium;
 pub use texts::{Doc, DocText, Texts};

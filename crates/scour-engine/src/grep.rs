@@ -85,12 +85,17 @@ pub(crate) fn run(
     texts: Option<Arc<dyn Texts>>,
 ) -> Result<Grepped> {
     let began = Instant::now();
-    let expr = Expr::forgiving(&ask.needle, ask.exact_case, scour_core::mistakes_allowed).map_err(
-        |e| Error::QuerySyntax {
-            at: 0,
-            expected: e.to_string(),
-        },
-    )?;
+    let letters = scour_grep::Letters {
+        exact_case: ask.exact_case,
+        exact_accents: query.exact_accents,
+    };
+    let expr =
+        Expr::forgiving(&ask.needle, letters, scour_core::mistakes_allowed).map_err(|e| {
+            Error::QuerySyntax {
+                at: 0,
+                expected: e.to_string(),
+            }
+        })?;
     let mut options = Options {
         binary: ask.binary,
         markup: ask.markup,

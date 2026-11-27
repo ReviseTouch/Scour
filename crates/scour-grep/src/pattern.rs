@@ -131,15 +131,39 @@ pub(crate) enum Encoding {
     Utf16Be,
 }
 
+/// How letters are compared. `exact_case` off reads `a` as `A` too, and the
+/// four Turkish i's as one; `exact_accents` off reads a letter typed with no
+/// mark as that letter with Turkish's marks — `sirket` finds `şirket`,
+/// `Necmeddin` finds `Necmeddîn` (see [`MARKED`] for why those alone) — while
+/// a letter typed with one is that letter alone, as the index's reading of
+/// names has it. A bare `bool` is the case alone,
+/// marks set aside, which is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Letters {
+    pub exact_case: bool,
+    pub exact_accents: bool,
+}
+
+impl From<bool> for Letters {
+    fn from(exact_case: bool) -> Letters {
+        Letters {
+            exact_case,
+            exact_accents: false,
+        }
+    }
+}
+
 impl Pattern {
-    /// `exact_case` off reads `a` as `A` too, and the four Turkish i's as one.
-    pub fn new(needle: &Needle, exact_case: bool) -> Result<Pattern, BadPattern> {
+    /// The needle, its letters compared as `letters` says.
+    pub fn new(needle: &Needle, letters: impl Into<Letters>) -> Result<Pattern, BadPattern> {
+        let letters = letters.into();
+        let exact_case = letters.exact_case;
         match needle {
             Needle::Text(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Regex(text) if text.is_empty() => Err(BadPattern::Empty),
             Needle::Bytes(bytes) if bytes.is_empty() => Err(BadPattern::Empty),
             Needle::Wild { bytes, .. } if bytes.is_empty() => Err(BadPattern::Empty),
-            Needle::Text(text) => Self::any_text(std::slice::from_ref(text), exact_case),
+            Needle::Text(text) => Self::any_text(std::slice::from_ref(text), letters),
             Needle::Bytes(bytes) => Ok(Pattern {
                 narrow: raw(&escaped(bytes))?,
                 wide: None,
@@ -182,12 +206,12 @@ impl Pattern {
     }
 
     /// One compiled DFA matching any of `alts` (`a;b` / `a|b`) in a single pass.
-    pub fn any_text(alts: &[String], exact_case: bool) -> Result<Pattern, BadPattern> {
+    pub fn any_text(alts: &[String], letters: impl Into<Letters>) -> Result<Pattern, BadPattern> {
         let terms: Vec<Term> = alts.iter().map(|t| Term::Plain(t.clone())).collect();
-        Self::any_term(&terms, exact_case)
+        Self::any_term(&terms, letters.into())
     }
 
-    pub(crate) fn any_term(alts: &[Term], exact_case: bool) -> Result<Pattern, BadPattern> {
+    pub(crate) fn any_term(alts: &[Term], letters: Letters) -> Result<Pattern, BadPattern> {
         let alts: Vec<&Term> = alts.iter().filter(|t| !t.text().is_empty()).collect();
         if alts.is_empty() {
             return Err(BadPattern::Empty);
@@ -197,9 +221,9 @@ impl Pattern {
             let spelled: Vec<String> = alts
                 .iter()
                 .filter_map(|t| match t {
-                    Term::Plain(text) => spelled(text, enc, exact_case),
+                    Term::Plain(text) => spelled(text, enc, letters),
                     Term::Near(word, edits) => {
-                        let it = crate::near::Near::new(word, *edits, enc, exact_case)?;
+                        let it = crate::near::Near::new(word, *edits, enc, letters)?;
                         Some(if body { it.body() } else { it.find() })
                     }
                 })
@@ -239,7 +263,7 @@ impl Pattern {
                 .collect::<Option<Vec<Vec<Term>>>>()
                 .map(|all| all.concat());
             match plain {
-                Some(plain) => Some(Arc::new(Self::any_term(&plain, exact_case)?)),
+                Some(plain) => Some(Arc::new(Self::any_term(&plain, letters)?)),
                 None => None,
             }
         } else {
@@ -383,16 +407,16 @@ fn escaped(bytes: &[u8]) -> String {
 
 /// `text` in one encoding, each character every way its case may be written
 /// and, in Unicode, composed or not. None when the encoding cannot write it.
-fn spelled(text: &str, encoding: Encoding, exact_case: bool) -> Option<String> {
+fn spelled(text: &str, encoding: Encoding, letters: Letters) -> Option<String> {
     let mut out = String::new();
     for c in text.chars() {
-        out.push_str(&atom(c, encoding, exact_case)?);
+        out.push_str(&atom(c, encoding, letters)?);
     }
     Some(out)
 }
 
 /// One character of [`spelled`]. None when the encoding cannot write it.
-pub(crate) fn atom(c: char, encoding: Encoding, exact_case: bool) -> Option<String> {
+pub(crate) fn atom(c: char, encoding: Encoding, letters: Letters) -> Option<String> {
     // A space in a phrase is any run of blanks and line breaks: a PDF's
     // text breaks lines mid-phrase (15 % of phrases in 300 court PDFs).
     match (c, encoding) {
@@ -405,7 +429,24 @@ pub(crate) fn atom(c: char, encoding: Encoding, exact_case: bool) -> Option<Stri
         (' ', Encoding::Cp1254) => return Some("[\\t\\n\\x0B\\x0C\\r \\xA0]+".into()),
         _ => {}
     }
-    let forms = if exact_case { vec![c] } else { cases(c) };
+    let mut forms = if letters.exact_case {
+        vec![c]
+    } else {
+        cases(c)
+    };
+    // A letter typed with no mark stands for itself with any: each of its
+    // forms brings its marked ones.
+    if !letters.exact_accents && c.is_alphabetic() && scour_extract::decomposed(c).is_none() {
+        let marked: Vec<char> = forms
+            .iter()
+            .flat_map(|&f| marked(f).iter().copied())
+            .collect();
+        for m in marked {
+            if !forms.contains(&m) {
+                forms.push(m);
+            }
+        }
+    }
     let mut ways: Vec<Vec<u8>> = Vec::new();
     for form in forms {
         ways.extend(encoded(form, encoding));
@@ -434,6 +475,36 @@ pub(crate) fn atom(c: char, encoding: Encoding, exact_case: bool) -> Option<Stri
             out
         }
     })
+}
+
+/// The marked letters a plain one stands for: Turkish's — `â î û`, `ç ğ ö ş ü`
+/// and their capitals (`ı` and `İ` are [`cases`]).
+///
+/// **Not every mark in Latin-1** (27 November, 64 MB of Turkish text, one
+/// thread): folding them all puts fifteen to twenty spellings on each vowel,
+/// the regex's literal prefilter gives up, and `Necmeddin` is searched at
+/// 851 MB/s rather than 12,059. Turkish's alone keeps it at 8,681 MB/s.
+const MARKED: [char; 16] = [
+    'â', 'Â', 'î', 'Î', 'û', 'Û', 'ç', 'Ç', 'ö', 'Ö', 'ü', 'Ü', 'ğ', 'Ğ', 'ş', 'Ş',
+];
+
+/// The letters of [`MARKED`] that are `base` with a mark on it, by each one's
+/// own decomposition.
+fn marked(base: char) -> &'static [char] {
+    static TABLE: OnceLock<std::collections::HashMap<char, Vec<char>>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table: std::collections::HashMap<char, Vec<char>> =
+            std::collections::HashMap::new();
+        for letter in MARKED {
+            if let Some(first) = scour_extract::decomposed(letter).and_then(|d| d.chars().next())
+                && first.is_ascii_alphabetic()
+            {
+                table.entry(first).or_default().push(letter);
+            }
+        }
+        table
+    });
+    table.get(&base).map_or(&[], Vec::as_slice)
 }
 
 /// The ways one character is written when case is set aside. `i`, `I`, `İ`
@@ -495,6 +566,45 @@ mod tests {
         assert!(loose.narrow.is_match("DIZIN".as_bytes()));
         let exact = Pattern::new(&Needle::Text("dizin".into()), true).unwrap();
         assert!(!exact.narrow.is_match("Dizin".as_bytes()));
+    }
+
+    /// A letter typed with no mark is that letter with any; one typed with a
+    /// mark is itself — and with the marks made exact, every letter is.
+    #[test]
+    fn a_plain_letter_finds_its_marked_forms_unless_marks_are_exact() {
+        let finds = |needle: &str, letters: Letters, text: &str| {
+            Pattern::new(&Needle::Text(needle.into()), letters)
+                .unwrap()
+                .narrow
+                .is_match(text.as_bytes())
+        };
+        let loose = Letters::default();
+        assert!(finds(
+            "Necmeddin",
+            loose,
+            "Mardin, Necmeddîn İlgāzi Mâristânı"
+        ));
+        assert!(finds("sirket", loose, "Deniz Yapı Anonim ŞİRKETİ"));
+        assert!(finds("maristani", loose, "Mâristânı"));
+        assert!(finds("ogrenci", loose, "Öğrenci: Zeynep"));
+        // Decomposed in the file: an `s` and a combining cedilla.
+        assert!(finds("sirket", loose, "s\u{327}irket"));
+        // Typed with its mark, it is that letter.
+        assert!(!finds("şirket", loose, "sirket"));
+        assert!(finds("şirket", loose, "ŞİRKET"));
+        let exact = Letters {
+            exact_case: false,
+            exact_accents: true,
+        };
+        assert!(!finds("Necmeddin", exact, "Necmeddîn"));
+        assert!(finds("Necmeddîn", exact, "NECMEDDÎN"));
+        // The case and the marks are apart.
+        let case_only = Letters {
+            exact_case: true,
+            exact_accents: false,
+        };
+        assert!(finds("sirket", case_only, "şirket"));
+        assert!(!finds("sirket", case_only, "Şirket"));
     }
 
     #[test]
