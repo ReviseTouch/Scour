@@ -519,6 +519,26 @@ pub(crate) fn wire(wiring: &Wiring) {
         });
     }
 
+    // The line the caret is on, counted from the text shown.
+    {
+        let weak = window.as_weak();
+        let cat = Rc::clone(cat);
+        window.on_peek_caret_moved(move |at| {
+            let Some(w) = weak.upgrade() else { return };
+            let text = w.get_peek_text();
+            let at = (at.max(0) as usize).min(text.len());
+            let Some(head) = text.get(..at) else { return };
+            let line = head.matches('\n').count() + 1;
+            let lines = text.lines().count().max(1);
+            w.set_peek_line_said(
+                t(&cat.borrow(), "line {n} of {total}")
+                    .replace("{n}", &grouped(line as u64))
+                    .replace("{total}", &grouped(lines as u64))
+                    .into(),
+            );
+        });
+    }
+
     // "Details" open or shut, kept as it was last left, in every face.
     {
         let link = Rc::clone(link);

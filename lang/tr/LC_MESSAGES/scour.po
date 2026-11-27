@@ -3355,3 +3355,6 @@ msgstr "tek klasörde"
 
 msgid "The whole menu"
 msgstr "Menünün tamamı"
+
+msgid "line {n} of {total}"
+msgstr "satır {n} / {total}"

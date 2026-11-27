@@ -403,6 +403,10 @@ export component MainWindow inherits Window {
     callback peek-native-open();
     /// Under a picture: its pixels and its extension.
     in property <string> peek-shot-said;
+    /// Which line of the text the caret is on, once a press put it there: the
+    /// lines wrap, so a column of numbers would not stay beside its line.
+    in property <string> peek-line-said;
+    callback peek-caret-moved(int);
     /// A folder: what the index knows of it, its heaviest and its newest.
     in property <bool> peek-dir;
     in property <string> peek-dir-said;
@@ -4141,6 +4145,7 @@ export component MainWindow inherits Window {
                                     cursor-position-changed(p) => {
                                         root.peek-from = self.anchor-position-byte-offset;
                                         root.peek-to = self.cursor-position-byte-offset;
+                                        root.peek-caret-moved(self.cursor-position-byte-offset);
                                     }
                                     key-pressed(e) => {
                                         if (e.modifiers.control && (e.text == "c" || e.text == "C")) {
@@ -4158,6 +4163,27 @@ export component MainWindow inherits Window {
                                     selection-background-color: Theme.selection;
                                     selection-foreground-color: Theme.ink;
                                 }
+                            }
+                        }
+
+                        // The caret's line, where the pages' badge stands.
+                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != ""
+                            && root.peek-line-said != "": Rectangle {
+                            x: parent.width - self.width - 18px;
+                            y: 10px;
+                            width: line-badge.preferred-width + 14px;
+                            height: 22px;
+                            border-radius: 11px;
+                            background: Theme.dark ? #16181dd9 : #ffffffd9;
+                            border-width: Theme.hair;
+                            border-color: Theme.line;
+                            line-badge := Text {
+                                text: root.peek-line-said;
+                                color: Theme.ink;
+                                font-family: Fonts.mono;
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                             }
                         }
 

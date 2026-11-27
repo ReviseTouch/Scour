@@ -105,6 +105,7 @@ fn blank(w: &MainWindow) {
     w.set_peek_has_shot(false);
     w.set_peek_shot_said(slint::SharedString::new());
     w.set_peek_text(slint::SharedString::new());
+    w.set_peek_line_said(slint::SharedString::new());
     w.set_peek_note(slint::SharedString::new());
     w.set_peek_cannot(false);
     w.set_peek_many(false);
