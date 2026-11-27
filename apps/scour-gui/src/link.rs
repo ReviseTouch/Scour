@@ -115,6 +115,7 @@ pub enum Ask {
     /// What the preview shows of a folder, from the index and with no file read:
     /// its heaviest folders (`slot` 0), its heaviest files (1), its newest (2).
     PeekDir {
+        generation: u64,
         path: String,
         slot: u32,
         request: Request,
@@ -306,6 +307,9 @@ struct Freshness {
     query: Arc<AtomicU64>,
     lens: Arc<AtomicU64>,
     grep: Arc<AtomicU64>,
+    /// The folder the preview shows: a walk asked for one the hand has left
+    /// is not run.
+    peek: Arc<AtomicU64>,
 }
 
 impl Freshness {
@@ -333,6 +337,9 @@ impl Freshness {
             Ask::Grep { generation, .. } => {
                 self.grep.fetch_max(*generation, Ordering::Release);
             }
+            Ask::PeekDir { generation, .. } => {
+                self.peek.fetch_max(*generation, Ordering::Release);
+            }
             _ => {}
         }
     }
@@ -348,6 +355,7 @@ impl Freshness {
             }
             Ask::Lens { generation, .. } => *generation == self.lens.load(Ordering::Acquire),
             Ask::Grep { generation, .. } => *generation == self.grep.load(Ordering::Acquire),
+            Ask::PeekDir { generation, .. } => *generation == self.peek.load(Ordering::Acquire),
             // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
@@ -373,7 +381,6 @@ impl Freshness {
             // Dropped on arrival instead: the reply carries its path.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
-            | Ask::PeekDir { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }

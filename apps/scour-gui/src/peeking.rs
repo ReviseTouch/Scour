@@ -90,7 +90,20 @@ pub(super) fn peek(
     w.set_peek_dir(is_dir);
     w.set_peek_found(rows.found_at(selected.max(0) as usize));
     if is_dir {
-        ask_dir(link, &path);
+        // Once the hand has stopped: a folder's answers cost the service a
+        // walk, and arrowing through folders queued them in front of every
+        // other answer the window waits for.
+        let generation = DIR_GEN.with(|g| {
+            g.set(g.get() + 1);
+            g.get()
+        });
+        let (state, link, path) = (Rc::clone(state), Rc::clone(link), path.clone());
+        slint::Timer::single_shot(std::time::Duration::from_millis(DIR_WAIT_MS), move || {
+            if DIR_GEN.with(std::cell::Cell::get) == generation && state.borrow().peek_path == path
+            {
+                ask_dir(&link, &path, generation);
+            }
+        });
     } else {
         link.send(Ask::Peek { path: path.clone() });
     }
@@ -242,9 +255,17 @@ pub(super) fn crumbs(w: &MainWindow, dir: &str) -> ModelRc<PeekCrumb> {
     ModelRc::new(VecModel::from(model))
 }
 
+/// How long the selection has to rest on a folder before its preview asks.
+const DIR_WAIT_MS: u64 = 150;
+
+thread_local! {
+    /// Moved by every folder the preview is put on; an older one's asks drop.
+    static DIR_GEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// What a folder's preview asks: its folders by weight, the files directly in
 /// it by size, its newest files anywhere under it. From the index; no file is read.
-fn ask_dir(link: &Link, path: &str) {
+fn ask_dir(link: &Link, path: &str, generation: u64) {
     let scoped = |field: &str| format!("{field}:\"{path}\" file:");
     let page = |limit: usize| scour_core::Page {
         offset: 0,
@@ -253,6 +274,7 @@ fn ask_dir(link: &Link, path: &str) {
         count_cap: 1,
     };
     link.send(Ask::PeekDir {
+        generation,
         path: path.to_owned(),
         slot: 0,
         request: scour_proto::Request::Usage {
@@ -262,6 +284,7 @@ fn ask_dir(link: &Link, path: &str) {
         },
     });
     link.send(Ask::PeekDir {
+        generation,
         path: path.to_owned(),
         slot: 1,
         request: scour_proto::Request::Search {
@@ -272,6 +295,7 @@ fn ask_dir(link: &Link, path: &str) {
         },
     });
     link.send(Ask::PeekDir {
+        generation,
         path: path.to_owned(),
         slot: 2,
         request: scour_proto::Request::Search {
