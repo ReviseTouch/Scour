@@ -257,8 +257,9 @@
        at the bytes. */
     peek: (path, signal) => SERVICE.get("preview", { path, meta: 1 }, signal),
     /* A URL, not a fetch: a blob holds the whole file to show one frame. */
-    peekUrl: (path) =>
-      `/api/preview?${new URLSearchParams({ path, t: TOKEN })}`,
+    /* `place`: `{ at }`, a byte, or `{ line }`, for the text around a find. */
+    peekUrl: (path, place) =>
+      `/api/preview?${new URLSearchParams({ path, ...(place || {}), t: TOKEN })}`,
     grep: (params, signal) => SERVICE.get("grep", params, signal),
     tree: (path, signal) => SERVICE.get("tree", { path, limit: 120 }, signal),
     pickFolder: async (start) => {

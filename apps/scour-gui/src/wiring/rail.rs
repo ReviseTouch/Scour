@@ -528,14 +528,29 @@ pub(crate) fn wire(wiring: &Wiring) {
             let text = w.get_peek_text();
             let at = (at.max(0) as usize).min(text.len());
             let Some(head) = text.get(..at) else { return };
-            let line = head.matches('\n').count() + 1;
-            let lines = text.lines().count().max(1);
-            w.set_peek_line_said(
+            // Counted from the line the stretch shown starts on.
+            let base = w.get_peek_line_base().max(0) as usize;
+            let line = base + head.matches('\n').count() + 1;
+            let lines = base + text.lines().count().max(1);
+            let said = if w.get_peek_line_whole() {
                 t(&cat.borrow(), "line {n} of {total}")
                     .replace("{n}", &grouped(line as u64))
                     .replace("{total}", &grouped(lines as u64))
-                    .into(),
-            );
+            } else {
+                t(&cat.borrow(), "line {n}").replace("{n}", &grouped(line as u64))
+            };
+            w.set_peek_line_said(said.into());
+        });
+    }
+
+    // A press on the rail outside the stretch shown: read around that place.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(link);
+        window.on_peek_reread(move |ratio, px| {
+            if let Some(w) = weak.upgrade() {
+                crate::peeking::reread(&w, &link, ratio, px);
+            }
         });
     }
 

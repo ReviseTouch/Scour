@@ -283,15 +283,21 @@
     peekBody.appendChild(box);
   }
 
-  /* The head of a text file, a line to a row with its number beside it and
-   * marked from the same folded terms the name column uses; the line a
-   * `content:` find is on is marked and brought into sight. Built with nodes:
-   * this is somebody else's file and is never parsed. */
-  function writePeekText(text, terms, atLine) {
+  /* A text file, or the stretch of it around a find, a line to a row with its
+   * number beside it — counted from the stretch's first line — marked from the
+   * same folded terms the name column uses. The lines a content search found
+   * are marked, the first brought into sight. Built with nodes: this is
+   * somebody else's file and is never parsed. Beside it, the rail. */
+  function writePeekText(text, terms, found, view) {
     peekBody.className = "peek-body text";
     peekBody.textContent = "";
+    const scroller = document.createElement("div");
+    scroller.className = "ptext";
     const pre = document.createElement("pre");
+    pre.style.counterReset = `ln ${view.firstLine - 1}`;
     const wanted = terms.filter((t) => t.length > 1);
+    const hitLines = new Set(found.map((x) => x.line).filter((n) => n != null));
+    const atLine = view.atLine;
     /* Bounded: a one-letter term in a quarter of a megabyte is tens of
        thousands of elements. */
     let left = wanted.length ? 2000 : 0;
@@ -317,11 +323,89 @@
         left--;
       }
       row.append(line.slice(at));
-      if (atLine === i + 1) { row.className = "at"; marked = row; }
+      const n = view.firstLine + i;
+      if (hitLines.has(n)) row.className = "hit";
+      if (atLine === n) { row.className = "hit at"; marked = row; }
       pre.appendChild(row);
     });
-    peekBody.appendChild(pre);
-    if (marked) peekBody.scrollTop = Math.max(0, marked.offsetTop - peekBody.clientHeight / 3);
+    scroller.appendChild(pre);
+    const rail = document.createElement("div");
+    rail.className = "prail";
+    rail.setAttribute("role", "presentation");
+    rail.title = T("Where the finds are: press to go there");
+    peekBody.append(scroller, rail);
+    if (marked) scroller.scrollTop = Math.max(0, marked.offsetTop - scroller.clientHeight / 3);
+    peekRail(scroller, pre, rail, found, view);
+  }
+
+  /* The rail beside a text preview, after Colpan's minimap: where the finds
+   * are, where the eye is, and a press that goes there. When only a stretch of
+   * a large file is shown the rail is the whole file: the stretch a band on it,
+   * finds outside the band marked by their byte, and a press outside it reads
+   * the stretch around that place instead. Nothing on it moves by itself. */
+  function peekRail(scroller, pre, rail, found, view) {
+    const whole = view.from === 0 && !view.cut;
+    const len = Math.max(1, view.len);
+    const b0 = whole ? 0 : view.from / len;
+    const b1 = whole ? 1 : Math.min(1, (view.from + view.bytes) / len);
+    const outside = whole ? [] : found
+      .filter((x) => x.offset != null && (x.offset < view.from || x.offset >= view.from + view.bytes))
+      .map((x) => x.offset);
+    const at = (r) => `${(Math.min(1, Math.max(0, r)) * 100).toFixed(3)}%`;
+    function draw() {
+      const tall = Math.max(1, pre.scrollHeight);
+      let html = whole ? "" : `<b class="band" style="top:${at(b0)};height:${at(b1 - b0)}"></b>`;
+      for (const row of pre.querySelectorAll("span.hit")) {
+        html += `<i style="top:${at(b0 + (row.offsetTop / tall) * (b1 - b0))}"></i>`;
+      }
+      for (const o of outside) html += `<i class="far" style="top:${at(o / len)}"></i>`;
+      html += '<u class="view"></u>';
+      rail.innerHTML = html;
+      seen();
+    }
+    function seen() {
+      const tall = Math.max(1, scroller.scrollHeight);
+      const v = rail.querySelector(".view");
+      if (!v) return;
+      const top = b0 + (scroller.scrollTop / tall) * (b1 - b0);
+      const h = Math.max(0.025, (scroller.clientHeight / tall) * (b1 - b0));
+      v.style.top = at(top);
+      v.style.height = at(h);
+    }
+    /* A press inside the band scrolls there, the place in the middle; outside
+       it, the nearest find within a few pixels, or the place itself, is read. */
+    function go(clientY) {
+      const box = rail.getBoundingClientRect();
+      const r = Math.min(1, Math.max(0, (clientY - box.top) / box.height));
+      if (r >= b0 && r <= b1) {
+        const inner = (r - b0) / Math.max(1e-9, b1 - b0);
+        scroller.scrollTop = inner * scroller.scrollHeight - scroller.clientHeight / 2;
+        return;
+      }
+      const near = outside.reduce((best, o) => {
+        const d = Math.abs(o / len - r) * box.height;
+        return d < 8 && (!best || d < best[0]) ? [d, o] : best;
+      }, null);
+      view.reread(near ? near[1] : Math.floor(r * len));
+    }
+    let held = false;
+    rail.addEventListener("pointerdown", (e) => {
+      held = true;
+      rail.setPointerCapture(e.pointerId);
+      go(e.clientY);
+    });
+    rail.addEventListener("pointermove", (e) => {
+      if (!held) return;
+      const box = rail.getBoundingClientRect();
+      const r = (e.clientY - box.top) / box.height;
+      if (r >= b0 && r <= b1) go(e.clientY);
+    });
+    rail.addEventListener("pointerup", (e) => { held = false; rail.releasePointerCapture(e.pointerId); });
+    rail.addEventListener("wheel", (e) => { e.preventDefault(); scroller.scrollTop += e.deltaY; }, { passive: false });
+    scroller.addEventListener("scroll", seen, { passive: true });
+    /* The rows move when the panel's width does. */
+    new ResizeObserver(draw).observe(scroller);
+    draw();
   }
 
   /* `picture_said`: its pixels and its extension, under it. */
@@ -571,21 +655,36 @@
             e.type = "application/pdf";
             shown(e);
           } else if (meta.shape === "text") {
-            fetch(url, { cache: "no-store", signal: ctrl.signal })
+            /* Around the first find, not from the head: in a large file it can
+               be megabytes in, past anything the head shows. */
+            const found = f.found || [];
+            const first = found.find((x) => x.offset != null || x.line != null);
+            const read = (place) => fetch(SERVICE.peekUrl(full, place), { cache: "no-store", signal: ctrl.signal })
               .then((r) => r.text().then((t) => [r, t]))
               .then(([r, t]) => {
                 if (ctrl.signal.aborted) return;
+                const firstLine = Number(r.headers.get("X-Scour-First-Line")) || 1;
+                const from = Number(r.headers.get("X-Scour-From")) || 0;
+                const size = new Blob([t]).size;
+                const cut = r.headers.get("X-Scour-Complete") === "0";
+                /* The find the stretch was read for, or the first one in it. */
+                const asked = place && place.at != null
+                  ? found.find((x) => x.offset === place.at) : first;
                 /* Read at draw time: the query moves while a panel is open. */
-                const first = (f.found || []).find((x) => x.line != null);
-                writePeekText(t, parse(q.value).text, first ? first.line : 0);
-                if (r.headers.get("X-Scour-Complete") === "0") {
-                  peekCut.textContent = T("the first {shown} — the file is {total}", {
-                    shown: bytes(new Blob([t]).size), total: bytes(meta.size),
-                  });
-                  peekCut.hidden = false;
+                writePeekText(t, parse(q.value).text, found, {
+                  firstLine, from, cut, bytes: size, len: meta.size,
+                  atLine: asked && asked.line != null ? asked.line : 0,
+                  reread: (offset) => read({ at: offset }),
+                });
+                peekCut.hidden = !cut;
+                if (cut) {
+                  peekCut.textContent = firstLine > 1
+                    ? T("from line {n} — the file is {total}", { n: fmt(firstLine), total: bytes(meta.size) })
+                    : T("the first {shown} — the file is {total}", { shown: bytes(size), total: bytes(meta.size) });
                 }
               })
               .catch(() => {});
+            read(first ? (first.offset != null ? { at: first.offset } : { line: first.line }) : null);
           } else {
             showNothing(T("This kind of file cannot be shown here."), f,
                         meta.thumb ? full : null, meta.native ? full : null);

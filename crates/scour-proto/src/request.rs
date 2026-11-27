@@ -156,6 +156,13 @@ pub enum Request {
     /// extensions. Fenced like `stat`: only a path the index holds.
     Preview {
         path: String,
+        /// Text around this byte of the file rather than its head — where a
+        /// content search found something. Absent: the head.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<u64>,
+        /// Or around this line, counted from one, when the byte is not known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<u64>,
     },
     /// What the walk is told to skip, and what a person may change about it. The
     /// built-in and configured exclusions cannot be edited, so they stay apart from

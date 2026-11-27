@@ -565,7 +565,11 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             },
             Ask::Places => Request::Places {},
             Ask::Stats => Request::Stats {},
-            Ask::Preview { path } => Request::Preview { path },
+            Ask::Preview { path } => Request::Preview {
+                path,
+                at: None,
+                line: None,
+            },
             // The whole scope and both groups: an age group is what lifts the
             // 200,000-row sampling cap, and a report that samples is a report
             // whose percentages are not the folder's.

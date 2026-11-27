@@ -1091,7 +1091,11 @@ fn apply(
             // The preview panel may have been the one waiting for it.
             let waiting = state.borrow().peek_path.clone();
             if !waiting.is_empty() && made.ready.contains(&waiting) {
-                link.send(Ask::Peek { path: waiting });
+                link.send(Ask::Peek {
+                    path: waiting,
+                    at: None,
+                    line: None,
+                });
             }
         }
         // The panel's two answers, tagged with the path: either may arrive for a

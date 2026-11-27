@@ -97,9 +97,109 @@ pub(super) fn peek(
             }
         });
     } else {
-        link.send(Ask::Peek { path: path.clone() });
+        // A `content:` query's finds, by line: the text opens on the first.
+        let found: Vec<(Option<u64>, Option<u64>)> = rows
+            .found_at(selected.max(0) as usize)
+            .iter()
+            .map(|f| match f.line.strip_prefix('@') {
+                Some(at) => (None, at.parse().ok()),
+                None => (f.line.parse().ok(), None),
+            })
+            .collect();
+        let first = found.first().copied().unwrap_or_default();
+        finds(found);
+        link.send(Ask::Peek {
+            path: path.clone(),
+            at: first.1,
+            line: first.0,
+        });
     }
     link.send(Ask::PeekFacts { path });
+}
+
+thread_local! {
+    /// The finds of the file in the preview, as (line, byte), either unknown;
+    /// and its length, from the last answer: what the rail is drawn from.
+    static FINDS: RefCell<Vec<(Option<u64>, Option<u64>)>> = const { RefCell::new(Vec::new()) };
+    static LEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The finds of the file the preview is about to show.
+pub(super) fn finds(found: Vec<(Option<u64>, Option<u64>)>) {
+    FINDS.with(|f| *f.borrow_mut() = found);
+}
+
+/// The rail beside the text, after Colpan's minimap: the stretch shown as a
+/// band on the whole file when it is not all of it, each find inside it at
+/// its byte's share of the text — wrapped lines of one face are near enough
+/// even rows — and each one outside it, which only a byte can place.
+fn rail(w: &MainWindow, look: &scour_preview::Look, shown: &str) {
+    let len = look.len.max(1);
+    let whole = !look.cut && look.from == 0;
+    let bytes = shown.len().max(1) as u64;
+    let (b0, b1) = if whole {
+        (0.0, 1.0)
+    } else {
+        (
+            look.from as f32 / len as f32,
+            ((look.from + bytes) as f32 / len as f32).min(1.0),
+        )
+    };
+    let first = look.first_line.max(1);
+    // Where each line of the text begins, for a find known by its line.
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(shown.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let mut inside = Vec::new();
+    let mut far = Vec::new();
+    FINDS.with(|f| {
+        for &(line, offset) in f.borrow().iter() {
+            let at = match (offset, line) {
+                (Some(o), _) if o >= look.from && o < look.from + bytes => Some(o - look.from),
+                (Some(o), _) => {
+                    if !whole {
+                        far.push(o as f32 / len as f32);
+                    }
+                    None
+                }
+                (None, Some(l)) if l >= first => {
+                    starts.get((l - first) as usize).map(|&b| b as u64)
+                }
+                _ => None,
+            };
+            if let Some(at) = at {
+                inside.push(b0 + at as f32 / bytes as f32 * (b1 - b0));
+            }
+        }
+    });
+    LEN.with(|l| l.set(len));
+    w.set_peek_band0(b0);
+    w.set_peek_band1(b1);
+    w.set_peek_rail(ModelRc::new(VecModel::from(inside)));
+    w.set_peek_far(ModelRc::new(VecModel::from(far)));
+    w.set_peek_line_base((first - 1) as i32);
+    w.set_peek_line_whole(whole);
+}
+
+/// A press on the rail outside the stretch shown: the find nearest it within a
+/// few pixels, or the place itself, is read instead.
+pub(super) fn reread(w: &MainWindow, link: &Link, ratio: f32, rail_px: f32) {
+    let len = LEN.with(std::cell::Cell::get).max(1);
+    let near = FINDS.with(|f| {
+        f.borrow()
+            .iter()
+            .filter_map(|&(_, o)| o)
+            .map(|o| ((o as f32 / len as f32 - ratio).abs() * rail_px, o))
+            .filter(|(d, _)| *d < 8.0)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, o)| o)
+    });
+    let at = near.unwrap_or((ratio.clamp(0.0, 1.0) * len as f32) as u64);
+    link.send(Ask::Peek {
+        path: w.get_peek_path().to_string(),
+        at: Some(at),
+        line: None,
+    });
 }
 
 /// The heading of one file's preview — its name, its folder as parts, the
@@ -479,12 +579,15 @@ pub(super) fn show_peek(
     look: &scour_preview::Look,
 ) -> bool {
     peek::clear(w);
-    w.set_peek_text(peek_head(&look.head, w.window().scale_factor()).into());
+    let shown = peek_head(&look.head, w.window().scale_factor());
+    w.set_peek_text(shown.as_str().into());
+    w.set_peek_line_said(slint::SharedString::new());
     w.set_peek_shot(rows::blank());
     w.set_peek_has_shot(false);
 
     if look.shape == "text" && !look.head.is_empty() {
         w.set_peek_note(slint::SharedString::new());
+        rail(w, look, &shown);
         return false;
     }
 

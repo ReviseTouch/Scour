@@ -44,6 +44,8 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
             client,
             Request::Preview {
                 path: entry.path.clone(),
+                at: None,
+                line: None,
             },
         ) {
             Ok(Response::Preview(l)) => l,
@@ -76,7 +78,12 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
     // The framing is here and the bytes are not: the one route answering with
     // bytes this program did not write.
     let result = match shape {
-        scour_preview::Shape::Text => send_text(stream, p),
+        scour_preview::Shape::Text => send_text(
+            stream,
+            p,
+            req.param("at").and_then(|v| v.parse().ok()),
+            req.param("line").and_then(|v| v.parse().ok()),
+        ),
         scour_preview::Shape::Whole(kind) => send_whole(stream, p, kind),
         scour_preview::Shape::Streamed(kind) => {
             if scour_preview::office::is_office(p) {
@@ -116,8 +123,17 @@ const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
      Content-Security-Policy: sandbox; default-src 'none'\r\n\
      Connection: close\r\n";
 
-fn send_text(stream: &mut TcpStream, p: &std::path::Path) -> std::io::Result<bool> {
-    let (text, whole, len) = scour_preview::text_head(p)?;
+/// The head of a text file, or the stretch around `at` (a byte) or `line`
+/// (counted from one): where a content search found something.
+fn send_text(
+    stream: &mut TcpStream,
+    p: &std::path::Path,
+    at: Option<u64>,
+    line: Option<u64>,
+) -> std::io::Result<bool> {
+    let near = scour_preview::text_near(p, at, line)?;
+    let (text, len) = (near.text, near.len);
+    let whole = !near.cut && near.from == 0;
     // A header, not a note in the body, which would read as part of the file.
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
@@ -125,9 +141,13 @@ fn send_text(stream: &mut TcpStream, p: &std::path::Path) -> std::io::Result<boo
          Content-Length: {}\r\n\
          X-Scour-Complete: {}\r\n\
          X-Scour-Size: {len}\r\n\
+         X-Scour-From: {}\r\n\
+         X-Scour-First-Line: {}\r\n\
          {PREVIEW_HEADERS}\r\n",
         text.len(),
         u64::from(whole),
+        near.from,
+        near.first_line,
     );
     stream.write_all(head.as_bytes())?;
     stream.write_all(text.as_bytes())?;

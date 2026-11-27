@@ -209,15 +209,17 @@ fn run(
         // open anyway — and no frontend has to remember that. The preview
         // itself opens regular files only: a named pipe would hold this
         // thread for ever.
-        Request::Preview { path } => {
+        Request::Preview { path, at, line } => {
             let entry = engine.stat(&path)?;
             // Read as the person asking, where this is not already them.
             let Ok(_as) = crate::as_owner::for_a_read() else {
                 return Err(scour_core::Error::PermissionDenied { path });
             };
-            Response::Preview(scour_preview::look_at(
+            Response::Preview(scour_preview::look_near(
                 &scour_core::path::to_path(&entry.path),
                 entry.is_dir,
+                at,
+                line,
             ))
         }
         // The same fence as `preview`, and it matters more: this runs a program

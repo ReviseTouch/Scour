@@ -410,6 +410,19 @@ export component MainWindow inherits Window {
     /// lines wrap, so a column of numbers would not stay beside its line.
     in property <string> peek-line-said;
     callback peek-caret-moved(int);
+    /// The line the text shown starts on, less one, and whether it is the
+    /// whole file: the badge counts from it, and says "of" only for a whole one.
+    in property <int> peek-line-base;
+    in property <bool> peek-line-whole;
+    /// The rail beside the text: the finds in the text shown, those outside it,
+    /// and the stretch shown, all as shares of the whole file.
+    in property <[float]> peek-rail;
+    in property <[float]> peek-far;
+    in property <float> peek-band0: 0;
+    in property <float> peek-band1: 1;
+    /// A press on the rail outside the stretch shown, as a share, and the rail's
+    /// height: read around that place.
+    callback peek-reread(float, length);
     /// A folder: what the index knows of it, its heaviest and its newest.
     in property <bool> peek-dir;
     in property <string> peek-dir-said;
@@ -4153,67 +4166,158 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != "": Flickable {
-                            width: parent.width;
-                            height: parent.height;
-                            // The wheel scrolls; a drag selects. An interactive
-                            // flickable takes the drag for itself.
-                            interactive: false;
-                            viewport-width: self.width;
-                            viewport-height: body.preferred-height;
+                        // The text, its line badge, and beside it the rail.
+                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != "": Rectangle {
+                            peek-flick := Flickable {
+                                x: 0px;
+                                width: parent.width - 14px;
+                                height: parent.height;
+                                // The wheel scrolls; a drag selects. An interactive
+                                // flickable takes the drag for itself.
+                                interactive: false;
+                                viewport-width: self.width;
+                                viewport-height: body.preferred-height;
 
-                            body := VerticalLayout {
-                                padding: 12px;
-                                alignment: start;
-                                // A field that cannot be typed into, so the text
-                                // can be selected and copied.
-                                TextInput {
-                                    text: root.peek-text;
-                                    read-only: true;
-                                    // Read as the caret moves, not on change: a
-                                    // `changed` handler missed the last step of a drag.
-                                    cursor-position-changed(p) => {
-                                        root.peek-from = self.anchor-position-byte-offset;
-                                        root.peek-to = self.cursor-position-byte-offset;
-                                        root.peek-caret-moved(self.cursor-position-byte-offset);
-                                    }
-                                    key-pressed(e) => {
-                                        if (e.modifiers.control && (e.text == "c" || e.text == "C")) {
-                                            root.copy-span(self.text, self.anchor-position-byte-offset,
-                                                self.cursor-position-byte-offset);
-                                            return accept;
+                                body := VerticalLayout {
+                                    padding: 12px;
+                                    alignment: start;
+                                    // A field that cannot be typed into, so the text
+                                    // can be selected and copied.
+                                    TextInput {
+                                        text: root.peek-text;
+                                        read-only: true;
+                                        // Read as the caret moves, not on change: a
+                                        // `changed` handler missed the last step of a drag.
+                                        cursor-position-changed(p) => {
+                                            root.peek-from = self.anchor-position-byte-offset;
+                                            root.peek-to = self.cursor-position-byte-offset;
+                                            root.peek-caret-moved(self.cursor-position-byte-offset);
                                         }
-                                        return reject;
+                                        key-pressed(e) => {
+                                            if (e.modifiers.control && (e.text == "c" || e.text == "C")) {
+                                                root.copy-span(self.text, self.anchor-position-byte-offset,
+                                                    self.cursor-position-byte-offset);
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+                                        single-line: false;
+                                        color: Theme.ink-2;
+                                        font-family: Fonts.mono;
+                                        font-size: 11.5px;
+                                        wrap: word-wrap;
+                                        selection-background-color: Theme.selection;
+                                        selection-foreground-color: Theme.ink;
                                     }
-                                    single-line: false;
-                                    color: Theme.ink-2;
-                                    font-family: Fonts.mono;
-                                    font-size: 11.5px;
-                                    wrap: word-wrap;
-                                    selection-background-color: Theme.selection;
-                                    selection-foreground-color: Theme.ink;
                                 }
                             }
-                        }
 
-                        // The caret's line, where the pages' badge stands.
-                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != ""
-                            && root.peek-line-said != "": Rectangle {
-                            x: parent.width - self.width - 18px;
-                            y: 10px;
-                            width: line-badge.preferred-width + 14px;
-                            height: 22px;
-                            border-radius: 11px;
-                            background: Theme.dark ? #16181dd9 : #ffffffd9;
-                            border-width: Theme.hair;
-                            border-color: Theme.line;
-                            line-badge := Text {
-                                text: root.peek-line-said;
-                                color: Theme.ink;
-                                font-family: Fonts.mono;
-                                font-size: 11px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            // The caret's line, where the pages' badge stands.
+                            if root.peek-line-said != "": Rectangle {
+                                x: parent.width - 14px - self.width - 10px;
+                                y: 10px;
+                                width: line-badge.preferred-width + 14px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: Theme.dark ? #16181dd9 : #ffffffd9;
+                                border-width: Theme.hair;
+                                border-color: Theme.line;
+                                line-badge := Text {
+                                    text: root.peek-line-said;
+                                    color: Theme.ink;
+                                    font-family: Fonts.mono;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // The rail, after Colpan's minimap: the finds as ticks,
+                            // the stretch shown as a band when it is not the whole
+                            // file, where the eye is as a box. A press inside the
+                            // band goes there, the place in the middle; outside it,
+                            // that place is read. Nothing on it moves by itself.
+                            peek-rail := Rectangle {
+                                x: parent.width - 14px;
+                                width: 14px;
+                                height: parent.height;
+                                background: Theme.panel-2;
+                                property <float> span: max(0.0001, root.peek-band1 - root.peek-band0);
+                                property <float> seen-top: root.peek-band0
+                                    + (-peek-flick.viewport-y / max(1px, peek-flick.viewport-height)) * self.span;
+                                property <float> seen-tall: max(0.025,
+                                    (peek-flick.height / max(1px, peek-flick.viewport-height)) * self.span);
+
+                                Rectangle {
+                                    x: 0px;
+                                    width: 1px;
+                                    height: parent.height;
+                                    background: Theme.line-soft;
+                                }
+                                if root.peek-band1 - root.peek-band0 < 0.999: Rectangle {
+                                    y: parent.height * root.peek-band0;
+                                    height: parent.height * peek-rail.span;
+                                    background: Theme.line-soft;
+                                }
+                                for r in root.peek-far: Rectangle {
+                                    x: 3px;
+                                    width: parent.width - 6px;
+                                    y: parent.height * r - 1px;
+                                    height: 3px;
+                                    border-radius: 1.5px;
+                                    background: Theme.t0;
+                                    opacity: 0.55;
+                                }
+                                for r in root.peek-rail: Rectangle {
+                                    x: 3px;
+                                    width: parent.width - 6px;
+                                    y: parent.height * r - 1px;
+                                    height: 3px;
+                                    border-radius: 1.5px;
+                                    background: Theme.t0;
+                                }
+                                Rectangle {
+                                    x: 1px;
+                                    width: parent.width - 2px;
+                                    y: parent.height * peek-rail.seen-top;
+                                    height: parent.height * peek-rail.seen-tall;
+                                    border-radius: 3px;
+                                    background: Theme.ink.with-alpha(0.09);
+                                    border-width: 1px;
+                                    border-color: Theme.ink.with-alpha(0.14);
+                                }
+                                rail-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    function go(y: length, pressed: bool) {
+                                        if (self.height <= 0px) {
+                                            return;
+                                        }
+                                        let r = clamp(y / self.height, 0, 1);
+                                        if (r >= root.peek-band0 && r <= root.peek-band1) {
+                                            let inner = (r - root.peek-band0) / peek-rail.span;
+                                            peek-flick.viewport-y = clamp(
+                                                -(inner * peek-flick.viewport-height - peek-flick.height / 2),
+                                                min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
+                                        } else if (pressed) {
+                                            root.peek-reread(r, self.height);
+                                        }
+                                    }
+                                    pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                            self.go(self.mouse-y, true);
+                                        }
+                                    }
+                                    moved => {
+                                        if (self.pressed) {
+                                            self.go(self.mouse-y, false);
+                                        }
+                                    }
+                                    scroll-event(e) => {
+                                        peek-flick.viewport-y = clamp(peek-flick.viewport-y + e.delta-y,
+                                            min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
+                                        return accept;
+                                    }
+                                }
                             }
                         }
 

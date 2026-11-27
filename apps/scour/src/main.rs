@@ -732,7 +732,11 @@ fn build(args: &Args) -> Result<Request> {
                 ..Default::default()
             },
         },
-        Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
+        Some(Command::Preview { path }) => Request::Preview {
+            path: path.clone(),
+            at: None,
+            line: None,
+        },
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},

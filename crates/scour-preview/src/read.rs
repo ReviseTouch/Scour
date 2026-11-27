@@ -42,6 +42,121 @@ pub fn text_head(path: &std::path::Path) -> std::io::Result<(String, bool, u64)>
     ))
 }
 
+/// A stretch of a text file around one place in it, and where that stretch
+/// starts: what a preview shows of a file whose find lies past its head.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Near {
+    pub text: String,
+    /// More of the file follows the stretch.
+    pub cut: bool,
+    /// The file's length.
+    pub len: u64,
+    /// The byte the stretch starts at, and the line that byte is on, counted
+    /// from one: mid-line when that line began more than [`BEFORE_BYTES`]
+    /// before the place.
+    pub from: u64,
+    pub first_line: u64,
+}
+
+/// How much of what leads to the place a stretch shows: this many lines, and
+/// never more than this many bytes of them.
+const BEFORE_LINES: usize = 3;
+const BEFORE_BYTES: u64 = 2 * 1024;
+
+/// The text around a place in a file — `offset`, a byte, or else the start of
+/// `line`, counted from one — from a few lines before it, for up to
+/// [`TEXT_CAP`]. A line that began far before the place is entered mid-way, on
+/// a character. With neither, the head, as [`text_head`] reads it.
+pub fn text_near(
+    path: &std::path::Path,
+    offset: Option<u64>,
+    line: Option<u64>,
+) -> std::io::Result<Near> {
+    use std::io::BufRead;
+    if offset.is_none() && line.is_none_or(|l| l <= 1) {
+        let (text, whole, len) = text_head(path)?;
+        return Ok(Near {
+            text,
+            cut: !whole,
+            len,
+            from: 0,
+            first_line: 1,
+        });
+    }
+    let f = open_file(path)?;
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut reader = std::io::BufReader::with_capacity(CHUNK, f);
+    // Walked to the place, counting newlines and keeping where the last few
+    // lines began, as (byte, line).
+    let mut pos: u64 = 0;
+    let mut newlines: u64 = 0;
+    let mut starts: std::collections::VecDeque<(u64, u64)> = [(0, 1)].into();
+    'walk: loop {
+        let reached = match (offset, line) {
+            (Some(o), _) => pos >= o,
+            (None, Some(l)) => newlines + 1 >= l,
+            (None, None) => true,
+        };
+        if reached {
+            break;
+        }
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            break;
+        }
+        let take = offset.map_or(buf.len(), |o| buf.len().min((o - pos) as usize));
+        let mut used = take;
+        for (i, &b) in buf[..take].iter().enumerate() {
+            if b != b'\n' {
+                continue;
+            }
+            newlines += 1;
+            starts.push_back((pos + i as u64 + 1, newlines + 1));
+            if starts.len() > BEFORE_LINES + 1 {
+                starts.pop_front();
+            }
+            if offset.is_none() && line.is_some_and(|l| newlines + 1 >= l) {
+                used = i + 1;
+                reader.consume(used);
+                pos += used as u64;
+                break 'walk;
+            }
+        }
+        reader.consume(used);
+        pos += used as u64;
+    }
+    let at = offset.unwrap_or(pos).min(len);
+    let floor = at.saturating_sub(BEFORE_BYTES);
+    // The earliest of the last few line starts that is close enough; when even
+    // the place's own line began further back, inside it.
+    let (from, first_line) = starts
+        .iter()
+        .copied()
+        .find(|&(b, _)| b >= floor && b <= at)
+        .unwrap_or((floor, newlines + 1));
+    let mut f = open_file(path)?;
+    f.seek(SeekFrom::Start(from))?;
+    let mut buf = Vec::with_capacity(TEXT_CAP.min(len.saturating_sub(from).max(1)) as usize);
+    f.take(TEXT_CAP).read_to_end(&mut buf)?;
+    // Entered mid-line: not in the middle of a character.
+    let skip = if starts.iter().any(|&(b, _)| b == from) {
+        0
+    } else {
+        buf.iter()
+            .take(3)
+            .take_while(|&&b| b & 0xC0 == 0x80)
+            .count()
+    };
+    let read = buf.len() as u64;
+    Ok(Near {
+        text: String::from_utf8_lossy(&buf[skip..]).into_owned(),
+        cut: from + read < len,
+        len,
+        from: from + skip as u64,
+        first_line,
+    })
+}
+
 /// The length, or `None` past [`IMAGE_CAP`] — where the caller should report the
 /// size instead of sending the file.
 pub fn whole_len(path: &std::path::Path) -> std::io::Result<Option<u64>> {
@@ -106,4 +221,73 @@ pub fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
         return None;
     }
     Some((from, to))
+}
+
+#[cfg(test)]
+mod near_tests {
+    use super::*;
+
+    /// A file of its own, removed when the guard goes.
+    struct Gone(std::path::PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn file(text: &str) -> (Gone, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "scour-near-{}-{}.txt",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&p, text).expect("write");
+        (Gone(p.clone()), p)
+    }
+
+    /// A few lines before the place, and the number of the first of them.
+    #[test]
+    fn a_stretch_starts_a_few_lines_before_the_place() {
+        let text: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        let (_d, p) = file(&text);
+        let by_line = text_near(&p, None, Some(20)).expect("near");
+        assert_eq!(by_line.first_line, 17);
+        assert!(
+            by_line.text.starts_with("line 17\n"),
+            "{:?}",
+            &by_line.text[..20]
+        );
+        let at = text.find("line 20\n").expect("there") as u64 + 2;
+        let by_offset = text_near(&p, Some(at), None).expect("near");
+        assert_eq!(by_offset.first_line, 17);
+        assert_eq!(
+            by_offset.from,
+            text.find("line 17\n").expect("there") as u64
+        );
+        assert!(by_offset.text.starts_with("line 17\n"));
+        let head = text_near(&p, None, None).expect("head");
+        assert_eq!((head.first_line, head.from, head.cut), (1, 0, false));
+    }
+
+    /// A find deep in one long line: entered mid-way, on a character, and
+    /// still counted as that line.
+    #[test]
+    fn a_long_line_is_entered_near_the_place_on_a_character() {
+        let long = format!(
+            "{}ğ{}FIND{}",
+            "a".repeat(9_000),
+            "b".repeat(1_100),
+            "c".repeat(10)
+        );
+        let text = format!("first\n{long}\nlast\n");
+        let (_d, p) = file(&text);
+        let at = text.find("FIND").expect("there") as u64;
+        let near = text_near(&p, Some(at), None).expect("near");
+        assert_eq!(near.first_line, 2);
+        assert!(near.text.contains("FIND"));
+        assert!(near.text.len() < 3_000, "{}", near.text.len());
+        assert!(!near.text.starts_with('\u{FFFD}'));
+    }
 }

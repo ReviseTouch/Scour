@@ -106,6 +106,10 @@ pub enum Ask {
     /// needs its first eight kilobytes, not a guess from the name.
     Peek {
         path: String,
+        /// Around this byte, or this line, rather than from the head: where a
+        /// content search found something. See `Request::Preview`.
+        at: Option<u64>,
+        line: Option<u64>,
     },
     /// Everything known about one file, for the preview panel's fact list. Not
     /// off the row: created, read, mode and owner are in no column.
@@ -604,7 +608,7 @@ fn spawn_lane(
                 Ask::Usage { path }
                 | Ask::Kinds { path }
                 | Ask::Biggest { path }
-                | Ask::Peek { path }
+                | Ask::Peek { path, .. }
                 | Ask::PeekFacts { path }
                 | Ask::PeekDir { path, .. } => path.clone(),
                 _ => String::new(),
@@ -747,7 +751,9 @@ fn spawn_lane(
                 Ask::Thumbnails { files, size } => {
                     (0, Request::Thumbnails { files, size }, Lane::Thumbnails)
                 }
-                Ask::Peek { path } => (0, Request::Preview { path }, Lane::Peek),
+                Ask::Peek { path, at, line } => {
+                    (0, Request::Preview { path, at, line }, Lane::Peek)
+                }
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::PeekDir { request, .. } => (0, request, Lane::PeekDir),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),

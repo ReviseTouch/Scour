@@ -55,6 +55,35 @@ pub struct Look {
     /// True when `head` stops short of the file's end. Kept beside the text: a
     /// note appended to it would read as part of the file.
     pub cut: bool,
+    /// Where `head` starts when it was asked for around a place: the byte, and
+    /// the line that byte is on, counted from one. Zero for the head.
+    #[serde(default)]
+    pub from: u64,
+    #[serde(default)]
+    pub first_line: u64,
+}
+
+/// [`look_at`], and when it is text, the stretch around a place in it rather
+/// than its head: `offset`, a byte, or else `line`. See [`crate::text_near`].
+pub fn look_near(
+    path: &std::path::Path,
+    is_dir: bool,
+    offset: Option<u64>,
+    line: Option<u64>,
+) -> Look {
+    let mut look = look_at(path, is_dir);
+    if look.shape == "text"
+        && (offset.is_some() || line.is_some_and(|l| l > 1))
+        && shape_of(path, is_dir) == Shape::Text
+        && let Ok(near) = crate::text_near(path, offset, line)
+    {
+        look.head = near.text;
+        look.cut = near.cut;
+        look.len = near.len;
+        look.from = near.from;
+        look.first_line = near.first_line;
+    }
+    look
 }
 
 /// Look at a file and say what can be shown of it.

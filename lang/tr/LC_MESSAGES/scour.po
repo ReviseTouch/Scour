@@ -3358,3 +3358,12 @@ msgstr "Menünün tamamı"
 
 msgid "line {n} of {total}"
 msgstr "satır {n} / {total}"
+
+msgid "from line {n} — the file is {total}"
+msgstr "{n}. satırdan — dosya {total}"
+
+msgid "Where the finds are: press to go there"
+msgstr "Bulunanlar nerede: oraya gitmek için basın"
+
+msgid "line {n}"
+msgstr "satır {n}"
