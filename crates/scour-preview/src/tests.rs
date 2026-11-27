@@ -172,3 +172,24 @@ fn ranges_are_read_the_way_a_browser_writes_them() {
     assert_eq!(parse_range("bytes=2000-", 1000), None);
     assert_eq!(parse_range("bytes=0-0", 0), None);
 }
+
+/// Where no pages are drawn, an Office document is its words, never its bytes:
+/// RTF is plain ASCII, and read as a text file it would show its markup.
+#[cfg(not(any(windows, target_os = "macos")))]
+#[test]
+fn an_office_document_is_its_words_not_its_markup() {
+    let p = tmp(
+        "kira.rtf",
+        br"{\rtf1\ansi{\fonttbl{\f0 Times;}}\f0 Kira bedeli \b \'f6denmemi\'fetir\b0\par}",
+    );
+    assert_eq!(shape_of(&p, false), Shape::Nothing);
+    let look = look_at(&p, false);
+    let _ = std::fs::remove_file(&p);
+    assert_eq!(look.shape, "text");
+    assert!(look.head.contains("Kira bedeli"), "{:?}", look.head);
+    assert!(
+        !look.head.contains("rtf1") && !look.head.contains("fonttbl"),
+        "{:?}",
+        look.head
+    );
+}

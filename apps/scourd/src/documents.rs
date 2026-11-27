@@ -157,6 +157,23 @@ impl Documents {
         }
     }
 
+    /// The words of a legacy Office document, for a preview that has no pages
+    /// to show: the in-process reader does not read these.
+    pub fn words(&self, path: &Path) -> Option<String> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        if !matches!(extension.as_str(), "doc" | "xls" | "ppt") {
+            return None;
+        }
+        if std::fs::metadata(path).ok()?.len() > MOST_FLOW_BYTES {
+            return None;
+        }
+        let bytes = std::fs::read(path).ok()?;
+        match self.pool.extract(&extension, &bytes) {
+            Answer::Words(words) => Some(scour_extract::composed(&words)),
+            _ => None,
+        }
+    }
+
     /// A word processor's document as a preview draws it, read by an
     /// extractor; held to the model's bounds here, whatever it sent.
     pub fn flow(&self, path: &Path) -> Result<scour_flow::Flow, String> {

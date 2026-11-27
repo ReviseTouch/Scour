@@ -210,3 +210,38 @@ fn a_string_written_in_its_cell_is_read_too() {
     let (text, _) = document_text(&path, file, 4096).unwrap();
     assert_eq!(text, "Belediye & Rapor\t7");
 }
+
+/// OpenDocument's sheet and slide show keep their words where its text does.
+#[test]
+fn an_opendocument_sheet_and_slide_show_read_as_their_words() {
+    let sheet = b"<office:document-content><office:body><office:spreadsheet><table:table>\
+<table:table-row><table:table-cell><text:p>Ali</text:p></table:table-cell>\
+<table:table-cell><text:p>42</text:p></table:table-cell></table:table-row></table:table>\
+</office:spreadsheet></office:body></office:document-content>";
+    for name in ["x.ods", "x.odp"] {
+        let path = on_disk(name, &archive(&[("content.xml", sheet, true)]));
+        assert!(reads_document(&path), "{name}");
+        let file = std::fs::File::open(&path).unwrap();
+        let (text, _) = document_text(&path, file, 4096).unwrap();
+        assert!(
+            text.contains("Ali") && text.contains("42"),
+            "{name}: {text:?}"
+        );
+    }
+}
+
+/// RTF's words, not its markup: what a preview shows of it.
+#[test]
+fn rtf_reads_as_its_words() {
+    let path = on_disk(
+        "x.rtf",
+        br"{\rtf1\ansi{\fonttbl{\f0 Times;}}\f0 Kira \b s\'f6zle\'fe\'fdmesi\b0\par}",
+    );
+    assert!(reads_document(&path));
+    let file = std::fs::File::open(&path).unwrap();
+    let (text, _) = document_text(&path, file, 4096).unwrap();
+    assert!(
+        text.contains("Kira") && !text.contains("rtf1") && !text.contains("fonttbl"),
+        "{text:?}"
+    );
+}

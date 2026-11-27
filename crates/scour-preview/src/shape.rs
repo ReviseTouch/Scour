@@ -169,8 +169,14 @@ pub fn shape_of(path: &std::path::Path, is_dir: bool) -> Shape {
     if let Some((_, shape)) = DRAWN.iter().find(|(e, _)| *e == ext) {
         return *shape;
     }
-    if office::is_office(path) && office::can_convert() {
-        return Shape::Streamed("application/pdf");
+    // An Office document is never its raw bytes — RTF would show its markup —
+    // but its pages where they are drawn, else its text: [`look_at`] reads it.
+    if office::is_office(path) {
+        return if office::can_convert() {
+            Shape::Streamed("application/pdf")
+        } else {
+            Shape::Nothing
+        };
     }
     // Everything else is decided by the bytes, not by a list of every extension
     // anyone ever gave a text file.

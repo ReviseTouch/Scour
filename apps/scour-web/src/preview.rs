@@ -121,6 +121,24 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
                 send_stream(stream, p, kind, req.header("range"))
             }
         }
+        // An Office document with no pages: the words the service read of it,
+        // never its bytes.
+        scour_preview::Shape::Nothing if scour_preview::office::is_office(p) => {
+            match call(
+                client,
+                Request::Preview {
+                    path: entry.path.clone(),
+                    at: None,
+                    line: None,
+                },
+            ) {
+                Ok(Response::Preview(look)) if !look.head.is_empty() => send_words(stream, &look),
+                _ => {
+                    http::fail(stream, "415 Unsupported Media Type", "nothing to show");
+                    return;
+                }
+            }
+        }
         // 415 rather than 404: the file is there, and cannot be shown.
         scour_preview::Shape::Nothing => {
             http::fail(stream, "415 Unsupported Media Type", "nothing to show");
@@ -143,6 +161,27 @@ const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
      X-Content-Type-Options: nosniff\r\n\
      Content-Security-Policy: sandbox; default-src 'none'\r\n\
      Connection: close\r\n";
+
+/// A document's words as the service read them, framed as a text file's head.
+fn send_words(stream: &mut TcpStream, look: &scour_preview::Look) -> std::io::Result<bool> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         X-Scour-Complete: {}\r\n\
+         X-Scour-Size: {}\r\n\
+         X-Scour-From: 0\r\n\
+         X-Scour-First-Line: 1\r\n\
+         {PREVIEW_HEADERS}\r\n",
+        look.head.len(),
+        u64::from(!look.cut),
+        look.len,
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(look.head.as_bytes())?;
+    stream.flush()?;
+    Ok(true)
+}
 
 /// A flow's page. Its own policy, not [`PREVIEW_HEADERS`]': the page has
 /// pictures, as `data:` URLs, and styles, inline — and still no script, nothing

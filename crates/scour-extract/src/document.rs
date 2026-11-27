@@ -1,6 +1,7 @@
 //! A document's text, for showing: `.docx`, `.odt`, `.pptx`, `.xlsx` and UYAP
 //! `.udf`, read in process in milliseconds, without a converter.
 
+use crate::rtf::rtf_text;
 use std::fs::File;
 use std::path::Path;
 
@@ -97,15 +98,31 @@ pub fn reads_document(path: &Path) -> bool {
 
 fn kind_of(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    ["docx", "odt", "pptx", "xlsx", "udf"]
+    ["docx", "odt", "ods", "odp", "pptx", "xlsx", "udf", "rtf"]
         .into_iter()
         .find(|k| *k == ext)
 }
+
+/// RTF read whole: it is text with its markup inline, no container.
+const MAX_RTF: u64 = 32 << 20;
 
 /// A document's text into `sink`, part by part. None when it cannot be read.
 pub fn document(path: &Path, mut file: File, sink: &mut dyn Sink) -> Option<()> {
     let kind = kind_of(path)?;
     let len = file.metadata().ok()?.len();
+    if kind == "rtf" {
+        if len > MAX_RTF {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(len as usize);
+        std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
+        let mut words = String::new();
+        if !rtf_text(&bytes, &mut words, MAX_RTF as usize) {
+            return None;
+        }
+        sink.text(&words);
+        return Some(());
+    }
     if !(22..=MAX_ARCHIVE).contains(&len) {
         return None;
     }
@@ -125,7 +142,8 @@ pub fn document(path: &Path, mut file: File, sink: &mut dyn Sink) -> Option<()> 
     };
     match kind {
         "docx" => plain(&doc.named(b"word/document.xml")?, sink),
-        "odt" => plain(&doc.named(b"content.xml")?, sink),
+        // A text, a sheet or a slide show: OpenDocument keeps all three in one file.
+        "odt" | "ods" | "odp" => plain(&doc.named(b"content.xml")?, sink),
         "udf" => {
             let xml = doc.named(b"content.xml")?;
             match udf_cdata(&xml) {

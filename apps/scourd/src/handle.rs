@@ -217,6 +217,23 @@ fn run(
             };
             let native = scour_core::path::to_path(&entry.path);
             let mut look = scour_preview::look_near(&native, entry.is_dir, at, line);
+            // A legacy Office document with no pages drawn: its words, from an
+            // extractor, as a newer one's come from the in-process reader.
+            if look.head.is_empty()
+                && !entry.is_dir
+                && scour_preview::office::is_office(&native)
+                && !scour_preview::office::can_convert()
+                && let Some(words) = crate::documents::shared().and_then(|d| d.words(&native))
+            {
+                let mut end = words.len().min(PREVIEW_WORDS);
+                while !words.is_char_boundary(end) {
+                    end -= 1;
+                }
+                look.cut = end < words.len();
+                look.head = words[..end].to_owned();
+                look.shape = "text".to_owned();
+                look.kind = "text/plain".to_owned();
+            }
             // Where its pages are not drawn, a word processor's document flows,
             // when there is an extractor to read it.
             look.flow = !entry.is_dir
@@ -399,6 +416,10 @@ fn run(
         }
     })
 }
+
+/// How much of a legacy Office document's words a preview shows: what
+/// `scour-preview` shows of a newer one's.
+const PREVIEW_WORDS: usize = 128 * 1024;
 
 #[cfg(test)]
 mod tests {
