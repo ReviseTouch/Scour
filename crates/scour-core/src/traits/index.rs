@@ -94,6 +94,13 @@ pub trait Index: Send + Sync + Debug {
         Ok(0)
     }
 
+    /// Remove what one source put here outside every one of `roots`: a root
+    /// taken out of a source is never walked again, so nothing would sweep it.
+    /// Returns how many rows went. Defaults to nothing removed.
+    fn forget_outside(&self, _source: SourceId, _roots: &[String]) -> Result<u64> {
+        Ok(0)
+    }
+
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse>;
 
     /// Every matching row, one at a time, for a caller that will not keep them.

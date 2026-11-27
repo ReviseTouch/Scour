@@ -4,7 +4,8 @@
 //! source's name and roots are configuration.
 //!
 //! The name is the identity: changed roots keep the number, a changed name is
-//! a new source and the old one's rows are dropped.
+//! a new source and the old one's rows are dropped. A root taken out of a
+//! source takes its rows with it: kept, nothing would ever sweep them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,9 @@ const FILE: &str = "sources.json";
 struct Map {
     /// Name to the number its rows carry.
     ids: BTreeMap<String, u32>,
+    /// Name to the roots it had, to see one taken away.
+    #[serde(default)]
+    roots: BTreeMap<String, Vec<String>>,
 }
 
 /// What changed since the last run.
@@ -26,6 +30,9 @@ pub struct Assigned {
     pub ids: Vec<u32>,
     /// Numbers whose source is no longer configured.
     pub dropped: Vec<u32>,
+    /// Sources that lost a root since last time, with the roots they have now:
+    /// their rows outside these go.
+    pub narrowed: Vec<(u32, Vec<String>)>,
 }
 
 fn path_of(dir: &Path) -> PathBuf {
@@ -37,7 +44,15 @@ fn path_of(dir: &Path) -> PathBuf {
 ///
 /// A file that cannot be read is treated as absent: renumbering once, which the
 /// caller turns into a rescan, beats a service that will not start over a cache.
+#[cfg(test)]
 pub fn assign(dir: &Path, names: &[String]) -> Assigned {
+    assign_with_roots(dir, names, &[])
+}
+
+/// [`assign`], with each source's roots beside its name, in the same order:
+/// a source that had a root it no longer has is [`Assigned::narrowed`]. With
+/// no roots given, none are compared or kept.
+pub fn assign_with_roots(dir: &Path, names: &[String], roots: &[Vec<String>]) -> Assigned {
     let mut map: Map = std::fs::read_to_string(path_of(dir))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -60,17 +75,53 @@ pub fn assign(dir: &Path, names: &[String]) -> Assigned {
         .map(|(_, id)| *id)
         .collect();
     map.ids.retain(|name, _| names.contains(name));
+    let mut narrowed = Vec::new();
+    if roots.len() == names.len() {
+        for ((name, now), id) in names.iter().zip(roots).zip(&ids) {
+            let lost = map
+                .roots
+                .get(name)
+                .is_some_and(|before| before.iter().any(|r| !now.contains(r)));
+            if lost {
+                narrowed.push((*id, now.clone()));
+            }
+            map.roots.insert(name.clone(), now.clone());
+        }
+        map.roots.retain(|name, _| names.contains(name));
+    }
 
     if let Ok(json) = serde_json::to_string_pretty(&map) {
         let _ = std::fs::create_dir_all(dir);
         let _ = std::fs::write(path_of(dir), json);
     }
-    Assigned { ids, dropped }
+    Assigned {
+        ids,
+        dropped,
+        narrowed,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A root taken away is said once, with what is left; one added is not.
+    #[test]
+    fn a_source_that_lost_a_root_is_named_with_the_roots_it_kept() {
+        let dir = std::env::temp_dir().join(format!("scour-sources-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let r = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+        let n = names(&["sistem"]);
+        let first = assign_with_roots(&dir, &n, &[r(&["/usr", "/tmp"])]);
+        assert!(first.narrowed.is_empty(), "nothing to compare with yet");
+        let added = assign_with_roots(&dir, &n, &[r(&["/usr", "/tmp", "/boot"])]);
+        assert!(added.narrowed.is_empty());
+        let lost = assign_with_roots(&dir, &n, &[r(&["/usr", "/boot"])]);
+        assert_eq!(lost.narrowed, [(first.ids[0], r(&["/usr", "/boot"]))]);
+        let again = assign_with_roots(&dir, &n, &[r(&["/usr", "/boot"])]);
+        assert!(again.narrowed.is_empty(), "said once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()

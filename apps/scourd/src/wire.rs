@@ -37,12 +37,29 @@ pub fn engine(
     // The number a source's rows carry is remembered, not counted: a position
     // in the configuration array would rebind every row when sources move.
     let names: Vec<String> = planned.iter().map(|p| p.source.name.clone()).collect();
-    let assigned = crate::sources::assign(&index_dir(config), &names);
+    let roots: Vec<Vec<String>> = planned
+        .iter()
+        .map(|p| {
+            p.source
+                .roots
+                .iter()
+                .map(|r| scour_core::path::from_path(r))
+                .collect()
+        })
+        .collect();
+    let assigned = crate::sources::assign_with_roots(&index_dir(config), &names, &roots);
     for id in &assigned.dropped {
         match index.forget(SourceId(*id)) {
             Ok(0) => {}
             Ok(n) => eprintln!("scourd: a source is gone; {n} of its entries went with it"),
             Err(e) => eprintln!("scourd: a removed source's entries are still here: {e}"),
+        }
+    }
+    for (id, kept) in &assigned.narrowed {
+        match index.forget_outside(SourceId(*id), kept) {
+            Ok(0) => {}
+            Ok(n) => eprintln!("scourd: a source lost a root; {n} of its entries went with it"),
+            Err(e) => eprintln!("scourd: a removed root's entries are still here: {e}"),
         }
     }
 

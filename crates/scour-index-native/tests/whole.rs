@@ -5424,3 +5424,60 @@ fn a_part_of_the_wrong_length_is_refused_by_name() {
         }
     }
 }
+
+/// A root taken out of a source: its rows go, the root's own row with them;
+/// the source's other roots, a sibling with the same prefix and another
+/// source's rows under the same path all stay.
+#[test]
+fn a_root_taken_out_of_a_source_takes_its_rows_and_nothing_else() {
+    fn all_paths(index: &NativeIndex) -> Vec<String> {
+        let mut paths: Vec<String> = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                page: Page::new(0, 100),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect();
+        paths.sort();
+        paths
+    }
+    let of = |source: u32, path: &str, is_dir: bool| Entry {
+        id: EntryId::path_hash(SourceId(source), path),
+        path: path.into(),
+        is_dir,
+        meta: Meta {
+            mtime: NOW,
+            size: 1,
+            ..Meta::UNKNOWN
+        },
+    };
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    index
+        .apply(
+            &mut [
+                Change::Upsert(of(0, "/usr", true)),
+                Change::Upsert(of(0, "/usr/a", false)),
+                Change::Upsert(of(0, "/tmp", true)),
+                Change::Upsert(of(0, "/tmp/x", false)),
+                Change::Upsert(of(0, "/tmp/d/y", false)),
+                Change::Upsert(of(0, "/tmp2/z", false)),
+                Change::Upsert(of(1, "/tmp/other", false)),
+            ]
+            .into_iter(),
+        )
+        .expect("apply");
+    index.commit().expect("commit");
+    let gone = index
+        .forget_outside(SourceId(0), &["/usr".to_owned(), "/tmp2".to_owned()])
+        .expect("forget outside");
+    assert_eq!(gone, 3);
+    assert_eq!(
+        all_paths(&index),
+        ["/tmp/other", "/tmp2/z", "/usr", "/usr/a"]
+    );
+}

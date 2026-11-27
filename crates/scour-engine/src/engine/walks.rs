@@ -288,6 +288,11 @@ pub(super) fn scan(
         .is_ok_and(|r| !r.cancelled && r.unreadable == r.lasting);
     let covered = scour_core::PrefixSet::new(vouched);
     let all_roots = src.describe().roots.iter().all(|root| covered.covers(root));
+    // Too blind to vouch, and for reasons a walk ten seconds later meets again.
+    if subtree.is_none() {
+        let blind = finished && !could_look && report.as_ref().is_ok_and(|r| r.unreadable > 0);
+        shared.blind[source].store(blind, Ordering::Relaxed);
+    }
 
     shared.scanning.store(false, Ordering::Relaxed);
     shared.walking[source].store(false, Ordering::Relaxed);

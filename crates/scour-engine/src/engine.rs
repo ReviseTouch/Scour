@@ -50,6 +50,9 @@ struct Shared {
     changed: Vec<std::sync::atomic::AtomicI64>,
     /// Per source: a whole walk of it is under way.
     walking: Vec<AtomicBool>,
+    /// Per source: its last walk could not vouch for a root, refused in more places
+    /// than a walk may be blind in, by refusals the next walk meets again.
+    blind: Vec<AtomicBool>,
     stop: AtomicBool,
     /// The live watches, each beside the source it belongs to: the worker runs the
     /// walks, and a subtree walk is when its watcher is told the subtree exists.
@@ -220,6 +223,7 @@ impl Engine {
                 .map(|_| std::sync::atomic::AtomicI64::new(0))
                 .collect(),
             walking: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
+            blind: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
             stop: AtomicBool::new(false),
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(first_revision),

@@ -228,9 +228,10 @@ pub fn start(engine: Arc<Engine>, walk: Walk) {
             Ok((n, skipped)) => {
                 // Named, so it can be acted on, but briefly: one unreadable
                 // tree produced 191 paths, and the shared prefix is the
-                // useful part of them.
+                // useful part of them. Not "unreadable": a `tmpfs` root or a
+                // disk mounted inside is read, by walking, and not heard.
                 scour_core::note!(
-                    "scourd: watching {n} source(s); {} subtree(s) unreadable, under {}",
+                    "scourd: watching {n} source(s); {} subtree(s) not watched, found by walking, under {}",
                     skipped.len(),
                     crate::common_prefix(&skipped)
                 );

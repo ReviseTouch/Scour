@@ -168,7 +168,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                         flag.store(false, Ordering::Release);
                     }
                     if !scan(&shared, &mut pulses, source, subtree, false) {
-                        schedule_retry(&mut retries, &pulses, source);
+                        schedule_retry(&shared, &mut retries, &pulses, source);
                     } else if whole {
                         retries.retain(|(s, _, _)| *s != source);
                     }
@@ -189,7 +189,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                         if ok {
                             retries.retain(|(s, _, _)| *s != source);
                         } else {
-                            schedule_retry(&mut retries, &pulses, source);
+                            schedule_retry(&shared, &mut retries, &pulses, source);
                         }
                     }
                     dirty = true;
@@ -252,7 +252,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                                 scour_core::note!("scourd: changes could not be indexed: {e}");
                                 // `apply` may consume only part of the iterator.
                                 for i in 0..shared.sources.len() {
-                                    schedule_retry(&mut retries, &pulses, i);
+                                    schedule_retry(&shared, &mut retries, &pulses, i);
                                 }
                             }
                         }
@@ -288,7 +288,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                 let all = (0..shared.sources.len()).collect();
                 for (i, ok) in scan_all(&shared, &mut pulses, all) {
                     if !ok {
-                        schedule_retry(&mut retries, &pulses, i);
+                        schedule_retry(&shared, &mut retries, &pulses, i);
                     }
                 }
             } else if let Some(i) = owner_of(&shared, &path) {
@@ -300,7 +300,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                     }
                 }
                 if !scan(&shared, &mut pulses, i, Some(path.clone()), false) {
-                    schedule_retry(&mut retries, &pulses, i);
+                    schedule_retry(&shared, &mut retries, &pulses, i);
                 }
             }
             dirty = true;
@@ -310,14 +310,26 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
 
         // The pulses, read outside the wait, where a steady stream of changes would
         // starve them. `is_due` carries the two-second floor, so asking is a compare.
+        // A source watched but for some places — a `tmpfs` root, a disk mounted
+        // inside — is walked there and nowhere else when its pulse moves: the rest
+        // is heard, and walking "sistem" whole for `/tmp` was what unwatched cost.
+        let mut partly: std::collections::HashMap<usize, Vec<String>> =
+            std::collections::HashMap::new();
         let nudges = if pulses.is_due() {
-            let watched: Vec<usize> = shared
-                .watches
-                .lock()
-                .iter()
-                .filter(|(_, handle)| handle.unwatched().is_empty())
-                .map(|(i, _)| *i)
-                .collect();
+            let watched: Vec<usize> = {
+                let watches = shared.watches.lock();
+                for (i, handle) in watches.iter() {
+                    let places = handle.unwatched();
+                    if !places.is_empty() {
+                        partly.insert(*i, places);
+                    }
+                }
+                watches
+                    .iter()
+                    .filter(|(i, _)| !partly.contains_key(i))
+                    .map(|(i, _)| *i)
+                    .collect()
+            };
             let readings: Vec<Option<u64>> = shared.sources.iter().map(|s| s.pulse()).collect();
             pulses.decide(&readings, &watched, &crate::reconcile::machine_quiet)
         } else {
@@ -328,10 +340,24 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
             if retries.iter().any(|(s, _, _)| *s == source) {
                 continue;
             }
+            if let Some(places) = partly.get(&source)
+                && matches!(job, Nudge::Reconcile | Nudge::Check)
+            {
+                let gentle = matches!(job, Nudge::Check);
+                for place in places {
+                    if !scan(&shared, &mut pulses, source, Some(place.clone()), gentle) {
+                        schedule_retry(&shared, &mut retries, &pulses, source);
+                    }
+                }
+                dirty = true;
+                idle_done = false;
+                last_busy = Instant::now();
+                continue;
+            }
             match job {
                 Nudge::Reconcile => {
                     if !scan(&shared, &mut pulses, source, None, false) {
-                        schedule_retry(&mut retries, &pulses, source);
+                        schedule_retry(&shared, &mut retries, &pulses, source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -339,7 +365,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                 }
                 Nudge::Check => {
                     if !scan(&shared, &mut pulses, source, None, true) {
-                        schedule_retry(&mut retries, &pulses, source);
+                        schedule_retry(&shared, &mut retries, &pulses, source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -353,7 +379,7 @@ pub(super) fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Bo
                          arriving — the watch is not covering it; rescanning"
                     );
                     if !scan(&shared, &mut pulses, source, None, false) {
-                        schedule_retry(&mut retries, &pulses, source);
+                        schedule_retry(&shared, &mut retries, &pulses, source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -553,9 +579,25 @@ fn retry_delay(attempt: usize) -> Duration {
 }
 
 /// Note that a source has to be looked at again, without queueing a second one.
-fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, pulses: &Pulses, source: usize) {
+/// One refused in too many places waits ten minutes, not ten seconds: refusals
+/// are met again, and a disk walked into `/proc` rewrote a million rows a minute.
+fn schedule_retry(
+    shared: &Shared,
+    retries: &mut Vec<(usize, Instant, usize)>,
+    pulses: &Pulses,
+    source: usize,
+) {
     if !retries.iter().any(|(s, _, _)| *s == source) {
-        retries.push((source, pulses.retry_at(source, retry_delay(0)), 0));
+        let attempt = if shared.blind[source].load(Ordering::Relaxed) {
+            3
+        } else {
+            0
+        };
+        retries.push((
+            source,
+            pulses.retry_at(source, retry_delay(attempt)),
+            attempt,
+        ));
     }
 }
 

@@ -227,28 +227,37 @@ pub fn try_start(
     opts: &ScanOptions,
     sink: Arc<dyn ChangeSink>,
 ) -> Option<Result<Box<dyn WatchHandle>>> {
-    // Marked or not: a group that cannot hear these roots watches nothing.
-    if !crate::marks::covered(handed()?, source.roots()) {
+    // Root by root: one the group cannot hear — a `tmpfs` beside a marked disk —
+    // is walked instead, and the rest are still heard. All or nothing made a whole
+    // source unwatched for one small root (`/tmp` in "sistem", 2026-11-27).
+    let raw = handed()?;
+    let (roots, deaf): (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) = source
+        .roots()
+        .iter()
+        .cloned()
+        .partition(|r| crate::marks::covered(raw, std::slice::from_ref(r)) && decodable(r));
+    if roots.is_empty() {
         return None;
     }
-    if let Some(deaf) = source.roots().iter().find(|r| !decodable(r)) {
+    for r in &deaf {
         eprintln!(
-            "scourd: {} cannot be watched by fanotify on this filesystem; its changes are found by walking",
-            path::from_path(deaf)
+            "scourd: {} cannot be watched by fanotify; its changes are found by walking it",
+            path::from_path(r)
         );
-        return None;
     }
     // The descriptor is taken once: two owners is a double close, and two readers
     // of one group is half the events each.
     let first = READER.get().is_none();
     let fd = if first { Some(inherited()?) } else { None };
 
-    let roots: Vec<std::path::PathBuf> = source.roots().to_vec();
     let rules = Arc::new(Rules::from_options(opts));
     let threads = walk_threads(source, opts);
     let map = DirMap::build(&roots, &rules, threads);
     let live = Arc::new(AtomicBool::new(true));
-    let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
+    // What no event will report, and the engine walks on its pulse instead.
+    let uncovered: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(
+        deaf.iter().map(|r| path::from_path(r)).collect(),
+    ));
 
     eprintln!(
         "scourd: watching with fanotify — {} director{} under {}",

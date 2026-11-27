@@ -396,6 +396,69 @@ impl Index for NativeIndex {
         Ok(gone)
     }
 
+    fn forget_outside(&self, source: SourceId, roots: &[String]) -> Result<u64> {
+        if roots.is_empty() {
+            return Ok(0);
+        }
+        // By path component: `/srv2` is not under `/srv`.
+        let within = |p: &str| {
+            roots.iter().any(|r| {
+                p == r
+                    || (p.starts_with(r.as_str())
+                        && (r.ends_with('/') || p.as_bytes().get(r.len()) == Some(&b'/')))
+            })
+        };
+        self.settle()?;
+        let mut inner = self.inner.write();
+        self.flush(&mut inner)?;
+        let mut gone = 0u64;
+        let mut touched = vec![false; inner.segments.len()];
+        for (i, live) in inner.segments.iter_mut().enumerate() {
+            let victims: Vec<usize> = {
+                let seg = live.view()?;
+                // Decided a directory at a time; a row's own path only where its
+                // directory is outside, which is where a root itself sits.
+                let mut inside: std::collections::HashMap<u32, bool> =
+                    std::collections::HashMap::new();
+                (0..live.rows())
+                    .filter(|&row| {
+                        if !live.is_alive(row) || seg.source_of(row) != source {
+                            return false;
+                        }
+                        let dir = seg.dir_id(row);
+                        let kept = *inside
+                            .entry(dir)
+                            .or_insert_with(|| seg.dirs.get(dir).is_some_and(|d| within(&d)));
+                        if kept {
+                            return false;
+                        }
+                        let name = seg.names.get(row).unwrap_or_default();
+                        !within(&seg.path(row, &name))
+                    })
+                    .collect()
+            };
+            for row in victims {
+                if live.kill(row) {
+                    gone += 1;
+                    touched[i] = true;
+                }
+            }
+        }
+        if gone > 0 {
+            let dirty = inner
+                .segments
+                .iter()
+                .enumerate()
+                .filter_map(|(i, live)| touched[i].then_some(live.number))
+                .collect::<Vec<_>>();
+            inner.dirty_alive.extend(dirty);
+            self.write_dirty_alive(&mut inner)?;
+            self.forget_empty(&mut inner);
+            self.save_meta(&mut inner)?;
+        }
+        Ok(gone)
+    }
+
     fn forget(&self, source: SourceId) -> Result<u64> {
         self.settle()?;
         let mut inner = self.inner.write();

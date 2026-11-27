@@ -183,7 +183,7 @@ pub fn nested_in(mountinfo: &str, root: &std::path::Path) -> Vec<std::path::Path
 
 /// `mountinfo` writes a space, a tab, a newline and a backslash as octal.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn unescape(field: &str) -> String {
+pub(crate) fn unescape(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
