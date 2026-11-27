@@ -268,6 +268,8 @@ struct State {
     /// What the preview panel is showing, not what is selected: a reply for a row
     /// the arrows have left is dropped against this.
     peek_path: String,
+    /// A folder's preview, its three answers as they come.
+    peek_dir: peeking::DirParts,
     /// Files already asked about, oldest first. Bounded, and outliving the rows:
     /// one screenful otherwise started eleven thumbnailers twice.
     asked_pictures: std::collections::VecDeque<String>,
@@ -535,6 +537,7 @@ fn main() -> Result<()> {
         page_cost_us: 0,
         asking_pictures: false,
         peek_path: String::new(),
+        peek_dir: peeking::DirParts::default(),
         asked_pictures: std::collections::VecDeque::new(),
         rewind: true,
         search_out: false,
@@ -601,6 +604,7 @@ fn main() -> Result<()> {
     relayout(&window, &table.borrow());
     // Read before the first search, so a pinned panel is open in the first frame.
     window.set_peeking(kept.preview);
+    window.set_peek_details(kept.preview_details);
     // The panel's width lives beside the columns', under `peek`, for every face.
     window.set_peek_min(scour_ui::preview::PANEL_MIN as f32);
     window.set_peek_max(scour_ui::preview::PANEL_MAX as f32);
@@ -827,6 +831,7 @@ fn main() -> Result<()> {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let words = Rc::clone(&cat);
+        let picks = Rc::clone(&picks);
         let weak = window.as_weak();
         let t = Box::leak(Box::new(slint::Timer::default()));
         t.start(
@@ -848,7 +853,7 @@ fn main() -> Result<()> {
                 place(&w, &slots);
                 follow(&w, &state, &link, &rows);
                 pictures(&w, &state, &link, &rows, &lines);
-                peek(&w, &state, &link, &rows, &words.borrow().clone());
+                peek(&w, &state, &link, &rows, &picks, &words.borrow().clone());
             },
         );
     }
@@ -1099,9 +1104,16 @@ fn apply(
                 Response::Preview(look) => {
                     show_peek(w, cat, link, &path, &look);
                 }
-                Response::Stat(entry) => w.set_peek_facts(peek_facts(cat, &entry)),
+                Response::Stat(entry) => peek_facts(w, cat, &entry),
                 _ => {}
             }
+        }
+        Got::PeekDir { path, slot, reply } => {
+            let mut s = state.borrow_mut();
+            if path != s.peek_path {
+                return;
+            }
+            peeking::dir_answer(w, cat, &mut s.peek_dir, slot, *reply);
         }
         // **Being the same size is not being the same file**: only `content` —
         // read end to end and compared — licenses the word "duplicate".

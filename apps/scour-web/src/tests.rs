@@ -234,6 +234,9 @@ fn the_page_is_served_with_the_menu_the_shared_crate_holds() {
             item.msgid
         );
     }
+    // The preview's buttons, each a menu item the page was served.
+    assert!(!served.contains("/* @PEEKBUTTONS@ */"));
+    assert!(served.contains(r#"{"file":["open","folder","copy-path"]"#));
     // And every drawing the menu names, which the page looks up by name.
     assert!(!served.contains("/* @MENUICONS@ */"));
     for name in scour_ui::menu::ICONS {

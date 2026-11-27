@@ -335,7 +335,7 @@ pub(super) fn search(cx: &Cx, got: Got) {
         show_picks(w, cat, rows, &picks.borrow(), asking);
     }
     if w.get_peeking() && picks.borrow().chasing == 0 {
-        peek(w, state, link, rows, cat);
+        peek(w, state, link, rows, picks, cat);
     }
     w.set_busy(false);
     // **And straight on to the next**: nothing is asked for while an

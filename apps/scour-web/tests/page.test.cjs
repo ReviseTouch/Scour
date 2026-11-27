@@ -680,6 +680,26 @@ test('the index pages are a line of their own and not held (resources.rs)', () =
   assert.equal(c.resServiceLines({ service: 0, peak: 0, own: 5, mapped: 0 }).length, 1);
 });
 
+test('the preview says the words scour_ui::preview names, as they are (preview.rs)', () => {
+  const rs = readFileSync(require('node:path').join(__dirname, '../../../crates/scour-ui/src/preview.rs'), 'utf8');
+  const words = [...rs.matchAll(/pub const (\w+): &str = "((?:[^"\\]|\\.)*)";/g)].map((m) => [m[1], m[2]]);
+  assert.ok(words.length >= 12, 'the constants were not found');
+  const peekJs = section('  /* Toggled with Space, as every quick-look is.', '\n  /* Space toggles only inside the list;');
+  for (const [name, said] of words) {
+    assert.ok(peekJs.includes(`T("${said}"`), `${name} (${said}) is not what the page says`);
+  }
+});
+
+test('several rows are counted by kind, the commonest first (preview.rs)', () => {
+  const c = context();
+  vm.runInContext(section('  /* `tally`: each kind once', '\n  /* Several rows'), c);
+  // several_rows_are_counted_by_kind_the_commonest_first
+  assert.deepEqual(RJ(c.peekTally(['Picture', 'Document', 'Document', 'Code', 'Picture', 'Document'])),
+    [['Document', 3], ['Picture', 2], ['Code', 1]]);
+  assert.deepEqual(RJ(c.peekTally(['A', 'B'])), [['A', 1], ['B', 1]]);
+  assert.deepEqual(RJ(c.peekTally([])), []);
+});
+
 test('uptime is said in its two largest units, and bars never vanish (resources.rs)', () => {
   const c = resourcesModel();
   // uptime_is_said_in_its_two_largest_units

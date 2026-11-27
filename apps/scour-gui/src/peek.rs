@@ -181,6 +181,11 @@ fn run_open(
         return;
     }
     let got = resolve_pixels(&path, is_image, px);
+    // Its own pixels, under it: from the header, which is all that is read.
+    let said = is_image
+        .then(|| image::image_dimensions(&native).ok())
+        .flatten()
+        .map(|(wd, ht)| scour_ui::preview::picture_said(wd, ht, scour_ui::path::leaf(&path)));
     if !q.is_current(seq) {
         return;
     }
@@ -194,6 +199,7 @@ fn run_open(
                 w.set_peek_shot(slint::Image::from_rgba8(buf));
                 w.set_peek_has_shot(true);
                 w.set_peek_note(slint::SharedString::new());
+                w.set_peek_shot_said(said.unwrap_or_default().into());
             }
             None if w.get_peek_text().is_empty() => {
                 w.set_peek_note((if waiting { reading } else { nothing }).into());

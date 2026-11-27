@@ -213,6 +213,38 @@ export struct Fact {
     value: string,
 }
 
+/// A part of the preview's path: its words, and the folder a press searches
+/// (empty for the `…` that stands for the parts left out). `apart` draws a
+/// slash before it.
+export struct PeekCrumb {
+    label: string,
+    path: string,
+    apart: bool,
+}
+
+/// A button under the preview's name: a menu item's id, the menu's words for
+/// it, and whether Enter does the same.
+export struct PeekAct {
+    id: string,
+    label: string,
+    enter: bool,
+}
+
+/// One of a folder's heaviest: its name, its size as said, its share of the
+/// largest, and the folder a press searches — empty for a file.
+export struct PeekHeavy {
+    name: string,
+    size: string,
+    share: float,
+    path: string,
+}
+
+/// One of a folder's newest files: its name and when it changed.
+export struct PeekNew {
+    name: string,
+    when: string,
+}
+
 /// One page of a scrollable document preview (PDF or Office).
 export struct PeekPage {
     number: int,

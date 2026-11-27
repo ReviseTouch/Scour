@@ -97,6 +97,51 @@ export global Clip {
     callback paste-into(string, int, int, bool) -> Spliced;
 }
 
+// A button under the preview's name: always there and always the same size,
+// its words cut rather than the row moved. The first wears the accent; one
+// that Enter also does says so with `↵`. Under the hand only its ring darkens.
+export component PeekButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> first;
+    in property <bool> enter;
+    in property <string> tip;
+    callback clicked();
+    height: 30px;
+    min-width: 34px;
+    preferred-width: said.preferred-width + (root.enter ? key.preferred-width + 5px : 0px) + 14px;
+    horizontal-stretch: 1;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.first ? Theme.cap-ring : touch.has-hover ? Theme.ink-3 : Theme.line;
+    background: root.first ? Theme.cap : Theme.panel;
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        spacing: 5px;
+        alignment: center;
+        said := Text {
+            text: root.label;
+            color: root.first ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-2;
+            font-size: 12px;
+            font-weight: root.first ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+            min-width: 0px;
+        }
+        key := Text {
+            visible: root.enter;
+            width: root.enter ? self.preferred-width : 0px;
+            text: "↵";
+            color: Theme.ink-3;
+            font-size: 10.5px;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // How many halves a caret blinks after it last moved, then stays lit: a
 // minute at the desktop's 530ms, an even count so it ends shown.
 export global Caret {

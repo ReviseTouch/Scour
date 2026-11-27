@@ -112,6 +112,13 @@ pub enum Ask {
     PeekFacts {
         path: String,
     },
+    /// What the preview shows of a folder, from the index and with no file read:
+    /// its heaviest folders (`slot` 0), its heaviest files (1), its newest (2).
+    PeekDir {
+        path: String,
+        slot: u32,
+        request: Request,
+    },
     /// Make thumbnails for these files, if the desktop declares something that
     /// can. Asked of the service, which holds the bound — four at once on the
     /// machine, not four per face — and decides which paths may be touched.
@@ -223,6 +230,12 @@ pub enum Got {
     /// row nobody is looking at any more can be dropped.
     Peek {
         path: String,
+        reply: Box<Response>,
+    },
+    /// One part of a folder's preview; the path drops it once another is shown.
+    PeekDir {
+        path: String,
+        slot: u32,
         reply: Box<Response>,
     },
     Thumbnails(Box<Response>),
@@ -360,6 +373,7 @@ impl Freshness {
             // Dropped on arrival instead: the reply carries its path.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
+            | Ask::PeekDir { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
@@ -449,6 +463,7 @@ impl Link {
             // And this one reads the head of a file off a disk.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
+            | Ask::PeekDir { .. }
             | Ask::Lens { .. }
             | Ask::Narrow { .. }
             | Ask::Grep { .. }
@@ -509,6 +524,8 @@ enum Lane {
     Thumbnails,
     /// What can be shown of one file.
     Peek,
+    /// A folder's preview, in parts.
+    PeekDir,
     /// The exclusion rules.
     Rules,
     /// The disks, and answers about them.
@@ -581,7 +598,8 @@ fn spawn_lane(
                 | Ask::Kinds { path }
                 | Ask::Biggest { path }
                 | Ask::Peek { path }
-                | Ask::PeekFacts { path } => path.clone(),
+                | Ask::PeekFacts { path }
+                | Ask::PeekDir { path, .. } => path.clone(),
                 _ => String::new(),
             };
             // Taken before the match consumes the request, as `weighed` is.
@@ -590,7 +608,9 @@ fn spawn_lane(
                 _ => Half::Both,
             };
             let slot = match ask {
-                Ask::Lens { slot, .. } | Ask::Narrow { slot, .. } => slot,
+                Ask::Lens { slot, .. } | Ask::Narrow { slot, .. } | Ask::PeekDir { slot, .. } => {
+                    slot
+                }
                 _ => 0,
             };
             let grep_append = matches!(ask, Ask::Grep { append: true, .. });
@@ -722,6 +742,7 @@ fn spawn_lane(
                 }
                 Ask::Peek { path } => (0, Request::Preview { path }, Lane::Peek),
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
+                Ask::PeekDir { request, .. } => (0, request, Lane::PeekDir),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Volumes => (0, Request::Volumes {}, Lane::Volumes),
                 Ask::Sources => (0, Request::Sources {}, Lane::Volumes),
@@ -829,6 +850,11 @@ fn spawn_lane(
                             path: weighed.clone(),
                             reply,
                         },
+                        Lane::PeekDir => Got::PeekDir {
+                            path: weighed.clone(),
+                            slot,
+                            reply,
+                        },
                         Lane::Thumbnails => Got::Thumbnails(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Volumes => Got::Volumes(reply),
@@ -864,7 +890,7 @@ fn spawn_lane(
                         });
                     } else if matches!(facets, Lane::Resources) {
                         sink(Got::Resources(Err(e.to_string())));
-                    } else if matches!(facets, Lane::Lens | Lane::Narrow) {
+                    } else if matches!(facets, Lane::Lens | Lane::Narrow | Lane::PeekDir) {
                         // A choice whose count was refused keeps no number;
                         // nothing else is said about it.
                     } else if matches!(facets, Lane::Peek) && is_preview {
@@ -887,6 +913,7 @@ fn spawn_lane(
                             | Lane::Dupes
                             | Lane::Thumbnails
                             | Lane::Peek
+                            | Lane::PeekDir
                             | Lane::Lens
                             | Lane::Narrow
                             | Lane::Grep

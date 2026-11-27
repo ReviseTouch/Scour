@@ -519,6 +519,54 @@ pub(crate) fn wire(wiring: &Wiring) {
         });
     }
 
+    // "Details" open or shut, kept as it was last left, in every face.
+    {
+        let link = Rc::clone(link);
+        window.on_peek_details_toggled(move |on| {
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    preview_details: Some(on),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // A part of the preview's path, or one of a folder's heaviest: searched,
+    // as "Search this folder" writes it.
+    {
+        let weak = window.as_weak();
+        window.on_peek_crumb(move |path| {
+            if let Some(w) = weak.upgrade() {
+                crate::search::put_term(&w, &crate::qwire::place_term(&path));
+            }
+        });
+    }
+
+    // The desktop's own previewer, for what the panel cannot draw.
+    {
+        let weak = window.as_weak();
+        window.on_peek_native_open(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let path = w.get_peek_path().to_string();
+            let Some(cmd) = scour_preview::quicklook(None) else {
+                return;
+            };
+            let mut c = std::process::Command::new(&cmd[0]);
+            c.args(&cmd[1..])
+                .arg(scour_core::path::to_path(&path))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // Waited for off the loop, so it leaves no zombie behind.
+            if let Ok(mut child) = c.spawn() {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+        });
+    }
+
     {
         let weak = window.as_weak();
         window.on_peek_page_scrolled(move |idx| {
@@ -577,7 +625,16 @@ pub(crate) fn wire(wiring: &Wiring) {
     {
         let link = Rc::clone(link);
         let table = Rc::clone(table);
+        let weak = window.as_weak();
         window.on_peek_resized(move |px| {
+            // The path is folded to the width it now has.
+            if let Some(w) = weak.upgrade()
+                && !w.get_peek_many()
+                && !w.get_peek_path().is_empty()
+            {
+                let path = w.get_peek_path();
+                w.set_peek_crumbs(crate::peeking::crumbs(&w, scour_ui::path::folder(&path)));
+            }
             if px <= 0 {
                 table.borrow_mut().widths.remove("peek");
             } else {

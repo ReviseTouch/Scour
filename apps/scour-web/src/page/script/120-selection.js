@@ -112,6 +112,7 @@
   }
 
   function drawSelBar() {
+    peekFollowSelection();
     const n = SEL.size;
     selbar.hidden = n === 0;
     if (!n) return;
@@ -669,5 +670,10 @@
   const hideMenu = () => { menu.hidden = true; };
   document.addEventListener("click", hideMenu);
   document.addEventListener("scroll", hideMenu, true);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
+  /* Escape shuts the menu and only the menu: the preview under it stays. */
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || menu.hidden) return;
+    hideMenu();
+    e.stopImmediatePropagation();
+  });
 

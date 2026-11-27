@@ -120,7 +120,7 @@ pub(crate) fn wire(wiring: &Wiring) {
                 follow(&w, &state, &link, &rows);
                 if w.get_peeking() {
                     let cat_now = cat.borrow().clone();
-                    peek(&w, &state, &link, &rows, &cat_now);
+                    peek(&w, &state, &link, &rows, &picks, &cat_now);
                 }
             }
             w.invoke_focus_query();

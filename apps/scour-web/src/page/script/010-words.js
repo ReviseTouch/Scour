@@ -67,6 +67,9 @@
   /* Injected from `scour-ui`, so every face draws one list; a test reads the
    * marker out of the served page. */
   const MENU = /* @MENU@ */ [];
+  /* The preview's three buttons for a file, a folder and several rows, by
+     `MENU` id: `scour_ui::preview::buttons`, written in as the menu is. */
+  const PEEK_BUTTONS = /* @PEEKBUTTONS@ */ {};
   /* The menu's drawings by name, `scour-ui`'s files, in the text's colour. */
   const MENU_ICONS = /* @MENUICONS@ */ {};
   /* The same, for how a disk is spoken of: kind, state and question by wire name. */

@@ -11,7 +11,7 @@ export { DragTray }
 import { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow, GrepInk, GrepPill, GrepMenu } from "grep-parts.slint";
 export { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
+import { Cell, HeadInfo, Found, PeekCrumb, PeekAct, PeekHeavy, PeekNew, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced } from "types.slint";
 // Re-exported for the generated Rust API.
 export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
@@ -25,7 +25,7 @@ export { CountChip, HistBar, TypeTile, TimeLook, TypeLook, SizeLook }
 import { ScopeChip, DiskInk, DiskIcon } from "place-parts.slint";
 import { HeldPanel, HeldLine, SortLine, MemLine, RunLine, ResourcePanel } from "resources.slint";
 export { HeldPanel, HeldLine, SortLine, MemLine, RunLine }
-import { Shade, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
+import { Shade, PeekButton, FacetRow, Clip, Caret, Tones, Strip, Heading, Note, Tool, TextTool, SearchTabChip, Push, FaceRow, RuleRow, DiskRow, PairButton, Head, Marked, MenuIcon, KindIcon, FileBadge, NavRow, Choice, SettingRow, Card, SectionHead, Field, CalArrow, CalCell } from "widgets.slint";
 export { Clip }
 
 export component MainWindow inherits Window {
@@ -378,6 +378,41 @@ export component MainWindow inherits Window {
     in property <length> base-row: 30px;
     in property <string> peek-close-title;
     callback peek-toggled();
+    // The preview's four layers, as `scour_ui::preview` orders them: what it is
+    // and where, what can be done, what is in it, the facts. Nothing moves.
+    /// The folder as parts, each a press that searches it.
+    in property <[PeekCrumb]> peek-crumbs;
+    callback peek-crumb(string);
+    /// How wide a character of the path is, so Rust can fold its head into `…`.
+    out property <length> peek-adv: peek-ruler.preferred-width / 40;
+    /// Three of the menu's lines, then the whole menu.
+    in property <[PeekAct]> peek-acts;
+    in property <string> word-peek-menu: "The whole menu";
+    /// The kind, for the picture that stands while the file is read.
+    in property <string> peek-ktoken;
+    /// The one line of facts always shown, and the rest behind "Details".
+    in property <string> peek-sum-kind;
+    in property <string> peek-sum-rest;
+    in-out property <bool> peek-details;
+    in property <string> word-details: "Details";
+    callback peek-details-toggled(bool);
+    /// Nothing of it can be drawn: said, and the desktop's previewer offered.
+    in property <bool> peek-cannot;
+    in property <bool> peek-native;
+    in property <string> word-peek-native: "Open in the system previewer";
+    callback peek-native-open();
+    /// Under a picture: its pixels and its extension.
+    in property <string> peek-shot-said;
+    /// A folder: what the index knows of it, its heaviest and its newest.
+    in property <bool> peek-dir;
+    in property <string> peek-dir-said;
+    in property <[PeekHeavy]> peek-heavy;
+    in property <string> word-newest: "Newest";
+    in property <[PeekNew]> peek-newest;
+    /// Several rows: how many, and what they come to.
+    in property <bool> peek-many;
+    in property <string> peek-many-said;
+    in property <string> peek-many-small;
 
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
@@ -3877,10 +3912,10 @@ export component MainWindow inherits Window {
                     padding-left: 1px;
                     spacing: 0px;
 
-                    // The name, and the way out. Wrapped rather than truncated:
-                    // the end of a name is what tells two versions apart.
+                    // What it is and where: the name wrapped rather than
+                    // truncated — the end of a name is what tells two versions
+                    // apart — the way out, and the folder as parts.
                     Rectangle {
-                        height: 46px;
                         background: Theme.panel-2;
 
                         Rectangle {
@@ -3889,30 +3924,104 @@ export component MainWindow inherits Window {
                             background: Theme.line;
                         }
 
-                        HorizontalLayout {
+                        VerticalLayout {
                             padding-left: 14px;
                             padding-right: 8px;
                             padding-top: 8px;
-                            padding-bottom: 8px;
-                            spacing: 6px;
+                            padding-bottom: 7px;
+                            spacing: 3px;
 
-                            Text {
-                                text: root.peek-name;
-                                color: Theme.ink;
-                                font-size: 12.5px;
-                                font-weight: 600;
-                                wrap: word-wrap;
-                                overflow: elide;
-                                vertical-alignment: center;
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: root.peek-name;
+                                    color: Theme.ink;
+                                    font-size: 12.5px;
+                                    font-weight: 600;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    max-height: 34px;
+                                }
+
+                                VerticalLayout {
+                                    alignment: start;
+                                    Tool {
+                                        glyph: "×";
+                                        clicked => {
+                                            root.peek-toggled();
+                                        }
+                                    }
+                                }
                             }
 
-                            VerticalLayout {
-                                alignment: center;
-                                Tool {
-                                    glyph: "×";
-                                    clicked => {
-                                        root.peek-toggled();
+                            // One line: Rust folds its head into `…` to fit.
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 0px;
+                                height: 18px;
+                                for c in root.peek-crumbs: HorizontalLayout {
+                                    spacing: 0px;
+                                    if c.apart: Text {
+                                        text: "/";
+                                        color: Theme.ink-3;
+                                        font-family: Fonts.mono;
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
                                     }
+                                    Rectangle {
+                                        width: crumb.preferred-width + 4px;
+                                        border-radius: 3px;
+                                        background: c.path != "" && crumbtouch.has-hover ? Theme.cap : transparent;
+                                        crumb := Text {
+                                            text: c.label;
+                                            color: c.path != "" && crumbtouch.has-hover ? Theme.q-key
+                                                : c.path != "" ? Theme.ink-2 : Theme.ink-3;
+                                            font-family: Fonts.mono;
+                                            font-size: 11.5px;
+                                            vertical-alignment: center;
+                                        }
+                                        crumbtouch := TouchArea {
+                                            enabled: c.path != "";
+                                            mouse-cursor: c.path != "" ? pointer : default;
+                                            clicked => { root.peek-crumb(c.path); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // What can be done: three of the menu's own lines and the
+                    // whole menu, always there and in the same place.
+                    Rectangle {
+                        height: 47px;
+                        background: Theme.panel;
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+
+                        HorizontalLayout {
+                            padding: 8px;
+                            spacing: 5px;
+                            for act[i] in root.peek-acts: PeekButton {
+                                label: act.label;
+                                first: i == 0;
+                                enter: act.enter;
+                                clicked => { root.menu-pick(act.id); }
+                            }
+                            peek-more := PeekButton {
+                                label: "⋯";
+                                width: 34px;
+                                horizontal-stretch: 0;
+                                clicked => {
+                                    root.menu-at(root.selected,
+                                        self.absolute-position.x + self.width,
+                                        self.absolute-position.y + self.height + 4px);
                                 }
                             }
                         }
@@ -3992,15 +4101,22 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.peek-pages.length == 0 && root.peek-has-shot: Image {
-                            width: parent.width - 24px;
-                            height: parent.height - 24px;
-                            x: 12px;
-                            y: 12px;
-                            source: root.peek-shot;
-                            // The whole picture: a crop can remove the part being
-                            // looked for.
-                            image-fit: contain;
+                        if root.peek-pages.length == 0 && root.peek-has-shot: VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            Image {
+                                source: root.peek-shot;
+                                // The whole picture: a crop can remove the part
+                                // being looked for.
+                                image-fit: contain;
+                                vertical-stretch: 1;
+                            }
+                            if root.peek-shot-said != "": Text {
+                                text: root.peek-shot-said;
+                                color: Theme.ink-3;
+                                font-size: 11.5px;
+                                horizontal-alignment: center;
+                            }
                         }
 
                         if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text != "": Flickable {
@@ -4045,13 +4161,162 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text == "": Text {
-                            text: root.peek-note;
-                            color: Theme.ink-3;
-                            font-size: 11.5px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
+                        // A folder: what the index knows of it, no file read.
+                        if root.peek-dir && root.peek-dir-said != "": Rectangle {
+                            background: Theme.panel;
+                            VerticalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: 12px;
+                                padding-bottom: 12px;
+                                spacing: 2px;
+                                alignment: start;
+                                Text {
+                                    text: root.peek-dir-said;
+                                    color: Theme.ink-3;
+                                    font-size: 11.5px;
+                                    height: 20px;
+                                    vertical-alignment: top;
+                                }
+                                for h in root.peek-heavy: Rectangle {
+                                    height: 26px;
+                                    Text {
+                                        x: 0px;
+                                        y: 2px;
+                                        width: parent.width - heavysize.preferred-width - 8px;
+                                        text: h.name;
+                                        color: h.path != "" && heavytouch.has-hover ? Theme.q-key : Theme.ink;
+                                        font-size: 12px;
+                                        overflow: elide;
+                                    }
+                                    heavysize := Text {
+                                        x: parent.width - self.preferred-width;
+                                        y: 2px;
+                                        text: h.size;
+                                        color: Theme.ink-3;
+                                        font-size: 12px;
+                                    }
+                                    Rectangle {
+                                        y: parent.height - 6px;
+                                        height: 3px;
+                                        border-radius: 2px;
+                                        background: Theme.line-soft;
+                                    }
+                                    Rectangle {
+                                        x: 0px;
+                                        y: parent.height - 6px;
+                                        width: parent.width * h.share;
+                                        height: 3px;
+                                        border-radius: 2px;
+                                        background: Theme.q-key;
+                                    }
+                                    heavytouch := TouchArea {
+                                        enabled: h.path != "";
+                                        mouse-cursor: h.path != "" ? pointer : default;
+                                        clicked => { root.peek-crumb(h.path); }
+                                    }
+                                }
+                                if root.peek-newest.length > 0: Rectangle {
+                                    height: 21px;
+                                    Rectangle {
+                                        y: 10px;
+                                        height: 1px;
+                                        background: Theme.line-soft;
+                                    }
+                                }
+                                if root.peek-newest.length > 0: Text {
+                                    text: root.word-newest;
+                                    color: Theme.ink-3;
+                                    font-size: 11.5px;
+                                    height: 20px;
+                                }
+                                for n in root.peek-newest: Rectangle {
+                                    height: 22px;
+                                    Text {
+                                        x: 0px;
+                                        width: parent.width - newwhen.preferred-width - 8px;
+                                        text: n.name;
+                                        color: Theme.ink;
+                                        font-size: 12px;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                    newwhen := Text {
+                                        x: parent.width - self.preferred-width;
+                                        text: n.when;
+                                        color: Theme.ink-3;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Several rows: how many, and what they come to.
+                        if root.peek-many: VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Rectangle {
+                                height: 100px;
+                                for i in 3: Rectangle {
+                                    x: (parent.width - 120px) / 2 + (i - 1) * 10px;
+                                    y: 8px - (i - 1) * 4px + 4px;
+                                    width: 120px;
+                                    height: 86px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: Theme.line;
+                                    background: Theme.panel;
+                                }
+                            }
+                            Text {
+                                text: root.peek-many-said;
+                                color: Theme.ink;
+                                font-size: 14px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: root.peek-many-small;
+                                color: Theme.ink-3;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        // Nothing else: the kind's picture, while the file is
+                        // read or when it cannot be drawn, and what is said of it.
+                        if root.peek-pages.length == 0 && !root.peek-has-shot && root.peek-text == ""
+                            && !root.peek-many && !(root.peek-dir && root.peek-dir-said != ""): VerticalLayout {
+                            alignment: center;
+                            spacing: 10px;
+                            padding: 16px;
+                            HorizontalLayout {
+                                alignment: center;
+                                KindIcon {
+                                    ktoken: root.peek-ktoken;
+                                    width: 56px;
+                                    height: 56px;
+                                    colorize: Theme.ink-3;
+                                    opacity: 0.55;
+                                }
+                            }
+                            if root.peek-note != "": Text {
+                                text: root.peek-note;
+                                color: Theme.ink-3;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                            if root.peek-cannot && root.peek-native: HorizontalLayout {
+                                alignment: center;
+                                PeekButton {
+                                    label: root.word-peek-native;
+                                    horizontal-stretch: 0;
+                                    clicked => { root.peek-native-open(); }
+                                }
+                            }
                         }
                     }
 
@@ -4110,10 +4375,11 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // The facts, below the picture. Its own height, because a
-                    // path wraps to four lines as readily as one; asking a named
-                    // child for `preferred-height` from its parent is a circle.
-                    Rectangle {
+                    // The facts: one line always, the rest behind a press that
+                    // is kept. Its own height, because a path wraps to four
+                    // lines as readily as one; asking a named child for
+                    // `preferred-height` from its parent is a circle.
+                    if !root.peek-many: Rectangle {
                         vertical-stretch: 0;
                         background: Theme.panel;
 
@@ -4125,33 +4391,76 @@ export component MainWindow inherits Window {
 
                         VerticalLayout {
                             padding-left: 14px;
-                            padding-right: 14px;
-                            padding-top: 9px;
-                            padding-bottom: 9px;
+                            padding-right: 10px;
+                            padding-top: 8px;
+                            padding-bottom: 8px;
                             spacing: 3px;
                             alignment: start;
 
-                            for fact in root.peek-facts: HorizontalLayout {
-                                spacing: 8px;
-                                Text {
-                                    text: fact.label;
-                                    color: Theme.ink-3;
-                                    font-size: 11px;
-                                    width: 74px;
-                                    overflow: elide;
+                            HorizontalLayout {
+                                spacing: 0px;
+                                height: 22px;
+                                if root.peek-sum-kind != "": Text {
+                                    text: root.peek-sum-kind;
+                                    color: Theme.ink;
+                                    font-size: 11.5px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
                                 }
                                 Text {
-                                    text: fact.value;
+                                    text: (root.peek-sum-kind != "" && root.peek-sum-rest != "" ? " · " : "")
+                                        + root.peek-sum-rest;
                                     color: Theme.ink-2;
-                                    font-size: 11px;
-                                    wrap: word-wrap;
+                                    font-size: 11.5px;
+                                    overflow: elide;
                                     horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: more-said.preferred-width + 12px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: moretouch.has-hover ? Theme.line : transparent;
+                                    more-said := Text {
+                                        text: root.word-details + (root.peek-details ? " ▾" : " ▸");
+                                        color: moretouch.has-hover ? Theme.ink : Theme.ink-3;
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                    }
+                                    moretouch := TouchArea {
+                                        clicked => {
+                                            root.peek-details = !root.peek-details;
+                                            root.peek-details-toggled(root.peek-details);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.peek-details: VerticalLayout {
+                                spacing: 3px;
+                                padding-top: 4px;
+                                for fact in root.peek-facts: HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: fact.label;
+                                        color: Theme.ink-3;
+                                        font-size: 11px;
+                                        width: 74px;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: fact.value;
+                                        color: Theme.ink-2;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            
+
                 // The edge that sets the width, 7px like a column's, and last so
                 // it is above what the panel holds. The panel's edge moves with
                 // the pointer, so each move is measured from where it now is.
@@ -5635,6 +5944,15 @@ export component MainWindow inherits Window {
     // Last child of the window, which is what puts it on top: Slint draws
     // siblings in declaration order and has no z-index. The full-window sheet
     // under it stops the dismissing click reaching a row or a heading.
+    // Forty characters of the preview path's face, to measure one: Rust folds
+    // the head of a path into `…` by it.
+    peek-ruler := Text {
+        visible: false;
+        text: "0000000000000000000000000000000000000000";
+        font-family: Fonts.mono;
+        font-size: 11.5px;
+    }
+
     if root.menu-open: RowMenu {
         x: 0;
         y: 0;

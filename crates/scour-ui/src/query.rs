@@ -112,6 +112,8 @@ pub fn has_term(text: &str, term: &str) -> bool {
 /// assert_eq!(toggle("rapor", "kind:doc"), "rapor kind:doc");
 /// assert_eq!(toggle("rapor kind:doc", "kind:image"), "rapor kind:image");
 /// assert_eq!(toggle("rapor kind:doc", "kind:doc"), "rapor");
+/// // Where it looks is the first thing a query says (`lens::at_head`).
+/// assert_eq!(toggle("rapor", "under:~/a"), "under:~/a rapor");
 /// ```
 pub fn toggle(text: &str, term: &str) -> String {
     let mut parts: Vec<&str> = terms(text);
@@ -124,6 +126,7 @@ pub fn toggle(text: &str, term: &str) -> String {
             parts.remove(at);
         }
         Some(at) => parts[at] = term,
+        None if want.as_deref() == Some("under") && !term.starts_with('!') => parts.insert(0, term),
         None => parts.push(term),
     }
     parts.join(" ")

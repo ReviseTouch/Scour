@@ -374,6 +374,8 @@
     HISTORY = Array.isArray(s.history) ? s.history : [];
     DUPES_OPEN = !!s.dupes_open;
     /* A shared field: pinning the panel open is not about this face. */
+    PEEK.details = !!s.preview_details;
+    showDetails();
     if (s.preview) setPeek(true, false);
     peekToggle.setAttribute("aria-pressed", s.preview ? "true" : "false");
     VIEW = (s.view && s.view.web) || {};
@@ -586,6 +588,8 @@
     });
     if (at >= 0 && parts[at] === term) parts.splice(at, 1);
     else if (at >= 0) parts[at] = term;
+    /* Where it looks is the first thing the query says (`lens::at_head`). */
+    else if (want && want === field("under") && !term.startsWith("!")) parts.unshift(term);
     else parts.push(term);
     q.value = parts.join(" ");
     render();

@@ -125,6 +125,10 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     ));
     w.set_refresh_labels(list(&["1 s", "2 s", "5 s", "15 s", "1 min"]));
     w.set_word_found(t(cat, "Found in the file"));
+    w.set_word_peek_menu(t(cat, scour_ui::preview::MENU_SAID));
+    w.set_word_details(t(cat, scour_ui::preview::MORE));
+    w.set_word_peek_native(t(cat, scour_ui::preview::NATIVE));
+    w.set_word_newest(t(cat, scour_ui::preview::NEWEST_SAID));
     w.set_set_memory(t(cat, "Give memory back"));
     w.set_set_memory_note(t(
         cat,

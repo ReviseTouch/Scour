@@ -202,6 +202,10 @@ pub struct Settings {
     /// the button pins it. `false` is what a face with no preview panel writes.
     #[serde(default)]
     pub preview: bool,
+    /// Whether the preview's facts are all shown, or the one line of them. Kept
+    /// the way it was last left, in every face.
+    #[serde(default)]
+    pub preview_details: bool,
     /// Past queries, most recent first — only ones somebody meant. A search box runs a
     /// query per keystroke, so the frontend decides what counts as committed.
     #[serde(default)]

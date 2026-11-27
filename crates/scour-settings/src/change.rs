@@ -78,6 +78,8 @@ pub struct Change {
     pub texts_ahead: Option<bool>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
+    /// See [`Settings::preview_details`].
+    pub preview_details: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
     pub history: Option<Vec<String>>,
     /// Put one query at the front instead. The [`HISTORY`] cap is applied here, so no
@@ -194,6 +196,9 @@ impl Change {
         }
         if let Some(v) = self.preview {
             to.preview = v;
+        }
+        if let Some(v) = self.preview_details {
+            to.preview_details = v;
         }
         if let Some(v) = self.face {
             to.face = v;

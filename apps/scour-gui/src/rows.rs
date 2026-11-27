@@ -654,6 +654,8 @@ pub struct Pick {
     pub path: String,
     pub is_dir: bool,
     pub bytes: i64,
+    /// The kind's token, for the preview's count of several rows by kind.
+    pub ktoken: String,
 }
 
 impl Pick {
@@ -951,7 +953,14 @@ impl Rows {
             path: found.row.path.to_string(),
             is_dir: found.row.is_dir,
             bytes: found.bytes,
+            ktoken: found.row.ktoken.to_string(),
         })
+    }
+
+    /// The kind's token of a row, for the preview's picture while it waits.
+    pub fn ktoken_at(&self, row: usize) -> Option<String> {
+        let pages = self.pages.borrow();
+        pages.at(row).map(|k| k.row.ktoken.to_string())
     }
 
     /// Find which row index holds `path` among the pages currently in hand.

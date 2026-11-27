@@ -98,6 +98,12 @@ pub(super) fn page() -> &'static str {
                 })
                 .collect(),
         );
+        // The preview's buttons for each shape of selection, by menu id.
+        let peek_buttons = serde_json::json!({
+            "file": scour_ui::preview::buttons(false, false),
+            "folder": scour_ui::preview::buttons(true, false),
+            "many": scour_ui::preview::buttons(false, true),
+        });
         PAGE.replacen(
             "/* @THEME@ — see `scour-ui`; the bridge writes this block when it serves\n     the page, so that the window and this page cannot drift apart. */",
             &theme,
@@ -105,6 +111,7 @@ pub(super) fn page() -> &'static str {
         )
         .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
         .replacen("/* @MENUICONS@ */ {}", &menu_icons().to_string(), 1)
+        .replacen("/* @PEEKBUTTONS@ */ {}", &peek_buttons.to_string(), 1)
         .replacen("/* @DISKS@ */ {}", &disk_words().to_string(), 1)
         .replace("@LOGO@", &data_url(LOGO))
         .replacen("<script>", &format!("<script nonce=\"{}\">", nonce()), 1)

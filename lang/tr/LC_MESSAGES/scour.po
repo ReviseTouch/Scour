@@ -3325,3 +3325,33 @@ msgstr "{a} sa {b} dk"
 
 msgid "{a} d {b} h"
 msgstr "{a} gün {b} sa"
+
+msgid "This kind of file cannot be shown here."
+msgstr "Bu tür dosya burada gösterilemiyor."
+
+msgid "Open in the system previewer"
+msgstr "Sistem önizleyicisinde aç"
+
+msgid "modified {when}"
+msgstr "{when} değişti"
+
+msgid "{n} items · {size}"
+msgstr "{n} öge · {size}"
+
+msgid "Heaviest"
+msgstr "En ağır"
+
+msgid "Newest"
+msgstr "En yeni"
+
+msgid "{size} in all"
+msgstr "toplam {size}"
+
+msgid "in {n} folders"
+msgstr "{n} klasörde"
+
+msgid "in one folder"
+msgstr "tek klasörde"
+
+msgid "The whole menu"
+msgstr "Menünün tamamı"
