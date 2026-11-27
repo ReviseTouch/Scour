@@ -25,9 +25,69 @@ fn base64_goes_there_and_back() {
 }
 
 #[test]
-fn only_a_word_processor_flows() {
-    assert!(flows("docx") && flows("DOC"));
-    assert!(!flows("xlsx") && !flows("pptx") && !flows("pdf"));
+fn a_word_processor_and_a_spreadsheet_flow() {
+    assert!(flows("docx") && flows("DOC") && flows("xlsx") && flows("xls"));
+    assert!(!flows("pptx") && !flows("pdf") && !flows("ods"));
+}
+
+#[test]
+fn a_cell_shows_its_number_through_its_format_and_sits_by_its_kind() {
+    let date = GridCell {
+        value: Some(46273.0),
+        format: "dd\\.mm\\.yyyy".into(),
+        text: "2026-09-08".into(),
+        ..GridCell::default()
+    };
+    assert_eq!(date.shown(&Locale::of("tr")), "08.09.2026");
+    assert_eq!(date.alignment(), Align::Right);
+    let plain = GridCell {
+        value: Some(1234.5),
+        ..GridCell::default()
+    };
+    assert_eq!(plain.shown(&Locale::of("tr")), "1234,5");
+    let word = GridCell {
+        text: "Hatay".into(),
+        ..GridCell::default()
+    };
+    assert_eq!(
+        (word.shown(&Locale::default()).as_str(), word.alignment()),
+        ("Hatay", Align::Left)
+    );
+}
+
+#[test]
+fn a_sheet_is_held_to_its_bounds() {
+    let row = |n: usize| GridRow {
+        cells: (0..n)
+            .map(|i| GridCell {
+                text: i.to_string(),
+                span: if i == 0 { 99 } else { 1 },
+                value: if i == 1 { Some(f64::NAN) } else { None },
+                ..GridCell::default()
+            })
+            .collect(),
+    };
+    let flow = Flow {
+        blocks: vec![Block::Sheet(Sheet {
+            name: "Liste".into(),
+            widths: vec![f32::NAN, 500.0],
+            rows: (0..MOST_SHEET_ROWS + 5)
+                .map(|_| row(MOST_SHEET_COLUMNS + 3))
+                .collect(),
+            frozen: true,
+            cut: false,
+        })],
+        cut: false,
+    }
+    .bounded();
+    let s = flow.sheets().next().unwrap();
+    assert!(s.cut);
+    assert!(s.rows.len() <= MOST_SHEET_ROWS);
+    assert_eq!(s.rows[0].cells.len(), MOST_SHEET_COLUMNS);
+    assert_eq!(s.rows[0].cells[0].span, MOST_SHEET_COLUMNS as u32);
+    assert_eq!(s.rows[0].cells[1].value, None);
+    assert_eq!(s.widths.len(), MOST_SHEET_COLUMNS);
+    assert_eq!((s.widths[0], s.widths[1]), (5.0, 40.0));
 }
 
 #[test]
@@ -42,7 +102,7 @@ fn every_word_is_escaped_and_no_markup_gets_through() {
         ],
         cut: false,
     };
-    let page = html(&flow);
+    let page = html(&flow, &Locale::default());
     assert!(!page.contains("<script>"), "{page}");
     assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;q&quot;"));
     assert!(page.contains("<span class=mk>&lt;b&gt;</span>"));
@@ -69,7 +129,7 @@ fn a_picture_the_faces_cannot_draw_or_that_lies_is_dropped() {
     }
     .bounded();
     assert_eq!(flow.blocks.len(), 1, "{flow:?}");
-    let page = html(&flow);
+    let page = html(&flow, &Locale::default());
     assert!(
         page.contains("src=\"data:image/png;base64,iVBORw==\""),
         "{page}"
@@ -168,4 +228,55 @@ fn it_crosses_the_protocol_as_json() {
         "{json}"
     );
     assert_eq!(serde_json::from_str::<Flow>(&json).unwrap(), flow);
+}
+
+#[test]
+fn a_book_is_its_sheets_one_shown_at_a_time_with_no_script() {
+    let cell = |text: &str, bold: bool| GridCell {
+        text: text.into(),
+        bold,
+        ..GridCell::default()
+    };
+    let sheet = |name: &str| {
+        Block::Sheet(Sheet {
+            name: name.into(),
+            widths: vec![6.0, 4.0],
+            rows: vec![
+                GridRow {
+                    cells: vec![cell("Tarih", true), cell("<b>", true)],
+                },
+                GridRow {
+                    cells: vec![
+                        GridCell {
+                            value: Some(46273.0),
+                            format: "dd.mm.yyyy".into(),
+                            ..GridCell::default()
+                        },
+                        cell("x", false),
+                    ],
+                },
+            ],
+            frozen: true,
+            cut: false,
+        })
+    };
+    let page = html(
+        &Flow {
+            blocks: vec![sheet("Liste"), sheet("Özet")],
+            cut: false,
+        },
+        &Locale::of("tr"),
+    );
+    assert!(!page.contains("<script"), "{page}");
+    assert!(page.contains("<section class=sheet id=s0>") && page.contains("id=s1>"));
+    assert!(page.contains("<a href=\"#s1\">Özet</a>"), "{page}");
+    assert!(
+        page.contains("<thead><tr><td style=\"font-weight:600;\">Tarih</td>"),
+        "{page}"
+    );
+    assert!(page.contains("&lt;b&gt;") && !page.contains("<td style=\"font-weight:600;\"><b>"));
+    assert!(
+        page.contains("text-align:right;\">08.09.2026</td>"),
+        "{page}"
+    );
 }

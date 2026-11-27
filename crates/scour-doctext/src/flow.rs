@@ -1,6 +1,7 @@
-//! A word processor's document as a [`scour_flow::Flow`]: office_oxide's model
-//! of it, kept to what flows. Here, in the extractor's process, because the
-//! library parses what anybody can put on a disk.
+//! A word processor's document as a [`scour_flow::Flow`], and a spreadsheet's
+//! book as its sheets: office_oxide's model of them, kept to what a preview
+//! draws. Here, in the extractor's process, because the library parses what
+//! anybody can put on a disk.
 
 use std::io::Cursor;
 
@@ -9,18 +10,200 @@ use office_oxide::ir::{
     Table, TextSpan, VerticalAlign,
 };
 use office_oxide::{Document, DocumentFormat};
-use scour_flow::{Align, Block, Cell, Flow, Para, Picture, Row, Run};
+use scour_flow::{Align, Block, Cell, Flow, GridCell, GridRow, Para, Picture, Row, Run};
 
 /// The document in `bytes`, by its extension.
 pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
-    let format = match extension.to_ascii_lowercase().as_str() {
-        "docx" => DocumentFormat::Docx,
-        "doc" => DocumentFormat::Doc,
+    let (format, book) = match extension.to_ascii_lowercase().as_str() {
+        "docx" => (DocumentFormat::Docx, false),
+        "doc" => (DocumentFormat::Doc, false),
+        "xlsx" => (DocumentFormat::Xlsx, true),
+        "xls" => (DocumentFormat::Xls, true),
         other => return Err(format!("{other} does not flow")),
     };
     let doc =
         Document::from_reader(Cursor::new(bytes.to_vec()), format).map_err(|e| e.to_string())?;
-    Ok(from_ir(&doc.to_ir()).bounded())
+    let ir = doc.to_ir();
+    Ok(if book { sheets(&ir) } else { from_ir(&ir) }.bounded())
+}
+
+/// A grid's text is drawn at 12 px: an em of it is nine points.
+const GRID_PT: f32 = 9.0;
+/// Rows a column's width is read from, when the book gives none.
+const MEASURED_ROWS: usize = 300;
+
+/// A book's sheets, each a grid; hidden ones and charts left out.
+fn sheets(ir: &DocumentIR) -> Flow {
+    let mut blocks = Vec::new();
+    for (n, section) in ir.sections.iter().enumerate() {
+        if section.hidden
+            || section
+                .sheet_kind
+                .as_ref()
+                .is_some_and(|k| !matches!(k, office_oxide::ir::SheetKind::Worksheet))
+        {
+            continue;
+        }
+        let name = section
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("Sheet{}", n + 1));
+        let table = section.elements.iter().find_map(|e| match e {
+            Element::Table(t) => Some(t),
+            _ => None,
+        });
+        blocks.push(Block::Sheet(match table {
+            Some(t) => sheet(name, t),
+            None => scour_flow::Sheet {
+                name,
+                ..scour_flow::Sheet::default()
+            },
+        }));
+        if blocks.len() >= scour_flow::MOST_SHEETS {
+            break;
+        }
+    }
+    Flow { blocks, cut: false }
+}
+
+fn sheet(name: String, t: &Table) -> scour_flow::Sheet {
+    let mut rows: Vec<GridRow> = t
+        .rows
+        .iter()
+        .take(scour_flow::MOST_SHEET_ROWS + 1)
+        .map(|r| {
+            let mut cells: Vec<GridCell> = r.cells.iter().map(grid_cell).collect();
+            while cells.last().is_some_and(blank) {
+                cells.pop();
+            }
+            GridRow { cells }
+        })
+        .collect();
+    while rows.last().is_some_and(|r| r.cells.is_empty()) {
+        rows.pop();
+    }
+    let cut = rows.len() > scour_flow::MOST_SHEET_ROWS;
+    rows.truncate(scour_flow::MOST_SHEET_ROWS);
+    let columns = rows
+        .iter()
+        .map(|r| r.cells.iter().map(|c| c.span as usize).sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    let widths = if t.column_widths_twips.len() >= columns && columns > 0 {
+        t.column_widths_twips
+            .iter()
+            .take(columns)
+            .map(|&w| w as f32 * PT_PER_TWIP / GRID_PT)
+            .collect()
+    } else {
+        measured(&rows, columns)
+    };
+    // A first row of bold or shaded labels is the sheet's heading.
+    let frozen = rows.len() > 2
+        && rows[0].cells.iter().any(|c| !blank(c))
+        && rows[0]
+            .cells
+            .iter()
+            .filter(|c| !blank(c))
+            .all(|c| c.bold || c.shade.is_some());
+    scour_flow::Sheet {
+        name,
+        widths,
+        rows,
+        frozen,
+        cut,
+    }
+}
+
+fn blank(c: &GridCell) -> bool {
+    c.blank()
+}
+
+/// Each column as wide as what it shows, near enough: a character of the
+/// grid's text is a little over half an em.
+fn measured(rows: &[GridRow], columns: usize) -> Vec<f32> {
+    let locale = scour_flow::Locale::default();
+    let mut chars = vec![0usize; columns];
+    for r in rows.iter().take(MEASURED_ROWS) {
+        let mut at = 0;
+        for (i, c) in r.cells.iter().enumerate() {
+            // Words with room beside them spill into it, as a title does: they
+            // say nothing of their own column's width.
+            let spills =
+                c.value.is_none() && at + 1 < columns && r.cells.get(i + 1).is_none_or(blank);
+            if c.span == 1 && at < columns && !spills {
+                let longest = c
+                    .shown(&locale)
+                    .lines()
+                    .map(|l| l.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let n = if c.bold {
+                    longest + longest / 8
+                } else {
+                    longest
+                };
+                chars[at] = chars[at].max(if c.wrap { n.min(24) } else { n });
+            }
+            at += c.span.max(1) as usize;
+        }
+    }
+    chars
+        .into_iter()
+        .map(|n| (n as f32 * 0.58 + 1.0).clamp(2.5, 30.0))
+        .collect()
+}
+
+fn grid_cell(c: &office_oxide::ir::TableCell) -> GridCell {
+    use office_oxide::ir::CellDataType;
+    let mut text = String::new();
+    let mut first: Option<&TextSpan> = None;
+    for e in &c.content {
+        if let Element::Paragraph(p) = e {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            for i in &p.content {
+                match i {
+                    InlineContent::Text(t) => {
+                        first.get_or_insert(t);
+                        text.push_str(&t.text);
+                    }
+                    InlineContent::LineBreak => text.push('\n'),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let value = match c.data_type {
+        Some(CellDataType::Number | CellDataType::Date) | None => c.raw_number,
+        _ => None,
+    };
+    let format = c
+        .number_format
+        .clone()
+        .filter(|f| !f.eq_ignore_ascii_case("general"))
+        .unwrap_or_default();
+    // A colour that comes from a style is not in the model: on a dark fill,
+    // which nobody fills behind black text, it was light.
+    let dark = c.background_color.is_some_and(|[r, g, b]| {
+        0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) < 110.0
+    });
+    let color = first
+        .and_then(|t| t.color)
+        .or(dark.then_some([0xff, 0xff, 0xff]));
+    GridCell {
+        text,
+        value,
+        format,
+        span: c.col_span.max(1),
+        bold: first.is_some_and(|t| t.bold),
+        italic: first.is_some_and(|t| t.italic),
+        color,
+        shade: c.background_color,
+        align: c.text_align.as_ref().map(|a| align(&Some(a.clone()))),
+        wrap: c.wrap_text,
+    }
 }
 
 /// Points per twip, per EMU.
@@ -477,8 +660,35 @@ mod tests {
     }
 
     #[test]
+    fn a_book_is_its_sheets_numbers_kept_as_numbers() {
+        let mut bytes = Cursor::new(Vec::new());
+        office_oxide::create::create_from_markdown_to_writer(
+            "| Ad | Tutar |\n|---|---|\n| Ali | 1500 |\n| Veli | 2,5 |\n",
+            DocumentFormat::Xlsx,
+            &mut bytes,
+        )
+        .unwrap();
+        let flow = flow(&bytes.into_inner(), "xlsx").unwrap();
+        let sheet = flow.sheets().next().expect("a sheet");
+        assert_eq!(sheet.widths.len(), 2, "{sheet:?}");
+        let shown: Vec<Vec<String>> = sheet
+            .rows
+            .iter()
+            .map(|r| {
+                r.cells
+                    .iter()
+                    .map(|c| c.shown(&scour_flow::Locale::of("tr")))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(shown[0], ["Ad", "Tutar"], "{sheet:?}");
+        assert_eq!(shown[1][0], "Ali");
+        assert!(sheet.widths.iter().all(|w| *w >= 2.5));
+    }
+
+    #[test]
     fn what_is_not_a_word_processor_s_or_not_a_document_is_refused() {
-        assert!(flow(b"PK\x03\x04", "xlsx").is_err());
+        assert!(flow(b"PK\x03\x04", "pptx").is_err());
         assert!(flow(b"not a document", "docx").is_err());
     }
 }

@@ -46,7 +46,7 @@ Dependencies flow downwards and **never** upwards.
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
 | **reading files** | `scour-grep`, `scour-extract`, `scour-preview`, `scour-textcache` | what is inside a file, under bounds; documents' text kept | Scour: paths in, text out |
 | **document readers** | `scour-doctext`, linked by `apps/scour-extractor` alone | PDF, legacy Office, e-mail: bytes in, text out; a word processor's document as it flows | files, the service; it runs in a process the service may kill |
-| **flowing documents** | `scour-flow` | a word processor's document as paragraphs, tables and pictures, and its drawing as HTML | files and formats: `serde` alone, filled by the extractor, drawn by the faces |
+| **flowing documents** | `scour-flow` | a word processor's document as paragraphs, tables and pictures, a spreadsheet's as sheets with their numbers' formats, and their drawing as HTML | files and formats: `serde` alone, filled by the extractor, drawn by the faces |
 | **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
 | **client** | `scour-client` | a held connection, a service started when none answers, the requests whose wording is a decision | what a face draws, and which of its answers is stale |
 | **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-volumes`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
@@ -270,7 +270,7 @@ the right", and it is the only way the panel can take its width.
 | index of contents | a crate of its own, implementing a trait in `scour-core` | `holding()` in `scour-engine/src/content.rs`, named in `scourd/src/wire.rs` |
 | a new document format | `scour-extract` | its container and text layers; grep and the preview both read it from there |
 | richer preview | `scour-preview`, reading document text through `scour-extract` | `Request::Preview`, new fields `#[serde(default)]` |
-| a sheet or a slide drawn | `scour-flow`'s model, filled in `scour-doctext/src/flow.rs` | `Request::Flow`; `Look::flow` says it is there |
+| a slide drawn | `scour-flow`'s model beside `Sheet`, filled in `scour-doctext/src/flow.rs` | `Request::Flow`; `Look::flow` says it is there |
 | AI-written queries | a crate depending on `scour-query` only: a sentence in, a query and its reading out | a request the service answers, so every face has it and one place holds the key and the consent |
 | a plugin | a process of its own, linking `scour-client` | the socket, as `scour-mcp` does |
 

@@ -1109,7 +1109,7 @@ fn apply(
                 Response::Preview(look) => {
                     show_peek(w, cat, link, &path, &look);
                 }
-                Response::Flow(flow) => flowing::show(w, &path, flow),
+                Response::Flow(flow) => flowing::show(w, &path, flow, cat.language()),
                 Response::Stat(entry) => peek_facts(w, cat, &entry),
                 _ => {}
             }

@@ -262,6 +262,27 @@ export struct FlowCell {
     shaded: bool,
 }
 
+// One cell of a spreadsheet's grid as the preview draws it: its text already
+// through its format, its width in pixels.
+export struct GridCellView {
+    text: string,
+    width: length,
+    // How far its words may run: past its edge over blank cells, as a title does.
+    reach: length,
+    // 0 left, 1 centre, 2 right.
+    align: int,
+    bold: bool,
+    italic: bool,
+    color: color,
+    colored: bool,
+    shade: color,
+    shaded: bool,
+}
+
+export struct GridRowView {
+    cells: [GridCellView],
+}
+
 // One line of a document that flows, as the preview draws it: a paragraph
 // (`kind` 0), a table's row (1), a picture (2) or a break (3). Sizes are in
 // ems of the body's text.

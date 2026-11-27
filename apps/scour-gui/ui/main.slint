@@ -11,8 +11,8 @@ export { DragTray }
 import { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow, GrepInk, GrepPill, GrepMenu } from "grep-parts.slint";
 export { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PeekCrumb, PeekAct, PeekHeavy, PeekNew, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced, FlowRow } from "types.slint";
-import { FlowView } from "flow.slint";
+import { Cell, HeadInfo, Found, PeekCrumb, PeekAct, PeekHeavy, PeekNew, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced, FlowRow, GridRowView, GridCellView } from "types.slint";
+import { FlowView, SheetView } from "flow.slint";
 // Re-exported for the generated Rust API.
 export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
@@ -367,6 +367,14 @@ export component MainWindow inherits Window {
     // A word processor's document drawn as it flows, and whether it is shown.
     in property <[FlowRow]> peek-flow;
     in property <bool> peek-flowing;
+    // A spreadsheet's book instead: its sheets' names, the one shown, its grid.
+    in property <bool> peek-book;
+    in property <[string]> peek-sheets;
+    in property <int> peek-sheet;
+    in property <[GridRowView]> peek-grid;
+    in property <[GridCellView]> peek-grid-head;
+    in property <length> peek-grid-width;
+    callback peek-sheet-picked(int);
     in property <float> peek-aspect: 1.414;
     callback peek-page-scrolled(int);
     in property <[Fact]> peek-facts;
@@ -4206,8 +4214,16 @@ export component MainWindow inherits Window {
 
                         // A word processor's document, as it flows; its text
                         // stands below until it comes.
-                        if root.peek-flowing: FlowView {
+                        if root.peek-flowing && !root.peek-book: FlowView {
                             rows: root.peek-flow;
+                        }
+                        if root.peek-flowing && root.peek-book: SheetView {
+                            sheets: root.peek-sheets;
+                            current: root.peek-sheet;
+                            rows: root.peek-grid;
+                            head: root.peek-grid-head;
+                            grid-width: root.peek-grid-width;
+                            picked(i) => { root.peek-sheet-picked(i); }
                         }
 
                         // The text, its line badge, and beside it the rail.

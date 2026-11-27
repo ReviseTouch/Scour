@@ -604,6 +604,15 @@ pub(crate) fn wire(wiring: &Wiring) {
 
     {
         let weak = window.as_weak();
+        window.on_peek_sheet_picked(move |i| {
+            if let Some(w) = weak.upgrade() {
+                crate::flowing::pick(&w, i.max(0) as usize);
+            }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
         window.on_peek_page_scrolled(move |idx| {
             if let Some(w) = weak.upgrade() {
                 peek::scrolled(&w, idx.max(0) as usize);

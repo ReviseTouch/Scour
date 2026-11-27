@@ -662,7 +662,8 @@
             frame.setAttribute("sandbox", "");
             frame.setAttribute("referrerpolicy", "no-referrer");
             frame.title = f.name;
-            frame.src = SERVICE.peekUrl(full, { flow: 1 });
+            /* The page's language punctuates a sheet's numbers and names its months. */
+            frame.src = SERVICE.peekUrl(full, { flow: 1, lang: LANG });
             shown(frame);
             peekBody.classList.add("flow");
           } else if (meta.shape === "text") {

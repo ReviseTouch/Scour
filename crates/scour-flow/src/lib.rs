@@ -8,16 +8,25 @@
 
 mod b64;
 mod html;
+mod number;
+mod sheet;
 
 pub use b64::{decode, encode};
 pub use html::html;
+pub use number::{Locale, general, show};
+pub use sheet::{
+    GridCell, GridRow, MOST_CELL_TEXT, MOST_SHEET_COLUMNS, MOST_SHEET_ROWS, MOST_SHEETS, Sheet,
+};
 
 use serde::{Deserialize, Serialize};
 
-/// The extensions read this way: a word processor's. A sheet and a slide are
-/// not text that flows, and are not drawn as if they were.
+/// The extensions read this way: a word processor's, whose text flows, and a
+/// spreadsheet's, whose sheets are grids.
 pub fn flows(extension: &str) -> bool {
-    matches!(extension.to_ascii_lowercase().as_str(), "docx" | "doc")
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "docx" | "doc" | "xlsx" | "xls"
+    )
 }
 
 /// Blocks drawn at most; a preview past them says it stopped.
@@ -50,6 +59,8 @@ pub enum Block {
     Picture(Picture),
     /// A page, a section or a drawn line ended here.
     Break,
+    /// A spreadsheet's sheet: a book is these alone.
+    Sheet(Sheet),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,10 +216,18 @@ impl Flow {
             pictures: MOST_PICTURES,
         };
         let mut kept = Vec::with_capacity(self.blocks.len().min(MOST_BLOCKS));
+        let mut sheets = 0;
         for block in self.blocks {
             if budget.blocks == 0 || budget.text == 0 {
                 self.cut = true;
                 break;
+            }
+            if matches!(block, Block::Sheet(_)) {
+                sheets += 1;
+                if sheets > MOST_SHEETS {
+                    self.cut = true;
+                    break;
+                }
             }
             budget.blocks -= 1;
             if let Some(b) = bound_block(block, &mut budget) {
@@ -238,17 +257,32 @@ impl Flow {
                         }
                     }
                 }
+                Block::Sheet(s) => {
+                    for r in &s.rows {
+                        let line: Vec<&str> = r.cells.iter().map(|c| c.text.as_str()).collect();
+                        out.push_str(&line.join("\t"));
+                        out.push('\n');
+                    }
+                }
                 Block::Picture(_) | Block::Break => {}
             }
         }
         out
     }
+
+    /// Its sheets, when it is a spreadsheet's book.
+    pub fn sheets(&self) -> impl Iterator<Item = &Sheet> {
+        self.blocks.iter().filter_map(|b| match b {
+            Block::Sheet(s) => Some(s),
+            _ => None,
+        })
+    }
 }
 
-struct Budget {
-    blocks: usize,
-    text: usize,
-    pictures: usize,
+pub(crate) struct Budget {
+    pub(crate) blocks: usize,
+    pub(crate) text: usize,
+    pub(crate) pictures: usize,
 }
 
 fn bound_block(block: Block, budget: &mut Budget) -> Option<Block> {
@@ -307,6 +341,7 @@ fn bound_block(block: Block, budget: &mut Budget) -> Option<Block> {
             }))
         }
         Block::Break => Some(Block::Break),
+        Block::Sheet(s) => Some(Block::Sheet(sheet::bound(s, budget))),
     }
 }
 

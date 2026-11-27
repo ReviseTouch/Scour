@@ -1,20 +1,40 @@
 //! A word processor's document drawn as it flows (`scour-flow`): its blocks as
 //! the rows of the preview's [`FlowRow`] list, each paragraph Slint's styled
-//! text. Pictures are decoded off the UI thread and set as they come.
+//! text. Pictures are decoded off the UI thread and set as they come. A
+//! spreadsheet's book is its sheets instead, one grid at a time.
 
 use slint::private_unstable_api::re_exports::StyledText;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use i_slint_common::styled_text::{
     FormattedSpan, MARKDOWN_INTERPOLATION_PLACEHOLDER, Style, StyledTextParagraph,
 };
-use scour_flow::{Align, Block, Flow, Para};
+use scour_flow::{Align, Block, Flow, Locale, Para, Sheet};
 
-use crate::ui::{FlowCell, FlowRow, MainWindow};
+use crate::ui::{FlowCell, FlowRow, GridCellView, GridRowView, MainWindow};
 
-/// Draw `flow` for `path`, which the preview is showing.
-pub fn show(w: &MainWindow, path: &str, flow: Flow) {
+thread_local! {
+    /// The book on show, and how its numbers are punctuated: a tab picks a
+    /// sheet of it again.
+    static BOOK: RefCell<Option<(Vec<Sheet>, Locale)>> = const { RefCell::new(None) };
+}
+
+/// Draw `flow` for `path`, which the preview is showing, in `language`.
+pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
+    let sheets: Vec<Sheet> = flow.sheets().cloned().collect();
+    if !sheets.is_empty() {
+        let names: Vec<slint::SharedString> =
+            sheets.iter().map(|s| s.name.as_str().into()).collect();
+        w.set_peek_sheets(ModelRc::new(VecModel::from(names)));
+        BOOK.with(|b| *b.borrow_mut() = Some((sheets, Locale::of(language))));
+        pick(w, 0);
+        w.set_peek_book(true);
+        w.set_peek_flowing(true);
+        return;
+    }
+    w.set_peek_book(false);
     // Each picture this window decodes, and the row it lands in.
     let mut pictures = Vec::new();
     let mut rows: Vec<FlowRow> = Vec::with_capacity(flow.blocks.len());
@@ -65,6 +85,110 @@ pub fn clear(w: &MainWindow) {
     if w.get_peek_flow().row_count() > 0 {
         w.set_peek_flow(ModelRc::default());
     }
+    if w.get_peek_book() {
+        w.set_peek_book(false);
+        w.set_peek_sheets(ModelRc::default());
+        w.set_peek_grid(ModelRc::default());
+        w.set_peek_grid_head(ModelRc::default());
+        BOOK.with(|b| *b.borrow_mut() = None);
+    }
+}
+
+/// A grid's text is 12 px: an em of the model's widths.
+const GRID_EM: f32 = 12.0;
+
+/// Show the book's `index`th sheet.
+pub fn pick(w: &MainWindow, index: usize) {
+    BOOK.with(|b| {
+        let b = b.borrow();
+        let Some((sheets, locale)) = b.as_ref() else {
+            return;
+        };
+        let Some(sheet) = sheets.get(index) else {
+            return;
+        };
+        let px: Vec<f32> = sheet.widths.iter().map(|w| w * GRID_EM).collect();
+        let mut rows: Vec<GridRowView> = sheet
+            .rows
+            .iter()
+            .map(|r| GridRowView {
+                cells: ModelRc::new(VecModel::from(cells(r, &px, locale))),
+            })
+            .collect();
+        let head = if sheet.frozen && !rows.is_empty() {
+            rows.remove(0).cells
+        } else {
+            ModelRc::default()
+        };
+        w.set_peek_grid_width(px.iter().sum());
+        w.set_peek_grid_head(head);
+        w.set_peek_grid(ModelRc::new(VecModel::from(rows)));
+        w.set_peek_sheet(index as i32);
+    });
+}
+
+/// A row's cells across every column, the missing ones blank, so the grid's
+/// lines run the whole width.
+fn cells(r: &scour_flow::GridRow, px: &[f32], locale: &Locale) -> Vec<GridCellView> {
+    let mut out = Vec::with_capacity(px.len());
+    let mut at = 0usize;
+    for (i, c) in r.cells.iter().enumerate() {
+        if at >= px.len() {
+            break;
+        }
+        let span = (c.span.max(1) as usize).min(px.len() - at);
+        let text = c.shown(locale);
+        let width: f32 = px[at..at + span].iter().sum();
+        // Words run on over the blank cells after them, to the grid's edge.
+        let mut reach = width;
+        if c.spills() {
+            let mut col = at + span;
+            for n in &r.cells[i + 1..] {
+                if !n.blank() || col >= px.len() {
+                    break;
+                }
+                let s = n.span.max(1) as usize;
+                reach += px[col..(col + s).min(px.len())].iter().sum::<f32>();
+                col += s;
+            }
+            if i + 1 >= r.cells.len() {
+                reach += px[col.min(px.len())..].iter().sum::<f32>();
+            }
+        }
+        out.push(GridCellView {
+            // One line, as a cell shows it unless it wraps.
+            text: text.lines().next().unwrap_or("").into(),
+            width,
+            reach,
+            align: match c.alignment() {
+                Align::Left => 0,
+                Align::Center => 1,
+                Align::Right => 2,
+            },
+            bold: c.bold,
+            italic: c.italic,
+            color: color(c.color.unwrap_or_default()),
+            colored: c.color.is_some(),
+            shade: color(c.shade.unwrap_or_default()),
+            shaded: c.shade.is_some(),
+        });
+        at += span;
+    }
+    for &w in &px[at.min(px.len())..] {
+        out.push(GridCellView {
+            text: Default::default(),
+            width: w,
+            reach: w,
+            align: 0,
+            bold: false,
+            italic: false,
+            color: slint::Color::default(),
+            colored: false,
+            shade: slint::Color::default(),
+            shaded: false,
+        });
+    }
+    out
 }
 
 /// A picture's bytes as pixels, if they are a kind this window decodes.
@@ -133,6 +257,8 @@ fn rows_of(block: &Block) -> Vec<FlowRow> {
             kind: 3,
             ..blank_row()
         }],
+        // A book is drawn as its grids, never mixed into a flow.
+        Block::Sheet(_) => Vec::new(),
     }
 }
 

@@ -1,7 +1,7 @@
 // A word processor's document as the preview draws it: white paper, its
 // paragraphs, tables and pictures flowing to the panel's width (`scour-flow`).
 
-import { FlowRow, FlowCell } from "types.slint";
+import { FlowRow, FlowCell, GridCellView, GridRowView } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
 // Paper is paper in a dark theme too: the document's own colours are for it.
@@ -10,6 +10,8 @@ global Paper {
     out property <color> rule: #9aa0a6;
     out property <color> faint: #d0d7de;
     out property <length> margin: 16px;
+    // A sheet's lines between cells: lighter than a table's rules.
+    out property <color> grid: #e1e4e8;
 }
 
 component FlowLine {
@@ -133,6 +135,134 @@ export component FlowView inherits Rectangle {
         for row in root.rows: FlowLine {
             line: row;
             em: root.em;
+        }
+    }
+}
+
+// A sheet's cell: one line of text, cut at its edge as a spreadsheet cuts it,
+// and the grid's lines on its right and its foot.
+component GridBox inherits Rectangle {
+    in property <GridCellView> cell;
+    in property <length> tall;
+    width: root.cell.width;
+    height: root.tall;
+    background: root.cell.shaded ? root.cell.shade : transparent;
+    Text {
+        x: 4px;
+        width: max(root.cell.width, root.cell.reach) - 8px;
+        height: parent.height;
+        text: root.cell.text;
+        font-size: 12px;
+        font-weight: root.cell.bold ? 600 : 400;
+        font-italic: root.cell.italic;
+        color: root.cell.colored ? root.cell.color : Paper.ink;
+        horizontal-alignment: root.cell.align == 1 ? center : root.cell.align == 2 ? right : left;
+        vertical-alignment: center;
+        overflow: clip;
+    }
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: parent.height;
+        background: Paper.grid;
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Paper.grid;
+    }
+}
+
+// A spreadsheet's book: its sheets as tabs, the one picked as a grid that
+// scrolls both ways, its heading row held at the top.
+export component SheetView inherits Rectangle {
+    in property <[string]> sheets;
+    in property <int> current;
+    in property <[GridRowView]> rows;
+    in property <[GridCellView]> head;
+    in property <length> grid-width;
+    callback picked(int);
+    property <length> tall: 22px;
+    background: #ffffff;
+
+    VerticalLayout {
+        if root.sheets.length > 1: Rectangle {
+            height: 30px;
+            background: #f6f8fa;
+            clip: true;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-top: 6px;
+                spacing: 2px;
+                alignment: start;
+                for name[i] in root.sheets: Rectangle {
+                    width: label.preferred-width + 20px;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #d0d7de;
+                    background: i == root.current ? #ffffff : #eaeef2;
+                    label := Text {
+                        text: name;
+                        font-size: 12px;
+                        font-weight: i == root.current ? 600 : 400;
+                        color: i == root.current ? Paper.ink : #57606a;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.picked(i); }
+                    }
+                }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: #d0d7de;
+            }
+        }
+
+        Rectangle {
+            clip: true;
+            property <length> head-tall: root.head.length > 0 ? root.tall : 0px;
+            grid := ListView {
+                y: parent.head-tall;
+                width: parent.width;
+                height: parent.height - parent.head-tall;
+                for r in root.rows: HorizontalLayout {
+                    width: max(root.grid-width, grid.width);
+                    height: root.tall;
+                    alignment: start;
+                    for c in r.cells: GridBox {
+                        cell: c;
+                        tall: root.tall;
+                    }
+                }
+            }
+            // Over the grid and moved with it sideways, so its columns stay
+            // over theirs.
+            if root.head.length > 0: Rectangle {
+                y: 0px;
+                height: root.tall;
+                width: parent.width;
+                background: #ffffff;
+                clip: true;
+                HorizontalLayout {
+                    x: grid.viewport-x;
+                    width: root.grid-width;
+                    alignment: start;
+                    for c in root.head: GridBox {
+                        cell: c;
+                        tall: root.tall;
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #d0d7de;
+                }
+            }
         }
     }
 }

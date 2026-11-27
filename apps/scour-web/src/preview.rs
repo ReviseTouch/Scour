@@ -86,7 +86,8 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
             },
         ) {
             Ok(Response::Flow(flow)) => {
-                if let Err(e) = send_flow(stream, &flow) {
+                let locale = scour_flow::Locale::of(req.param("lang").unwrap_or("en"));
+                if let Err(e) = send_flow(stream, &flow, &locale) {
                     http::fail(stream, "500 Internal Server Error", &e.to_string());
                 }
             }
@@ -186,8 +187,12 @@ fn send_words(stream: &mut TcpStream, look: &scour_preview::Look) -> std::io::Re
 /// A flow's page. Its own policy, not [`PREVIEW_HEADERS`]': the page has
 /// pictures, as `data:` URLs, and styles, inline — and still no script, nothing
 /// fetched, and an opaque origin of its own.
-fn send_flow(stream: &mut TcpStream, flow: &scour_flow::Flow) -> std::io::Result<()> {
-    let page = scour_flow::html(flow);
+fn send_flow(
+    stream: &mut TcpStream,
+    flow: &scour_flow::Flow,
+    locale: &scour_flow::Locale,
+) -> std::io::Result<()> {
+    let page = scour_flow::html(flow, locale);
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: text/html; charset=utf-8\r\n\

@@ -5,12 +5,21 @@
 
 use std::fmt::Write as _;
 
-use crate::{Align, Block, Flow, PICTURE_TYPES, Para, Run, Table};
+use crate::{Align, Block, Flow, Locale, PICTURE_TYPES, Para, Run, Sheet, Table};
 
-/// The page: white paper, dark ink, the body at 13 px.
-pub fn html(flow: &Flow) -> String {
+/// The page: white paper, dark ink, the body at 13 px; a book's sheets as
+/// grids, one shown at a time. `locale` punctuates a sheet's numbers.
+pub fn html(flow: &Flow, locale: &Locale) -> String {
     let mut out = String::with_capacity(16 * 1024);
     out.push_str(HEAD);
+    let sheets: Vec<&Sheet> = flow.sheets().collect();
+    if !sheets.is_empty() {
+        out.push_str("<body class=book>\n");
+        book(&sheets, locale, &mut out);
+        out.push_str("</body></html>\n");
+        return out;
+    }
+    out.push_str("<body>\n");
     for block in &flow.blocks {
         match block {
             Block::Para(p) => para(p, &mut out),
@@ -25,6 +34,7 @@ pub fn html(flow: &Flow) -> String {
                 }
             }
             Block::Break => out.push_str("<hr>\n"),
+            Block::Sheet(_) => {}
         }
     }
     if flow.cut {
@@ -49,7 +59,108 @@ tr.hd td{font-weight:600}\
 img{display:block;max-width:100%;height:auto;margin:.4em 0}\
 hr{border:0;border-top:1px dashed #b8bec5;margin:1em 0}\
 .cut{color:#6e7781}\
-</style></head><body>\n";
+body.book{padding:0;overflow-wrap:normal}\
+.sheet{display:none}.sheet:target{display:block}\
+.book:not(:has(.sheet:target))>.sheet:first-child{display:block}\
+.tabs{display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid #d0d7de;background:#f6f8fa;\
+position:sticky;left:0;width:max-content;min-width:100%;box-sizing:border-box}\
+.tabs a{padding:3px 10px;border:1px solid #d0d7de;border-bottom:0;border-radius:4px 4px 0 0;\
+color:#57606a;text-decoration:none;font-size:12px;background:#eaeef2;white-space:nowrap}\
+.tabs a.on{background:#fff;color:#1f2328;font-weight:600;margin-bottom:-1px}\
+table.grid{width:auto;margin:0;font-size:12px;line-height:1.4}\
+.grid td{border:1px solid #e1e4e8;padding:1px 4px;white-space:nowrap;overflow:hidden;\
+vertical-align:middle;height:1.45em}\
+.grid td.o{overflow:visible}\
+.grid thead td{position:sticky;top:0;background:#fff;z-index:1;box-shadow:0 1px 0 #d0d7de}\
+.sheet>.cut{padding:6px 8px}\
+</style></head>";
+
+/// Each sheet a section, its tabs inside it with its own marked: shown by the
+/// address's fragment, the first when there is none — no script needed.
+fn book(sheets: &[&Sheet], locale: &Locale, out: &mut String) {
+    for (i, sheet) in sheets.iter().enumerate() {
+        let _ = write!(out, "<section class=sheet id=s{i}>");
+        if sheets.len() > 1 {
+            out.push_str("<nav class=tabs>");
+            for (j, other) in sheets.iter().enumerate() {
+                let on = if i == j { " class=on" } else { "" };
+                let _ = write!(out, "<a href=\"#s{j}\"{on}>{}</a>", escape(&other.name));
+            }
+            out.push_str("</nav>");
+        }
+        grid(sheet, locale, out);
+        if sheet.cut {
+            out.push_str("<p class=cut>…</p>");
+        }
+        out.push_str("</section>\n");
+    }
+}
+
+fn grid(sheet: &Sheet, locale: &Locale, out: &mut String) {
+    let total: f32 = sheet.widths.iter().sum();
+    let _ = write!(
+        out,
+        "<table class=grid style=\"width:{total:.2}em\"><colgroup>"
+    );
+    for w in &sheet.widths {
+        let _ = write!(out, "<col style=\"width:{w:.2}em\">");
+    }
+    out.push_str("</colgroup>\n");
+    for (n, row) in sheet.rows.iter().enumerate() {
+        let head = n == 0 && sheet.frozen;
+        if head {
+            out.push_str("<thead>");
+        } else if n == usize::from(sheet.frozen) {
+            out.push_str("<tbody>");
+        }
+        out.push_str("<tr>");
+        for (i, cell) in row.cells.iter().enumerate() {
+            let spill = cell.spills() && row.cells.get(i + 1).is_none_or(|n| n.blank());
+            let mut css = String::new();
+            match cell.alignment() {
+                Align::Left => {}
+                Align::Center => css.push_str("text-align:center;"),
+                Align::Right => css.push_str("text-align:right;"),
+            }
+            if cell.bold {
+                css.push_str("font-weight:600;");
+            }
+            if cell.italic {
+                css.push_str("font-style:italic;");
+            }
+            if let Some(c) = cell.color {
+                let _ = write!(css, "color:{};", hex(c));
+            }
+            if let Some(c) = cell.shade {
+                let _ = write!(css, "background:{};", hex(c));
+            }
+            out.push_str("<td");
+            if cell.span > 1 {
+                let _ = write!(out, " colspan={}", cell.span);
+            }
+            // One line a row, as the window draws it: a wrapping cell would
+            // make every row a different height, and a preview a ragged one.
+            if spill {
+                out.push_str(" class=o");
+            }
+            if !css.is_empty() {
+                let _ = write!(out, " style=\"{css}\"");
+            }
+            out.push('>');
+            out.push_str(&escape(&cell.shown(locale)));
+            out.push_str("</td>");
+        }
+        out.push_str("</tr>");
+        if head {
+            out.push_str("</thead>");
+        }
+        out.push('\n');
+    }
+    if sheet.rows.len() > usize::from(sheet.frozen) {
+        out.push_str("</tbody>");
+    }
+    out.push_str("</table>");
+}
 
 fn para(p: &Para, out: &mut String) {
     let mut css = String::new();
