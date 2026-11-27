@@ -36,6 +36,7 @@ pub fn own<'a>(opts: &'a ScanOptions, roots: &[PathBuf], skip: &[String]) -> Cow
 
 /// Filesystems that are the kernel's interfaces rather than files, by the type
 /// `mountinfo` gives them. `tmpfs` is not among them: `/tmp` holds real files.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const VIRTUAL: &[&str] = &[
     "proc",
     "sysfs",
@@ -63,6 +64,7 @@ pub const VIRTUAL: &[&str] = &[
 
 /// The mount points of [`VIRTUAL`] filesystems strictly under one of `roots`,
 /// in a `mountinfo` table. A root that is one is left alone: it was asked for.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn virtual_in(mountinfo: &str, roots: &[PathBuf]) -> Vec<String> {
     let mut out = Vec::new();
     for line in mountinfo.lines() {
