@@ -87,7 +87,12 @@ pub(super) fn api_preview(stream: &mut TcpStream, client: &Pool, req: &http::Req
         ) {
             Ok(Response::Flow(flow)) => {
                 let locale = scour_flow::Locale::of(req.param("lang").unwrap_or("en"));
-                if let Err(e) = send_flow(stream, &flow, &locale) {
+                // The search's finds in this file, a line each: marked in it.
+                let words: Vec<&str> = req
+                    .param("m")
+                    .map_or_else(Vec::new, |m| m.lines().collect());
+                let marks = scour_flow::Marks::new(&words);
+                if let Err(e) = send_flow(stream, &flow, &locale, &marks) {
                     http::fail(stream, "500 Internal Server Error", &e.to_string());
                 }
             }
@@ -191,8 +196,9 @@ fn send_flow(
     stream: &mut TcpStream,
     flow: &scour_flow::Flow,
     locale: &scour_flow::Locale,
+    marks: &scour_flow::Marks,
 ) -> std::io::Result<()> {
-    let page = scour_flow::html(flow, locale);
+    let page = scour_flow::html(flow, locale, marks);
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: text/html; charset=utf-8\r\n\

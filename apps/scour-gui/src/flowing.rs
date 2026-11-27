@@ -1,7 +1,8 @@
 //! A word processor's document drawn as it flows (`scour-flow`): its blocks as
 //! the rows of the preview's [`FlowRow`] list, each paragraph Slint's styled
 //! text. Pictures are decoded off the UI thread and set as they come. A
-//! spreadsheet's book is its sheets instead, one grid at a time.
+//! spreadsheet's book is its sheets instead, one grid at a time. The words a
+//! search found in the file are marked, and the view opens on the first.
 
 use slint::private_unstable_api::re_exports::StyledText;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -11,7 +12,7 @@ use std::rc::Rc;
 use i_slint_common::styled_text::{
     FormattedSpan, MARKDOWN_INTERPOLATION_PLACEHOLDER, Style, StyledTextParagraph,
 };
-use scour_flow::{Align, Block, Flow, Locale, Para, Sheet};
+use scour_flow::{Align, Block, Flow, Locale, Marks, Para, Sheet};
 
 use crate::ui::{FlowCell, FlowRow, GridCellView, GridRowView, MainWindow};
 
@@ -19,10 +20,60 @@ thread_local! {
     /// The book on show, and how its numbers are punctuated: a tab picks a
     /// sheet of it again.
     static BOOK: RefCell<Option<(Vec<Sheet>, Locale)>> = const { RefCell::new(None) };
+    /// The words a search found in the file on show.
+    static MARKS: RefCell<Marks> = RefCell::new(Marks::default());
+}
+
+/// A find's ink: no fill behind a word in styled text, so a colour that reads
+/// on white paper and on a dark slide, bold and underlined.
+const FOUND_INK: u32 = 0xffd9_7706;
+/// A sheet's cell holding a find: the fill a highlighter leaves.
+const FOUND_FILL: [u8; 3] = [0xff, 0xf0, 0xa6];
+
+/// The finds' own words, from the lines the preview lists under the file.
+fn found_words(w: &MainWindow) -> Marks {
+    let found = w.get_peek_found();
+    let words: Vec<String> = found
+        .iter()
+        .flat_map(|f| [f.hit, f.hit2, f.hit3])
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Marks::new(&words)
+}
+
+/// Open on row `row` once the list has laid itself out, if the file is still
+/// the one on show.
+fn go_to(w: &MainWindow, path: &str, row: Option<usize>) {
+    w.set_peek_goto(-1);
+    let Some(row) = row else { return };
+    let (weak, path) = (w.as_weak(), path.to_owned());
+    slint::Timer::single_shot(std::time::Duration::from_millis(60), move || {
+        if let Some(w) = weak.upgrade()
+            && w.get_peek_path().as_str() == path
+        {
+            w.set_peek_goto(row as i32);
+        }
+    });
+}
+
+/// Whether a block holds one of the finds.
+fn has_find(block: &Block, m: &Marks) -> bool {
+    match block {
+        Block::Para(p) => !m.find(&p.text()).is_empty(),
+        Block::Table(t) => t.rows.iter().any(|r| {
+            r.cells
+                .iter()
+                .any(|c| c.paras.iter().any(|p| !m.find(&p.text()).is_empty()))
+        }),
+        _ => false,
+    }
 }
 
 /// Draw `flow` for `path`, which the preview is showing, in `language`.
 pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
+    let marks = found_words(w);
+    MARKS.with(|m| *m.borrow_mut() = marks.clone());
     let sheets: Vec<Sheet> = flow.sheets().cloned().collect();
     if !sheets.is_empty() {
         let names: Vec<slint::SharedString> =
@@ -39,8 +90,18 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
     let mut pictures = Vec::new();
     let mut rows: Vec<FlowRow> = Vec::with_capacity(flow.blocks.len());
     let mut slides = 0;
+    let mut first: Option<usize> = None;
     let deck = flow.blocks.iter().any(|b| matches!(b, Block::Slide(_)));
     for block in &flow.blocks {
+        if first.is_none() {
+            let inner = match block {
+                Block::Slide(s) => s.blocks.iter().any(|b| has_find(b, &marks)),
+                b => has_find(b, &marks),
+            };
+            if inner {
+                first = Some(rows.len());
+            }
+        }
         match block {
             Block::Slide(slide) => {
                 slides += 1;
@@ -76,6 +137,7 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
     w.set_peek_flow(ModelRc::from(Rc::clone(&model)));
     w.set_peek_deck(deck);
     w.set_peek_flowing(true);
+    go_to(w, path, first);
     if pictures.is_empty() {
         return;
     }
@@ -135,6 +197,7 @@ pub fn clear(w: &MainWindow) {
     if w.get_peek_flowing() {
         w.set_peek_flowing(false);
     }
+    w.set_peek_goto(-1);
     if w.get_peek_flow().row_count() > 0 {
         w.set_peek_flow(ModelRc::default());
     }
@@ -161,14 +224,20 @@ pub fn pick(w: &MainWindow, index: usize) {
             return;
         };
         let px: Vec<f32> = sheet.widths.iter().map(|w| w * GRID_EM).collect();
-        let mut rows: Vec<GridRowView> = sheet
-            .rows
-            .iter()
-            .map(|r| GridRowView {
-                cells: ModelRc::new(VecModel::from(cells(r, &px, locale))),
-            })
-            .collect();
+        let marks = MARKS.with(|m| m.borrow().clone());
+        let mut first = None;
+        let mut rows: Vec<GridRowView> = Vec::with_capacity(sheet.rows.len());
+        for (n, r) in sheet.rows.iter().enumerate() {
+            let (cells, found) = cells(r, &px, locale, &marks);
+            if found && first.is_none() {
+                first = Some(n);
+            }
+            rows.push(GridRowView {
+                cells: ModelRc::new(VecModel::from(cells)),
+            });
+        }
         let head = if sheet.frozen && !rows.is_empty() {
+            first = first.and_then(|n| n.checked_sub(1));
             rows.remove(0).cells
         } else {
             ModelRc::default()
@@ -177,14 +246,21 @@ pub fn pick(w: &MainWindow, index: usize) {
         w.set_peek_grid_head(head);
         w.set_peek_grid(ModelRc::new(VecModel::from(rows)));
         w.set_peek_sheet(index as i32);
+        go_to(w, &w.get_peek_path(), first);
     });
 }
 
 /// A row's cells across every column, the missing ones blank, so the grid's
 /// lines run the whole width.
-fn cells(r: &scour_flow::GridRow, px: &[f32], locale: &Locale) -> Vec<GridCellView> {
+fn cells(
+    r: &scour_flow::GridRow,
+    px: &[f32],
+    locale: &Locale,
+    marks: &Marks,
+) -> (Vec<GridCellView>, bool) {
     let mut out = Vec::with_capacity(px.len());
     let mut at = 0usize;
+    let mut found = false;
     for (i, c) in r.cells.iter().enumerate() {
         if at >= px.len() {
             break;
@@ -208,6 +284,9 @@ fn cells(r: &scour_flow::GridRow, px: &[f32], locale: &Locale) -> Vec<GridCellVi
                 reach += px[col.min(px.len())..].iter().sum::<f32>();
             }
         }
+        // A cell holding a find is filled as a highlighter would.
+        let hit = !marks.find(&text).is_empty();
+        found |= hit;
         out.push(GridCellView {
             // One line, as a cell shows it unless it wraps.
             text: text.lines().next().unwrap_or("").into(),
@@ -218,12 +297,20 @@ fn cells(r: &scour_flow::GridRow, px: &[f32], locale: &Locale) -> Vec<GridCellVi
                 Align::Center => 1,
                 Align::Right => 2,
             },
-            bold: c.bold,
+            bold: c.bold || hit,
             italic: c.italic,
-            color: color(c.color.unwrap_or_default()),
-            colored: c.color.is_some(),
-            shade: color(c.shade.unwrap_or_default()),
-            shaded: c.shade.is_some(),
+            color: color(if hit {
+                [0x1f, 0x23, 0x28]
+            } else {
+                c.color.unwrap_or_default()
+            }),
+            colored: c.color.is_some() || hit,
+            shade: color(if hit {
+                FOUND_FILL
+            } else {
+                c.shade.unwrap_or_default()
+            }),
+            shaded: c.shade.is_some() || hit,
         });
         at += span;
     }
@@ -241,7 +328,7 @@ fn cells(r: &scour_flow::GridRow, px: &[f32], locale: &Locale) -> Vec<GridCellVi
             shaded: false,
         });
     }
-    out
+    (out, found)
 }
 
 /// A picture's bytes as pixels, if they are a kind this window decodes.
@@ -400,6 +487,18 @@ fn paragraph(p: &Para, bold: bool) -> StyledTextParagraph {
                 ),
             );
         }
+        // The finds in this run, over whatever it says of itself.
+        MARKS.with(|m| {
+            for (a, b) in m.borrow().find(&r.text) {
+                let range = start + a..start + b;
+                for style in [Style::Color(FOUND_INK), Style::Strong, Style::Underline] {
+                    formatting.push(FormattedSpan {
+                        range: range.clone(),
+                        style,
+                    });
+                }
+            }
+        });
     }
     StyledTextParagraph {
         text,

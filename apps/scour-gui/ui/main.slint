@@ -371,6 +371,9 @@ export component MainWindow inherits Window {
     in property <bool> peek-book;
     // A presentation's slides, drawn as cards.
     in property <bool> peek-deck;
+    // The row of a drawn document or a sheet holding the first find: the view
+    // opens on it. Below zero: none.
+    in property <int> peek-goto: -1;
     // An Office document in the preview, and whether such a one is shown as
     // its plain text rather than drawn: kept for every face.
     in property <bool> peek-can-flow;
@@ -4229,6 +4232,7 @@ export component MainWindow inherits Window {
                         if root.peek-flowing && !root.peek-book: FlowView {
                             rows: root.peek-flow;
                             deck: root.peek-deck;
+                            goto: root.peek-goto;
                         }
                         if root.peek-flowing && root.peek-book: SheetView {
                             sheets: root.peek-sheets;
@@ -4236,6 +4240,7 @@ export component MainWindow inherits Window {
                             rows: root.peek-grid;
                             head: root.peek-grid-head;
                             grid-width: root.peek-grid-width;
+                            goto: root.peek-goto;
                             picked(i) => { root.peek-sheet-picked(i); }
                         }
 

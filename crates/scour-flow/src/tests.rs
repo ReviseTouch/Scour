@@ -103,7 +103,7 @@ fn every_word_is_escaped_and_no_markup_gets_through() {
         ],
         cut: false,
     };
-    let page = html(&flow, &Locale::default());
+    let page = html(&flow, &Locale::default(), &Marks::default());
     assert!(!page.contains("<script>"), "{page}");
     assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;q&quot;"));
     assert!(page.contains("<span class=mk>&lt;b&gt;</span>"));
@@ -130,7 +130,7 @@ fn a_picture_the_faces_cannot_draw_or_that_lies_is_dropped() {
     }
     .bounded();
     assert_eq!(flow.blocks.len(), 1, "{flow:?}");
-    let page = html(&flow, &Locale::default());
+    let page = html(&flow, &Locale::default(), &Marks::default());
     assert!(
         page.contains("src=\"data:image/png;base64,iVBORw==\""),
         "{page}"
@@ -267,6 +267,7 @@ fn a_book_is_its_sheets_one_shown_at_a_time_with_no_script() {
             cut: false,
         },
         &Locale::of("tr"),
+        &Marks::default(),
     );
     assert!(!page.contains("<script"), "{page}");
     assert!(page.contains("<section class=sheet id=s0>") && page.contains("id=s1>"));
@@ -304,9 +305,28 @@ fn a_slide_is_a_card_on_its_own_colour_numbered() {
     // No slide inside a slide.
     assert_eq!(first.blocks.len(), 1);
     assert!(first.dark());
-    let page = html(&flow, &Locale::default());
+    let page = html(&flow, &Locale::default(), &Marks::default());
     assert!(page.contains("<body class=deck>"));
     assert!(page.contains("background:#1e2a32;color:#f6f8fa;"), "{page}");
     assert!(page.contains("<span class=no>2</span>"), "{page}");
     assert!(flow.text().contains("Başlık") && flow.text().contains("İkinci"));
+}
+
+#[test]
+fn the_finds_are_marked_and_the_first_is_where_the_address_goes() {
+    let flow = Flow {
+        blocks: vec![
+            Block::Para(para("Kira sözleşmesinin feshi <talebimizdir>.")),
+            Block::Para(para("Davalı kiracı bedeli ödememiştir.")),
+        ],
+        cut: false,
+    };
+    let page = html(&flow, &Locale::default(), &Marks::new(&["KİRA"]));
+    assert!(
+        page.contains("<mark id=f>Kira</mark> sözleşmesinin"),
+        "{page}"
+    );
+    assert!(page.contains("Davalı <mark>kira</mark>cı"), "{page}");
+    assert!(page.contains("&lt;talebimizdir&gt;"));
+    assert_eq!(page.matches("id=f").count(), 1);
 }

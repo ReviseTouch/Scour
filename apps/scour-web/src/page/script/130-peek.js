@@ -688,8 +688,14 @@
             frame.setAttribute("sandbox", "");
             frame.setAttribute("referrerpolicy", "no-referrer");
             frame.title = f.name;
-            /* The page's language punctuates a sheet's numbers and names its months. */
-            frame.src = SERVICE.peekUrl(full, { flow: 1, lang: LANG });
+            /* The page's language punctuates a sheet's numbers and names its
+               months; the search's finds in the file are marked, and the frame
+               opens on the first. */
+            const words = [...new Set((f.found || []).flatMap((x) =>
+              lineSegs(x).filter(([, hit]) => hit).map(([t]) => t.trim()).filter(Boolean)))].slice(0, 20);
+            const place = { flow: 1, lang: LANG };
+            if (words.length) place.m = words.join("\n");
+            frame.src = SERVICE.peekUrl(full, place) + (words.length ? "#f" : "");
             shown(frame);
             peekBody.classList.add("flow");
           } else if (meta.shape === "text") {

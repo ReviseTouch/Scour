@@ -166,13 +166,22 @@ component FlowLine {
 
 export component FlowView inherits Rectangle {
     in property <[FlowRow]> rows;
+    // A row to open on: the first find. Rows differ in height, so where it
+    // lies is the list's own guess from the rows it has laid out.
+    in property <int> goto: -1;
+    changed goto => {
+        if (root.goto >= 0 && root.rows.length > 0) {
+            list.viewport-y = -max(0px,
+                root.goto * list.viewport-height / root.rows.length - 32px);
+        }
+    }
     // A presentation's cards stand on grey, so a white slide is seen as one.
     in property <bool> deck;
     // The body's size: everything else is in ems of it.
     in property <length> em: 13px;
     background: root.deck ? #eef1f4 : #ffffff;
 
-    ListView {
+    list := ListView {
         width: parent.width;
         height: parent.height;
         for row in root.rows: FlowLine {
@@ -225,6 +234,13 @@ export component SheetView inherits Rectangle {
     in property <[GridRowView]> rows;
     in property <[GridCellView]> head;
     in property <length> grid-width;
+    // A row to open on, the first holding a find: every row is one height.
+    in property <int> goto: -1;
+    changed goto => {
+        if (root.goto >= 0) {
+            grid.viewport-y = -max(0px, root.goto * root.tall - root.tall);
+        }
+    }
     callback picked(int);
     property <length> tall: 22px;
     background: #ffffff;

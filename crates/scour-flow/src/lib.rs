@@ -8,11 +8,13 @@
 
 mod b64;
 mod html;
+mod marks;
 mod number;
 mod sheet;
 
 pub use b64::{decode, encode};
 pub use html::html;
+pub use marks::{MOST_TERM, MOST_TERMS, Marks};
 pub use number::{Locale, general, show};
 pub use sheet::{
     GridCell, GridRow, MOST_CELL_TEXT, MOST_SHEET_COLUMNS, MOST_SHEET_ROWS, MOST_SHEETS, Sheet,
