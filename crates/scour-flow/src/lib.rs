@@ -20,12 +20,13 @@ pub use sheet::{
 
 use serde::{Deserialize, Serialize};
 
-/// The extensions read this way: a word processor's, whose text flows, and a
-/// spreadsheet's, whose sheets are grids.
+/// The extensions read this way: a word processor's, whose text flows, a
+/// spreadsheet's, whose sheets are grids, and a presentation's, whose slides
+/// are cards.
 pub fn flows(extension: &str) -> bool {
     matches!(
         extension.to_ascii_lowercase().as_str(),
-        "docx" | "doc" | "xlsx" | "xls"
+        "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt"
     )
 }
 
@@ -61,6 +62,28 @@ pub enum Block {
     Break,
     /// A spreadsheet's sheet: a book is these alone.
     Sheet(Sheet),
+    /// A presentation's slide: its words in reading order on its own colour.
+    Slide(Slide),
+}
+
+/// A slide as a card: not where its boxes sit — at a preview's width their
+/// words would be a few pixels high — but what they say, top to bottom.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Slide {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<[u8; 3]>,
+    /// Paragraphs, tables and pictures; never a sheet or another slide.
+    pub blocks: Vec<Block>,
+}
+
+impl Slide {
+    /// Light ink for a dark slide, dark for the rest: what words with no
+    /// colour of their own are drawn in.
+    pub fn dark(&self) -> bool {
+        self.background.is_some_and(|[r, g, b]| {
+            0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) < 110.0
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -257,6 +280,13 @@ impl Flow {
                         }
                     }
                 }
+                Block::Slide(s) => {
+                    let inner = Flow {
+                        blocks: s.blocks.clone(),
+                        cut: false,
+                    };
+                    out.push_str(&inner.text());
+                }
                 Block::Sheet(s) => {
                     for r in &s.rows {
                         let line: Vec<&str> = r.cells.iter().map(|c| c.text.as_str()).collect();
@@ -342,6 +372,15 @@ fn bound_block(block: Block, budget: &mut Budget) -> Option<Block> {
         }
         Block::Break => Some(Block::Break),
         Block::Sheet(s) => Some(Block::Sheet(sheet::bound(s, budget))),
+        Block::Slide(s) => Some(Block::Slide(Slide {
+            background: s.background,
+            blocks: s
+                .blocks
+                .into_iter()
+                .filter(|b| !matches!(b, Block::Sheet(_) | Block::Slide(_)))
+                .filter_map(|b| bound_block(b, budget))
+                .collect(),
+        })),
     }
 }
 

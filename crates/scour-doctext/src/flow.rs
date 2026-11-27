@@ -14,17 +14,78 @@ use scour_flow::{Align, Block, Cell, Flow, GridCell, GridRow, Para, Picture, Row
 
 /// The document in `bytes`, by its extension.
 pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
-    let (format, book) = match extension.to_ascii_lowercase().as_str() {
-        "docx" => (DocumentFormat::Docx, false),
-        "doc" => (DocumentFormat::Doc, false),
-        "xlsx" => (DocumentFormat::Xlsx, true),
-        "xls" => (DocumentFormat::Xls, true),
+    let format = match extension.to_ascii_lowercase().as_str() {
+        "docx" => DocumentFormat::Docx,
+        "doc" => DocumentFormat::Doc,
+        "xlsx" => DocumentFormat::Xlsx,
+        "xls" => DocumentFormat::Xls,
+        "pptx" => DocumentFormat::Pptx,
+        "ppt" => DocumentFormat::Ppt,
         other => return Err(format!("{other} does not flow")),
     };
     let doc =
         Document::from_reader(Cursor::new(bytes.to_vec()), format).map_err(|e| e.to_string())?;
     let ir = doc.to_ir();
-    Ok(if book { sheets(&ir) } else { from_ir(&ir) }.bounded())
+    Ok(match format {
+        DocumentFormat::Xlsx | DocumentFormat::Xls => sheets(&ir),
+        DocumentFormat::Pptx | DocumentFormat::Ppt => slides(&ir),
+        _ => from_ir(&ir),
+    }
+    .bounded())
+}
+
+/// A presentation's slides, each a card: its title, then its boxes top to
+/// bottom and left to right, as a reader goes through them.
+fn slides(ir: &DocumentIR) -> Flow {
+    let mut out = Out {
+        blocks: Vec::new(),
+        body_pt: body_pt(ir),
+        text: 0,
+        pictures: 0,
+        blanks: 0,
+        cut: false,
+    };
+    let mut cards = Vec::new();
+    for section in &ir.sections {
+        if section.hidden {
+            continue;
+        }
+        let mut order: Vec<&Element> = section.elements.iter().collect();
+        // A box's place; the title, which has none, first.
+        let place = |e: &Element| match e {
+            Element::Heading(_) => (i64::MIN, i64::MIN),
+            Element::TextBox(t) => (t.y_emu.unwrap_or(0), t.x_emu.unwrap_or(0)),
+            Element::Shape(s) => (s.y_emu, s.x_emu),
+            _ => (0, 0),
+        };
+        order.sort_by_key(|e| place(e));
+        out.blocks.clear();
+        out.blanks = 0;
+        for e in order {
+            out.elements(std::slice::from_ref(e), 0);
+        }
+        // A slide's blank lines are its layout, which a card does not keep.
+        let blocks: Vec<Block> = std::mem::take(&mut out.blocks)
+            .into_iter()
+            .filter(|b| match b {
+                Block::Para(p) => {
+                    p.runs.iter().any(|r| !r.text.trim().is_empty()) || !p.mark.is_empty()
+                }
+                _ => true,
+            })
+            .collect();
+        cards.push(Block::Slide(scour_flow::Slide {
+            background: section.background_rgb,
+            blocks,
+        }));
+        if out.cut || cards.len() >= scour_flow::MOST_BLOCKS / 8 {
+            break;
+        }
+    }
+    Flow {
+        blocks: cards,
+        cut: out.cut,
+    }
 }
 
 /// A grid's text is drawn at 12 px: an em of it is nine points.
@@ -282,6 +343,7 @@ fn body_pt(ir: &DocumentIR) -> f32 {
                         }
                     }
                 }
+                Element::TextBox(t) => count(&t.content, by_size),
                 _ => {}
             }
         }
@@ -687,8 +749,40 @@ mod tests {
     }
 
     #[test]
+    fn a_presentation_is_its_slides_each_a_card_in_reading_order() {
+        let mut bytes = Cursor::new(Vec::new());
+        office_oxide::create::create_from_markdown_to_writer(
+            "# Klonlama\n\nBirinci slaytın sözü.\n\n---\n\n# İkinci\n\n- madde bir\n- madde iki\n",
+            DocumentFormat::Pptx,
+            &mut bytes,
+        )
+        .unwrap();
+        let flow = flow(&bytes.into_inner(), "pptx").unwrap();
+        let slides: Vec<&scour_flow::Slide> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Slide(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert!(!slides.is_empty(), "{flow:?}");
+        let text = flow.text();
+        assert!(
+            text.contains("Klonlama") && text.contains("madde iki"),
+            "{text}"
+        );
+        // The title first on its card.
+        let first = match &slides[0].blocks[0] {
+            Block::Para(p) => p.text(),
+            other => format!("{other:?}"),
+        };
+        assert!(first.contains("Klonlama"), "{flow:?}");
+    }
+
+    #[test]
     fn what_is_not_a_word_processor_s_or_not_a_document_is_refused() {
-        assert!(flow(b"PK\x03\x04", "pptx").is_err());
+        assert!(flow(b"PK\x03\x04", "odp").is_err());
         assert!(flow(b"not a document", "docx").is_err());
     }
 }

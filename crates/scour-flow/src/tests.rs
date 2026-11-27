@@ -25,9 +25,10 @@ fn base64_goes_there_and_back() {
 }
 
 #[test]
-fn a_word_processor_and_a_spreadsheet_flow() {
+fn the_six_formats_of_office_flow() {
     assert!(flows("docx") && flows("DOC") && flows("xlsx") && flows("xls"));
-    assert!(!flows("pptx") && !flows("pdf") && !flows("ods"));
+    assert!(flows("pptx") && flows("ppt"));
+    assert!(!flows("pdf") && !flows("ods") && !flows("odp"));
 }
 
 #[test]
@@ -279,4 +280,33 @@ fn a_book_is_its_sheets_one_shown_at_a_time_with_no_script() {
         page.contains("text-align:right;\">08.09.2026</td>"),
         "{page}"
     );
+}
+
+#[test]
+fn a_slide_is_a_card_on_its_own_colour_numbered() {
+    let flow = Flow {
+        blocks: vec![
+            Block::Slide(Slide {
+                background: Some([30, 42, 50]),
+                blocks: vec![Block::Para(para("Başlık")), Block::Slide(Slide::default())],
+            }),
+            Block::Slide(Slide {
+                background: None,
+                blocks: vec![Block::Para(para("İkinci"))],
+            }),
+        ],
+        cut: false,
+    }
+    .bounded();
+    let Block::Slide(first) = &flow.blocks[0] else {
+        panic!()
+    };
+    // No slide inside a slide.
+    assert_eq!(first.blocks.len(), 1);
+    assert!(first.dark());
+    let page = html(&flow, &Locale::default());
+    assert!(page.contains("<body class=deck>"));
+    assert!(page.contains("background:#1e2a32;color:#f6f8fa;"), "{page}");
+    assert!(page.contains("<span class=no>2</span>"), "{page}");
+    assert!(flow.text().contains("Başlık") && flow.text().contains("İkinci"));
 }

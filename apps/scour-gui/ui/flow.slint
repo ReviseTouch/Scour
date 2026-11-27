@@ -17,107 +17,148 @@ global Paper {
 component FlowLine {
     in property <FlowRow> line;
     in property <length> em;
+    // A slide's rows sit on its card: inset from the panel's edges, on its
+    // colour, in its ink.
+    property <length> inset: root.line.carded ? 8px : 0px;
+    property <length> pad: root.line.carded ? 14px : Paper.margin;
+    property <color> ink: root.line.carded ? root.line.ink : Paper.ink;
+    property <length> room: root.width - 2 * root.inset - 2 * root.pad;
 
-    VerticalLayout {
-        if root.line.kind == 0: Rectangle {
-            background: root.line.shaded ? root.line.shade : transparent;
-            HorizontalLayout {
-                padding-left: Paper.margin + root.line.indent * root.em;
-                padding-right: Paper.margin;
-                padding-top: root.line.before * root.em;
-                padding-bottom: root.line.after * root.em;
-                if root.line.mark != "": Text {
-                    text: root.line.mark;
-                    width: 1.6 * root.em;
-                    color: Paper.ink;
-                    font-size: root.line.size * root.em;
-                    vertical-alignment: top;
-                }
-                StyledText {
-                    text: root.line.text;
-                    default-color: Paper.ink;
-                    default-font-size: root.line.size * root.em;
-                    horizontal-alignment: root.line.align == 1 ? center : root.line.align == 2 ? right : left;
-                    // An empty paragraph is a line of space, as it is in the document.
-                    min-height: root.line.size * root.em * 1.35;
-                }
-            }
-        }
+    HorizontalLayout {
+        padding-left: root.inset;
+        padding-right: root.inset;
+        // The gap below a card, which is the panel's and not the card's.
+        padding-bottom: root.line.kind == 5 ? 10px : 0px;
 
-        // Each cell draws its top and left edges, the row its right one, and the
-        // table's last row its bottom: one pixel wherever two cells meet.
-        if root.line.kind == 1: Rectangle {
-            HorizontalLayout {
-                padding-left: Paper.margin;
-                padding-right: Paper.margin;
-                for cell in root.line.cells: Rectangle {
-                    width: cell.share * (root.width - 2 * Paper.margin);
-                    background: cell.shaded ? cell.shade : transparent;
-                    VerticalLayout {
-                        padding-left: 5px;
-                        padding-right: 5px;
-                        padding-top: 3px;
-                        padding-bottom: 3px;
+        Rectangle {
+            background: root.line.carded ? root.line.card : transparent;
+            border-top-left-radius: root.line.kind == 4 ? 8px : 0px;
+            border-top-right-radius: root.line.kind == 4 ? 8px : 0px;
+            border-bottom-left-radius: root.line.kind == 5 ? 8px : 0px;
+            border-bottom-right-radius: root.line.kind == 5 ? 8px : 0px;
+
+            VerticalLayout {
+                if root.line.kind == 0: Rectangle {
+                    background: root.line.shaded ? root.line.shade : transparent;
+                    HorizontalLayout {
+                        padding-left: root.pad + root.line.indent * root.em;
+                        padding-right: root.pad;
+                        padding-top: root.line.before * root.em;
+                        padding-bottom: root.line.after * root.em;
+                        if root.line.mark != "": Text {
+                            text: root.line.mark;
+                            width: 1.6 * root.em;
+                            color: root.ink;
+                            font-size: root.line.size * root.em;
+                            vertical-alignment: top;
+                        }
                         StyledText {
-                            text: cell.text;
-                            default-color: Paper.ink;
-                            default-font-size: 0.95 * root.em;
+                            text: root.line.text;
+                            default-color: root.ink;
+                            default-font-size: root.line.size * root.em;
+                            horizontal-alignment: root.line.align == 1 ? center : root.line.align == 2 ? right : left;
+                            // An empty paragraph is a line of space, as it is in the document.
+                            min-height: root.line.size * root.em * 1.35;
+                        }
+                    }
+                }
+
+                // Each cell draws its top and left edges, the row its right one, and the
+                // table's last row its bottom: one pixel wherever two cells meet.
+                if root.line.kind == 1: Rectangle {
+                    HorizontalLayout {
+                        padding-left: root.pad;
+                        padding-right: root.pad;
+                        for cell in root.line.cells: Rectangle {
+                            width: cell.share * root.room;
+                            background: cell.shaded ? cell.shade : transparent;
+                            VerticalLayout {
+                                padding-left: 5px;
+                                padding-right: 5px;
+                                padding-top: 3px;
+                                padding-bottom: 3px;
+                                StyledText {
+                                    text: cell.text;
+                                    default-color: root.ink;
+                                    default-font-size: 0.95 * root.em;
+                                }
+                            }
+                            if root.line.ruled: Rectangle {
+                                x: 0px;
+                                y: 0px;
+                                width: parent.width;
+                                height: 1px;
+                                background: Paper.rule;
+                            }
+                            if root.line.ruled: Rectangle {
+                                x: 0px;
+                                y: 0px;
+                                width: 1px;
+                                height: parent.height;
+                                background: Paper.rule;
+                            }
                         }
                     }
                     if root.line.ruled: Rectangle {
-                        x: 0px;
-                        y: 0px;
-                        width: parent.width;
-                        height: 1px;
-                        background: Paper.rule;
-                    }
-                    if root.line.ruled: Rectangle {
-                        x: 0px;
+                        x: parent.width - root.pad - 1px;
                         y: 0px;
                         width: 1px;
                         height: parent.height;
                         background: Paper.rule;
                     }
+                    if root.line.ruled && root.line.last: Rectangle {
+                        x: root.pad;
+                        y: parent.height - 1px;
+                        width: parent.width - 2 * root.pad;
+                        height: 1px;
+                        background: Paper.rule;
+                    }
                 }
-            }
-            if root.line.ruled: Rectangle {
-                x: parent.width - Paper.margin - 1px;
-                y: 0px;
-                width: 1px;
-                height: parent.height;
-                background: Paper.rule;
-            }
-            if root.line.ruled && root.line.last: Rectangle {
-                x: Paper.margin;
-                y: parent.height - 1px;
-                width: parent.width - 2 * Paper.margin;
-                height: 1px;
-                background: Paper.rule;
-            }
-        }
 
-        if root.line.kind == 2: HorizontalLayout {
-            padding-left: Paper.margin;
-            padding-right: Paper.margin;
-            padding-top: 6px;
-            padding-bottom: 6px;
-            alignment: start;
-            Image {
-                source: root.line.picture;
-                width: min(root.line.pic-w * root.em, root.width - 2 * Paper.margin);
-                height: self.width * root.line.pic-h / max(0.01, root.line.pic-w);
-                image-fit: contain;
-            }
-        }
+                if root.line.kind == 2: HorizontalLayout {
+                    padding-left: root.pad;
+                    padding-right: root.pad;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    alignment: start;
+                    // No taller than this: a tall picture is a screen of one thing.
+                    Image {
+                        source: root.line.picture;
+                        width: min(root.line.pic-w * root.em, root.room,
+                            260px * root.line.pic-w / max(0.01, root.line.pic-h));
+                        height: self.width * root.line.pic-h / max(0.01, root.line.pic-w);
+                        image-fit: contain;
+                    }
+                }
 
-        if root.line.kind == 3: Rectangle {
-            height: 21px;
-            Rectangle {
-                x: Paper.margin;
-                y: 10px;
-                width: parent.width - 2 * Paper.margin;
-                height: 1px;
-                background: Paper.faint;
+                if root.line.kind == 3: Rectangle {
+                    height: 21px;
+                    Rectangle {
+                        x: root.pad;
+                        y: 10px;
+                        width: parent.width - 2 * root.pad;
+                        height: 1px;
+                        background: Paper.faint;
+                    }
+                }
+
+                // A card's top, with the slide's number in its corner.
+                if root.line.kind == 4: Rectangle {
+                    height: 24px;
+                    Text {
+                        x: parent.width - self.width - 10px;
+                        y: 6px;
+                        text: root.line.mark;
+                        font-size: 11px;
+                        color: root.ink;
+                        opacity: 0.6;
+                    }
+                }
+
+                // Its foot.
+                if root.line.kind == 5: Rectangle {
+                    height: 14px;
+                }
             }
         }
     }
@@ -125,9 +166,11 @@ component FlowLine {
 
 export component FlowView inherits Rectangle {
     in property <[FlowRow]> rows;
+    // A presentation's cards stand on grey, so a white slide is seen as one.
+    in property <bool> deck;
     // The body's size: everything else is in ems of it.
     in property <length> em: 13px;
-    background: #ffffff;
+    background: root.deck ? #eef1f4 : #ffffff;
 
     ListView {
         width: parent.width;

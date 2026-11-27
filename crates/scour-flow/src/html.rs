@@ -5,7 +5,7 @@
 
 use std::fmt::Write as _;
 
-use crate::{Align, Block, Flow, Locale, PICTURE_TYPES, Para, Run, Sheet, Table};
+use crate::{Align, Block, Flow, Locale, PICTURE_TYPES, Para, Picture, Run, Sheet, Table};
 
 /// The page: white paper, dark ink, the body at 13 px; a book's sheets as
 /// grids, one shown at a time. `locale` punctuates a sheet's numbers.
@@ -19,23 +19,18 @@ pub fn html(flow: &Flow, locale: &Locale) -> String {
         out.push_str("</body></html>\n");
         return out;
     }
-    out.push_str("<body>\n");
+    let deck = flow.blocks.iter().any(|b| matches!(b, Block::Slide(_)));
+    out.push_str(if deck {
+        "<body class=deck>\n"
+    } else {
+        "<body>\n"
+    });
+    let mut slides = 0;
     for block in &flow.blocks {
-        match block {
-            Block::Para(p) => para(p, &mut out),
-            Block::Table(t) => table(t, &mut out),
-            Block::Picture(p) => {
-                if PICTURE_TYPES.contains(&p.mime.as_str()) && crate::b64::is_base64(&p.data) {
-                    let _ = writeln!(
-                        out,
-                        "<img alt=\"\" style=\"width:{:.2}em\" src=\"data:{};base64,{}\">",
-                        p.width, p.mime, p.data
-                    );
-                }
-            }
-            Block::Break => out.push_str("<hr>\n"),
-            Block::Sheet(_) => {}
+        if let Block::Slide(_) = block {
+            slides += 1;
         }
+        blocks(block, slides, &mut out);
     }
     if flow.cut {
         out.push_str("<p class=cut>…</p>\n");
@@ -73,7 +68,49 @@ vertical-align:middle;height:1.45em}\
 .grid td.o{overflow:visible}\
 .grid thead td{position:sticky;top:0;background:#fff;z-index:1;box-shadow:0 1px 0 #d0d7de}\
 .sheet>.cut{padding:6px 8px}\
+body.deck{padding:10px 12px 24px;background:#eef1f4}html:has(body.deck){background:#eef1f4}\
+.slide{position:relative;background:#fff;border:1px solid #d0d7de;border-radius:8px;\
+padding:14px 16px 16px;margin:0 0 10px;min-height:calc((100vw - 24px) * .42);box-sizing:border-box}\
+.slide .no{position:absolute;top:6px;right:10px;font-size:11px;opacity:.6}\
+.slide img,body>img{max-height:260px;object-fit:contain;object-position:left}\
 </style></head>";
+
+fn blocks(block: &Block, number: usize, out: &mut String) {
+    match block {
+        Block::Para(p) => para(p, out),
+        Block::Table(t) => table(t, out),
+        Block::Picture(p) => picture(p, out),
+        Block::Break => out.push_str("<hr>\n"),
+        Block::Sheet(_) => {}
+        Block::Slide(s) => {
+            let mut css = String::new();
+            if let Some(c) = s.background {
+                let _ = write!(css, "background:{};", hex(c));
+            }
+            if s.dark() {
+                css.push_str("color:#f6f8fa;border-color:transparent;");
+            }
+            let _ = write!(
+                out,
+                "<section class=slide style=\"{css}\"><span class=no>{number}</span>"
+            );
+            for b in &s.blocks {
+                blocks(b, number, out);
+            }
+            out.push_str("</section>\n");
+        }
+    }
+}
+
+fn picture(p: &Picture, out: &mut String) {
+    if PICTURE_TYPES.contains(&p.mime.as_str()) && crate::b64::is_base64(&p.data) {
+        let _ = writeln!(
+            out,
+            "<img alt=\"\" style=\"width:{:.2}em\" src=\"data:{};base64,{}\">",
+            p.width, p.mime, p.data
+        );
+    }
+}
 
 /// Each sheet a section, its tabs inside it with its own marked: shown by the
 /// address's fragment, the first when there is none — no script needed.

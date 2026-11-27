@@ -369,6 +369,8 @@ export component MainWindow inherits Window {
     in property <bool> peek-flowing;
     // A spreadsheet's book instead: its sheets' names, the one shown, its grid.
     in property <bool> peek-book;
+    // A presentation's slides, drawn as cards.
+    in property <bool> peek-deck;
     in property <[string]> peek-sheets;
     in property <int> peek-sheet;
     in property <[GridRowView]> peek-grid;
@@ -4216,6 +4218,7 @@ export component MainWindow inherits Window {
                         // stands below until it comes.
                         if root.peek-flowing && !root.peek-book: FlowView {
                             rows: root.peek-flow;
+                            deck: root.peek-deck;
                         }
                         if root.peek-flowing && root.peek-book: SheetView {
                             sheets: root.peek-sheets;

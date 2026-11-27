@@ -38,16 +38,43 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
     // Each picture this window decodes, and the row it lands in.
     let mut pictures = Vec::new();
     let mut rows: Vec<FlowRow> = Vec::with_capacity(flow.blocks.len());
+    let mut slides = 0;
+    let deck = flow.blocks.iter().any(|b| matches!(b, Block::Slide(_)));
     for block in &flow.blocks {
-        if let Block::Picture(p) = block
-            && matches!(p.mime.as_str(), "image/png" | "image/jpeg")
-        {
-            pictures.push((rows.len(), p.data.clone()));
+        match block {
+            Block::Slide(slide) => {
+                slides += 1;
+                let card = Card {
+                    fill: color(slide.background.unwrap_or([0xff, 0xff, 0xff])),
+                    ink: if slide.dark() {
+                        slint::Color::from_rgb_u8(0xf6, 0xf8, 0xfa)
+                    } else {
+                        slint::Color::from_rgb_u8(0x1f, 0x23, 0x28)
+                    },
+                };
+                rows.push(card.row(FlowRow {
+                    kind: 4,
+                    mark: slides.to_string().into(),
+                    ..blank_row()
+                }));
+                for inner in &slide.blocks {
+                    note_picture(inner, rows.len(), &mut pictures);
+                    rows.extend(rows_of(inner).into_iter().map(|r| card.row(r)));
+                }
+                rows.push(card.row(FlowRow {
+                    kind: 5,
+                    ..blank_row()
+                }));
+            }
+            _ => {
+                note_picture(block, rows.len(), &mut pictures);
+                rows.extend(rows_of(block));
+            }
         }
-        rows.extend(rows_of(block));
     }
     let model = Rc::new(VecModel::from(rows));
     w.set_peek_flow(ModelRc::from(Rc::clone(&model)));
+    w.set_peek_deck(deck);
     w.set_peek_flowing(true);
     if pictures.is_empty() {
         return;
@@ -75,6 +102,32 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
                 });
             }
         });
+}
+
+/// A picture this window decodes, to land in row `at`.
+fn note_picture(block: &Block, at: usize, pictures: &mut Vec<(usize, String)>) {
+    if let Block::Picture(p) = block
+        && matches!(p.mime.as_str(), "image/png" | "image/jpeg")
+    {
+        pictures.push((at, p.data.clone()));
+    }
+}
+
+/// A slide's colour and the ink for words with none of their own.
+struct Card {
+    fill: slint::Color,
+    ink: slint::Color,
+}
+
+impl Card {
+    fn row(&self, r: FlowRow) -> FlowRow {
+        FlowRow {
+            carded: true,
+            card: self.fill,
+            ink: self.ink,
+            ..r
+        }
+    }
 }
 
 /// Back to nothing: another file, or none.
@@ -257,8 +310,8 @@ fn rows_of(block: &Block) -> Vec<FlowRow> {
             kind: 3,
             ..blank_row()
         }],
-        // A book is drawn as its grids, never mixed into a flow.
-        Block::Sheet(_) => Vec::new(),
+        // A book is drawn as its grids, and a slide by the caller, on its card.
+        Block::Sheet(_) | Block::Slide(_) => Vec::new(),
     }
 }
 
@@ -300,6 +353,9 @@ fn blank_row() -> FlowRow {
         picture: slint::Image::default(),
         pic_w: 0.0,
         pic_h: 0.0,
+        carded: false,
+        card: slint::Color::default(),
+        ink: slint::Color::default(),
     }
 }
 

@@ -305,6 +305,11 @@ export struct FlowRow {
     picture: image,
     pic-w: float,
     pic-h: float,
+    // On a slide's card (`kind` 4 is its top, 5 its foot): its colour, and the
+    // ink of words with none of their own.
+    carded: bool,
+    card: color,
+    ink: color,
 }
 
 // One bar of the time ribbon: how many files fall in it, and which of the six
