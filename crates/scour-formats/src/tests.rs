@@ -161,6 +161,7 @@ fn the_same_documents_are_made_into_pages_and_flow() {
                     "md", "markdown", "csv", "tsv", "html", "htm", "xhtml", "epub", "eml"
                 ],
                 &["zip", "jar", "whl", "tar", "tgz", "gz"],
+                &["ipynb", "msg", "rtf", "rar"],
             ]
             .concat()
         )
@@ -180,9 +181,12 @@ fn words_are_read_where_they_were() {
     // scour-grep `texts::handed_over`.
     assert_eq!(
         rows(Format::handed_over),
-        set(&[
-            "pdf", "doc", "dot", "xls", "xlt", "ppt", "pps", "pot", "eml"
-        ])
+        with(
+            &[
+                "pdf", "doc", "dot", "xls", "xlt", "ppt", "pps", "pot", "eml"
+            ],
+            &["msg"]
+        )
     );
     // scour-doctext `Format::of`: which of an OLE2 file's three a name says,
     // and a message by its name.
@@ -196,6 +200,7 @@ fn words_are_read_where_they_were() {
         ("pot", "ppt"),
         ("eml", "eml"),
         ("pdf", "pdf"),
+        ("msg", "msg"),
     ] {
         assert_eq!(of(ext).unwrap().read, Read::Extractor(name), "{ext}");
     }

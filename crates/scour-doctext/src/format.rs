@@ -12,6 +12,8 @@ pub enum Format {
     Ppt,
     /// An RFC 822 message: `.eml`.
     Mail,
+    /// An Outlook message: `.msg`, an OLE2 file of MAPI properties.
+    Msg,
 }
 
 impl Format {
@@ -27,7 +29,8 @@ impl Format {
             _ => None,
         };
         if head.starts_with(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") {
-            return named.filter(|f| matches!(f, Format::Doc | Format::Xls | Format::Ppt));
+            return named
+                .filter(|f| matches!(f, Format::Doc | Format::Xls | Format::Ppt | Format::Msg));
         }
         named.filter(|f| *f == Format::Mail)
     }
@@ -40,6 +43,7 @@ impl Format {
             Format::Xls => "xls",
             Format::Ppt => "ppt",
             Format::Mail => "eml",
+            Format::Msg => "msg",
         }
     }
 
@@ -50,6 +54,7 @@ impl Format {
             Format::Xls,
             Format::Ppt,
             Format::Mail,
+            Format::Msg,
         ]
         .into_iter()
         .find(|f| f.name() == name)
@@ -65,7 +70,8 @@ mod tests {
         assert_eq!(Format::of(b"%PDF-1.4", "txt"), Some(Format::Pdf));
         let ole = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1....";
         assert_eq!(Format::of(ole, "XLS"), Some(Format::Xls));
-        assert_eq!(Format::of(ole, "msg"), None);
+        assert_eq!(Format::of(ole, "msg"), Some(Format::Msg));
+        assert_eq!(Format::of(ole, "zip"), None);
         assert_eq!(Format::of(b"From: a", "eml"), Some(Format::Mail));
         assert_eq!(Format::of(b"From: a", "txt"), None);
         for f in [
@@ -74,6 +80,7 @@ mod tests {
             Format::Xls,
             Format::Ppt,
             Format::Mail,
+            Format::Msg,
         ] {
             assert_eq!(Format::named(f.name()), Some(f));
         }

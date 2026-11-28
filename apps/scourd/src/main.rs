@@ -5,6 +5,7 @@
 mod as_owner;
 mod disks;
 mod documents;
+mod drawn;
 mod handle;
 mod live;
 mod resources;

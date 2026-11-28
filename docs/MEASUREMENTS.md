@@ -1540,10 +1540,30 @@ what reaching the bounds costs.
 | e-book | a 2 MB EPUB | 2,067,824 | 4.53 | 31 chapters, cut at the bounds |
 | e-book | a 31 MB EPUB | 31,662,481 | 1.42 | 6 chapters, 2 pictures |
 | message | mail-parser's `legacy/015.eml` | 11,502 | 0.10 | its two inline pictures drawn |
+| Outlook message | poi `58214_with_attachment.msg` | 50,688 | 0.07 | headers, body, its attachment listed |
+| notebook | go-colorful `LinearRGB Approximations.ipynb` | 351,881 | 3.34 | 2 headings, 24 paragraphs, 3 pictures |
+| RTF | .NET 3.5 SP1 `eula.1033.rtf` | 110,130 | 0.61 | 9 paragraphs: its 1,961 characters, as the search reads 1,967 |
 
 An archive's listing is read in the service, not drawn from its bytes: a
 zip's central directory from its end whatever its size, a tar's headers from
-its start.
+its start, a RAR's block by block. `cargo run --release -p scour-extract
+--example list_cost -- FILE...`, first 2,000 entries:
+
+| archive | cold | warm |
+|---|---|---|
+| a 19-entry zip | 9.86 ms | 0.07 ms |
+| a 217 MB RAR5 | 10.40 ms | 2.91 ms |
+| a 15 GB RAR5 on NTFS, entries spread through it | 207.81 ms | 3.50 ms |
+
+**The preview keeps up with the keys.** The window's preview used to share
+one connection with counts, lenses, the content search and thumbnails, and
+every file the arrows passed over was drawn in turn before the one they
+stopped on. It has a connection of its own now, a file left is not asked for
+at all, a drawing is asked with the file's first question rather than after
+its answer, the service keeps the last 24 drawings, and the rows above and
+below are drawn ahead once the hand rests. Nine arrow presses 70 ms apart
+over ten files: seven drawn, three never asked for, each on screen 2–39 ms
+after it was asked.
 
 ## Reproducing
 

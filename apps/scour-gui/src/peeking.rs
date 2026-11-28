@@ -113,8 +113,98 @@ pub(super) fn peek(
             at: first.1,
             line: first.0,
         });
+        // A drawing is asked with the rest, not after the answer that says the
+        // file flows: the table already says so, and a round trip is saved.
+        // Not where its pages may be made instead (Windows and macOS).
+        let early = scour_formats::of(
+            scour_ui::path::leaf(&path)
+                .rsplit_once('.')
+                .map_or("", |(_, e)| e),
+        )
+        .is_some_and(|f| f.flows && !(f.converts && cfg!(any(windows, target_os = "macos"))));
+        if early && !w.get_peek_office_text() {
+            ask_flow(link, &path);
+        }
+        warm_beside(w, state, link, rows, selected, &path);
     }
     link.send(Ask::PeekFacts { path });
+}
+
+/// Once the hand rests on a row, the rows above and below it that are drawn
+/// as they flow are drawn now, by the service and kept there: an arrow key
+/// then finds its drawing made. After [`DIR_WAIT_MS`] of rest, as a folder's
+/// walk waits, so arrowing through a list asks nothing ahead of itself.
+fn warm_beside(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    rows: &Rc<rows::Rows>,
+    selected: i32,
+    path: &str,
+) {
+    if w.get_peek_office_text() || selected < 0 {
+        return;
+    }
+    let beside: Vec<String> = [selected + 1, selected - 1]
+        .into_iter()
+        .filter(|&i| i >= 0)
+        .filter_map(|i| rows.what_at(i as usize))
+        .filter(|(p, is_dir, _)| {
+            !is_dir
+                && scour_formats::of(
+                    scour_ui::path::leaf(p)
+                        .rsplit_once('.')
+                        .map_or("", |(_, e)| e),
+                )
+                .is_some_and(|f| f.flows)
+        })
+        .map(|(p, _, _)| p)
+        .collect();
+    if beside.is_empty() {
+        return;
+    }
+    let (state, link, path) = (Rc::clone(state), Rc::clone(link), path.to_owned());
+    slint::Timer::single_shot(std::time::Duration::from_millis(DIR_WAIT_MS), move || {
+        if state.borrow().peek_path != path {
+            return;
+        }
+        for p in beside {
+            link.send(Ask::Warm { path: p });
+        }
+    });
+}
+
+thread_local! {
+    /// The file a drawing was last asked for, and when: asked once per file,
+    /// and timed from the ask.
+    static FLOW_ASKED: RefCell<Option<(String, std::time::Instant)>> = const { RefCell::new(None) };
+}
+
+/// Ask for `path`'s drawing, once.
+pub(super) fn ask_flow(link: &Link, path: &str) {
+    let asked = FLOW_ASKED.with(|f| {
+        let mut f = f.borrow_mut();
+        if f.as_ref().is_some_and(|(p, _)| p == path) {
+            return true;
+        }
+        *f = Some((path.to_owned(), std::time::Instant::now()));
+        false
+    });
+    if !asked {
+        link.send(Ask::Flow {
+            path: path.to_owned(),
+        });
+    }
+}
+
+/// How long ago `path`'s drawing was asked for, if it was.
+pub(super) fn since_flow_asked(path: &str) -> Option<std::time::Duration> {
+    FLOW_ASKED.with(|f| {
+        f.borrow()
+            .as_ref()
+            .filter(|(p, _)| p == path)
+            .map(|(_, at)| at.elapsed())
+    })
 }
 
 /// A find of the file in the preview: its line and its byte, either unknown,
@@ -615,9 +705,7 @@ pub(super) fn show_peek(
     // is what was chosen.
     w.set_peek_can_flow(look.flow);
     if look.flow && !w.get_peek_office_text() {
-        link.send(Ask::Flow {
-            path: path.to_owned(),
-        });
+        ask_flow(link, path);
     }
     if look.shape == "text" && !look.head.is_empty() {
         w.set_peek_note(slint::SharedString::new());

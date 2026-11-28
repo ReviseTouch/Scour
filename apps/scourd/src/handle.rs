@@ -252,26 +252,35 @@ fn run(
             let Ok(_as) = crate::as_owner::for_a_read() else {
                 return Err(scour_core::Error::PermissionDenied { path });
             };
-            // An archive is listed here, by its directory or its headers:
-            // the extractor would be handed the whole of it.
+            // An archive is listed here, by its directory or its headers: the
+            // extractor would be handed the whole of it. A drawing is kept
+            // (`drawn`): the arrows come back, and a window warms the rows
+            // beside the one it shows. **A drawing that cannot be made is
+            // refused, not failed** — `Io` reads to a window as the connection
+            // gone, and an encrypted document took the service down with it.
             let native = scour_core::path::to_path(&entry.path);
-            if scour_extract::lists(&native) {
-                let listed = std::fs::File::open(&native)
-                    .map_err(|e| e.to_string())
-                    .and_then(scour_extract::listing);
-                return match listed {
-                    Ok(flow) => Ok(Response::Flow(flow)),
-                    Err(why) => Err(scour_core::Error::Io { detail: why }),
-                };
-            }
-            let Some(documents) = crate::documents::shared() else {
-                return Err(scour_core::Error::unsupported(
-                    "no extractor is installed to read documents",
-                ));
+            let key = crate::drawn::Key {
+                path: entry.path.clone(),
+                size: entry.meta.size,
+                mtime: entry.meta.mtime,
             };
-            match documents.flow(&scour_core::path::to_path(&entry.path)) {
+            let made = if scour_extract::lists(&native) {
+                crate::drawn::drawn(key, || {
+                    std::fs::File::open(&native)
+                        .map_err(|e| e.to_string())
+                        .and_then(scour_extract::listing)
+                })
+            } else {
+                let Some(documents) = crate::documents::shared() else {
+                    return Err(scour_core::Error::unsupported(
+                        "no extractor is installed to read documents",
+                    ));
+                };
+                crate::drawn::drawn(key, || documents.flow(&native))
+            };
+            match made {
                 Ok(flow) => Response::Flow(flow),
-                Err(why) => return Err(scour_core::Error::Io { detail: why }),
+                Err(why) => return Err(scour_core::Error::unsupported(why)),
             }
         }
         // The same fence as `preview`, and it matters more: this runs a program

@@ -31,10 +31,12 @@ fn main() {
                     };
                     *kinds.entry(kind).or_default() += 1;
                 }
+                let chars: usize = flow.blocks.iter().map(words).sum();
                 println!(
-                    "{:>9.2} ms  {:>9} B  {:?}{}  {}",
+                    "{:>9.2} ms  {:>9} B  {:>8} chars  {:?}{}  {}",
                     took.as_secs_f64() * 1e3,
                     bytes.len(),
+                    chars,
                     kinds,
                     if flow.cut { "  (cut)" } else { "" },
                     path.display()
@@ -46,5 +48,27 @@ fn main() {
                 path.display()
             ),
         }
+    }
+}
+
+/// The characters a block shows.
+fn words(block: &Block) -> usize {
+    match block {
+        Block::Para(p) => p.text().chars().count(),
+        Block::Table(t) => t
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .flat_map(|c| &c.paras)
+            .map(|p| p.text().chars().count())
+            .sum(),
+        Block::Sheet(s) => s
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .map(|c| c.text.chars().count())
+            .sum(),
+        Block::Slide(s) => s.blocks.iter().map(words).sum(),
+        Block::Picture(_) | Block::Break => 0,
     }
 }

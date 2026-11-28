@@ -120,6 +120,11 @@ pub enum Ask {
     Flow {
         path: String,
     },
+    /// The same, for a row beside the one looked at: drawn now so it is in the
+    /// service's hand when the arrows arrive. Nothing is said of the answer.
+    Warm {
+        path: String,
+    },
     /// What the preview shows of a folder, from the index and with no file read:
     /// its heaviest folders (`slot` 0), its heaviest files (1), its newest (2).
     PeekDir {
@@ -304,6 +309,9 @@ pub struct Link {
     /// A lane of its own: `Await` sits on the socket until the index moves or
     /// the timeout runs out, and would hold every keystroke behind it.
     wait: Sender<Ask>,
+    /// The preview's own: what the hand stopped on is never queued behind a
+    /// count, a lens, a grep or a thumbnailer.
+    peek: Sender<Ask>,
     freshness: Freshness,
 }
 
@@ -318,6 +326,10 @@ struct Freshness {
     /// The folder the preview shows: a walk asked for one the hand has left
     /// is not run.
     peek: Arc<AtomicU64>,
+    /// The file the preview shows: what is still queued for one the arrows
+    /// have left is not asked at all — a drawing per file passed over held
+    /// the one the hand stopped on behind them.
+    peek_path: Arc<std::sync::Mutex<String>>,
 }
 
 impl Freshness {
@@ -348,6 +360,9 @@ impl Freshness {
             Ask::PeekDir { generation, .. } => {
                 self.peek.fetch_max(*generation, Ordering::Release);
             }
+            Ask::Peek { path, .. } | Ask::PeekFacts { path } | Ask::Flow { path } => {
+                path.clone_into(&mut self.peek_path.lock().unwrap_or_else(|p| p.into_inner()));
+            }
             _ => {}
         }
     }
@@ -364,6 +379,9 @@ impl Freshness {
             Ask::Lens { generation, .. } => *generation == self.lens.load(Ordering::Acquire),
             Ask::Grep { generation, .. } => *generation == self.grep.load(Ordering::Acquire),
             Ask::PeekDir { generation, .. } => *generation == self.peek.load(Ordering::Acquire),
+            Ask::Peek { path, .. } | Ask::PeekFacts { path } | Ask::Flow { path } => {
+                *path == *self.peek_path.lock().unwrap_or_else(|p| p.into_inner())
+            }
             // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
@@ -386,10 +404,7 @@ impl Freshness {
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
             | Ask::Thumbnails { .. }
-            // Dropped on arrival instead: the reply carries its path.
-            | Ask::Peek { .. }
-            | Ask::PeekFacts { .. }
-            | Ask::Flow { .. }
+            | Ask::Warm { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
@@ -409,6 +424,7 @@ impl Link {
         let freshness = Freshness::default();
 
         let (wait_tx, wait_rx) = channel::<Ask>();
+        let (peek_tx, peek_rx) = channel::<Ask>();
         // On a thread of its own, because the lanes below block inside `boot`
         // and the line has to reach the window before they do.
         if scour_launch::wanted() && !scour_ipc::is_running(&addr) {
@@ -435,11 +451,20 @@ impl Link {
             freshness.clone(),
             false,
         );
+        spawn_lane(
+            addr.clone(),
+            log.clone(),
+            peek_rx,
+            sink.clone(),
+            freshness.clone(),
+            false,
+        );
         spawn_lane(addr, log, wait_rx, sink, freshness.clone(), false);
         Link {
             fast: fast_tx,
             slow: slow_tx,
             wait: wait_tx,
+            peek: peek_tx,
             freshness,
         }
     }
@@ -450,6 +475,9 @@ impl Link {
         self.freshness.note(&ask);
         let lane = match &ask {
             Ask::Await { .. } => &self.wait,
+            Ask::Peek { .. } | Ask::PeekFacts { .. } | Ask::Flow { .. } | Ask::PeekDir { .. } => {
+                &self.peek
+            }
             // Never the fast lane: it coalesces to the newest queued request,
             // which swallows anything asked once. All of these are cheap.
             Ask::Facets { .. }
@@ -476,11 +504,8 @@ impl Link {
             | Ask::Dupes { .. }
             // Several processes decoding video; nothing may queue behind it.
             | Ask::Thumbnails { .. }
-            // And this one reads the head of a file off a disk.
-            | Ask::Peek { .. }
-            | Ask::PeekFacts { .. }
-            | Ask::Flow { .. }
-            | Ask::PeekDir { .. }
+            // Drawn for later, behind what is asked for now.
+            | Ask::Warm { .. }
             | Ask::Lens { .. }
             | Ask::Narrow { .. }
             | Ask::Grep { .. }
@@ -497,6 +522,7 @@ impl Drop for Link {
         let _ = self.fast.send(Ask::Stop);
         let _ = self.slow.send(Ask::Stop);
         let _ = self.wait.send(Ask::Stop);
+        let _ = self.peek.send(Ask::Stop);
     }
 }
 
@@ -543,6 +569,8 @@ enum Lane {
     Peek,
     /// A folder's preview, in parts.
     PeekDir,
+    /// A drawing asked for ahead of the hand: its answer is the service's to keep.
+    Warm,
     /// The exclusion rules.
     Rules,
     /// The disks, and answers about them.
@@ -763,6 +791,7 @@ fn spawn_lane(
                 }
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::Flow { path } => (0, Request::Flow { path }, Lane::Peek),
+                Ask::Warm { path } => (0, Request::Flow { path }, Lane::Warm),
                 Ask::PeekDir { request, .. } => (0, request, Lane::PeekDir),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Volumes => (0, Request::Volumes {}, Lane::Volumes),
@@ -876,6 +905,8 @@ fn spawn_lane(
                             slot,
                             reply,
                         },
+                        // Kept by the service; taken above.
+                        Lane::Warm => continue,
                         Lane::Thumbnails => Got::Thumbnails(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Volumes => Got::Volumes(reply),
@@ -911,9 +942,12 @@ fn spawn_lane(
                         });
                     } else if matches!(facets, Lane::Resources) {
                         sink(Got::Resources(Err(e.to_string())));
-                    } else if matches!(facets, Lane::Lens | Lane::Narrow | Lane::PeekDir) {
-                        // A choice whose count was refused keeps no number;
-                        // nothing else is said about it.
+                    } else if matches!(
+                        facets,
+                        Lane::Lens | Lane::Narrow | Lane::PeekDir | Lane::Warm
+                    ) {
+                        // A choice whose count was refused keeps no number, and
+                        // a drawing asked ahead is not missed; nothing is said.
                     } else if matches!(facets, Lane::Peek) && is_preview {
                         sink(Got::Peek {
                             path: weighed,
@@ -935,6 +969,7 @@ fn spawn_lane(
                             | Lane::Thumbnails
                             | Lane::Peek
                             | Lane::PeekDir
+                            | Lane::Warm
                             | Lane::Lens
                             | Lane::Narrow
                             | Lane::Grep

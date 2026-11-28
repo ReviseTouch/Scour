@@ -11,15 +11,20 @@ use crate::build::Builder;
 
 /// The document in `bytes`, read as UTF-8 (a stray byte becomes U+FFFD).
 pub fn flow(bytes: &[u8]) -> Result<Flow, String> {
-    let text = String::from_utf8_lossy(bytes);
+    let mut b = Builder::default();
+    read(&String::from_utf8_lossy(bytes), &mut b);
+    Ok(b.finish())
+}
+
+/// Markdown `text` into `b`: a notebook's cells share one document.
+pub(crate) fn read(text: &str, b: &mut Builder) {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
-    let mut b = Builder::default();
     // A code block's lines, while one is read.
     let mut code: Option<String> = None;
-    for event in Parser::new_ext(&text, options) {
+    for event in Parser::new_ext(text, options) {
         if b.full() {
             break;
         }
@@ -108,10 +113,10 @@ pub fn flow(bytes: &[u8]) -> Result<Flow, String> {
             Event::FootnoteReference(name) => b.words(&format!("[{name}]"), false),
             // HTML written into the file is read as a page is: its words and
             // what it marks, never its tags; a picture by what it says it is.
-            Event::Html(t) | Event::InlineHtml(t) => crate::html::read(&t, &mut b, &mut |_| None),
+            Event::Html(t) | Event::InlineHtml(t) => crate::html::read(&t, b, &mut |_| None),
         }
     }
-    Ok(b.finish())
+    b.flush();
 }
 
 #[cfg(test)]

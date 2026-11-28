@@ -18,17 +18,19 @@ const MOST_UNPACKED: u64 = 256 << 20;
 /// Whether `path` is an archive listed here: the format table's `zip` and
 /// `tar` readers (`scour_formats`).
 pub fn lists(path: &Path) -> bool {
-    scour_formats::of_path(path).is_some_and(|f| f.flows && matches!(f.like, "zip" | "tar"))
+    scour_formats::of_path(path).is_some_and(|f| f.flows && matches!(f.like, "zip" | "tar" | "rar"))
 }
 
 /// The listing of the archive opened as `file`.
 pub fn listing(mut file: File) -> Result<Flow, String> {
-    let mut head = [0u8; 4];
+    let mut head = [0u8; 8];
     let got = file.read(&mut head).map_err(|e| e.to_string())?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
     let mut rows = Vec::new();
     let cut = if head[..got].starts_with(b"PK") {
         zip(&mut file, len, &mut rows)?
+    } else if head[..got].starts_with(b"Rar!\x1a\x07") {
+        rar(&mut file, len, head.get(6) == Some(&1), &mut rows)?
     } else {
         use std::io::Seek;
         file.rewind().map_err(|e| e.to_string())?;
@@ -110,6 +112,172 @@ fn zip(file: &mut File, len: u64, rows: &mut Vec<GridRow>) -> Result<bool, Strin
         rows.push(row(&name, size, dos_time(e.modified), folder));
     }
     Ok(entries.len() > MOST_ROWS)
+}
+
+/// A RAR archive's file headers, read and passed over block by block: RAR5's
+/// when `five`, else RAR 1.5–4's. Headers are not packed, so nothing is
+/// unpacked; an archive whose headers are encrypted lists nothing.
+fn rar(file: &mut File, len: u64, five: bool, rows: &mut Vec<GridRow>) -> Result<bool, String> {
+    use std::io::{Seek, SeekFrom};
+    let mut at: u64 = if five { 8 } else { 7 };
+    let mut buf = Vec::new();
+    while at < len {
+        if rows.len() >= MOST_ROWS {
+            return Ok(true);
+        }
+        // A header in the first 8 KB read; one longer — a name runs to 64 KB —
+        // read again whole.
+        let mut next = None;
+        for want in [8_192u64, 70_000] {
+            file.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
+            buf.resize((len - at).min(want) as usize, 0);
+            let n = read_up_to(file, &mut buf)?;
+            let b = &buf[..n];
+            let read = if five {
+                rar5_block(b, rows)
+            } else {
+                rar4_block(b, rows)
+            };
+            match read {
+                Err(e) if e == "cut short" && (n as u64) < len - at => continue,
+                other => {
+                    next = other?;
+                    break;
+                }
+            }
+        }
+        match next {
+            Some(step) if step > 0 => at += step,
+            _ => break,
+        }
+    }
+    if rows.is_empty() {
+        return Err("nothing listed".into());
+    }
+    Ok(false)
+}
+
+fn read_up_to(file: &mut File, buf: &mut [u8]) -> Result<usize, String> {
+    let mut n = 0;
+    while n < buf.len() {
+        match file.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(n)
+}
+
+/// A RAR5 variable-length number, and the bytes it took.
+fn vint(b: &[u8]) -> Option<(u64, usize)> {
+    let mut n = 0u64;
+    for (i, &byte) in b.iter().enumerate().take(10) {
+        n |= u64::from(byte & 0x7f) << (7 * i);
+        if byte & 0x80 == 0 {
+            return Some((n, i + 1));
+        }
+    }
+    None
+}
+
+/// One RAR5 block: a file's row if it is one; how far the next block is.
+fn rar5_block(b: &[u8], rows: &mut Vec<GridRow>) -> Result<Option<u64>, String> {
+    let (size, size_len) = vint(b.get(4..).unwrap_or_default()).ok_or("cut short")?;
+    let start = 4 + size_len;
+    let head = b.get(start..start + size as usize).ok_or("cut short")?;
+    let mut at = 0;
+    let next = |at: &mut usize| -> Result<u64, String> {
+        let (v, n) = vint(head.get(*at..).unwrap_or_default()).ok_or("cut short")?;
+        *at += n;
+        Ok(v)
+    };
+    let kind = next(&mut at)?;
+    let flags = next(&mut at)?;
+    if flags & 1 != 0 {
+        next(&mut at)?;
+    }
+    let data = if flags & 2 != 0 { next(&mut at)? } else { 0 };
+    match kind {
+        // Encrypted headers: what the archive holds is not to be read.
+        4 => return Err("its names are encrypted".into()),
+        5 => return Ok(None),
+        2 => {
+            let file_flags = next(&mut at)?;
+            let size = next(&mut at)?;
+            next(&mut at)?; // attributes
+            let mtime = if file_flags & 2 != 0 {
+                let t = head.get(at..at + 4).ok_or("cut short")?;
+                at += 4;
+                i64::from(u32::from_le_bytes([t[0], t[1], t[2], t[3]]))
+            } else {
+                0
+            };
+            if file_flags & 4 != 0 {
+                at += 4;
+            }
+            next(&mut at)?; // compression
+            next(&mut at)?; // host
+            let name_len = next(&mut at)? as usize;
+            let name = head.get(at..at + name_len).ok_or("cut short")?;
+            let name = String::from_utf8_lossy(name);
+            let folder = file_flags & 1 != 0;
+            rows.push(row(&name, Some(size), unix_time(mtime), folder));
+        }
+        _ => {}
+    }
+    Ok(Some((start as u64) + size + data))
+}
+
+/// One RAR 1.5–4 block: a file's row if it is one; how far the next block is.
+fn rar4_block(b: &[u8], rows: &mut Vec<GridRow>) -> Result<Option<u64>, String> {
+    let h = b.get(..7).ok_or("cut short")?;
+    let kind = h[2];
+    let flags = u16::from_le_bytes([h[3], h[4]]);
+    let size = u64::from(u16::from_le_bytes([h[5], h[6]]));
+    if size < 7 {
+        return Ok(None);
+    }
+    let add = if flags & 0x8000 != 0 {
+        let a = b.get(7..11).ok_or("cut short")?;
+        u64::from(u32::from_le_bytes([a[0], a[1], a[2], a[3]]))
+    } else {
+        0
+    };
+    match kind {
+        // The main header: a flag says its names are encrypted.
+        0x73 if flags & 0x80 != 0 => return Err("its names are encrypted".into()),
+        0x7b => return Ok(None),
+        0x74 => {
+            let f = b.get(7..size as usize).ok_or("cut short")?;
+            let pack = u64::from(u32::from_le_bytes([f[0], f[1], f[2], f[3]]));
+            let mut unpacked = u64::from(u32::from_le_bytes([f[4], f[5], f[6], f[7]]));
+            let time = u32::from_le_bytes([f[13], f[14], f[15], f[16]]);
+            let name_len = usize::from(u16::from_le_bytes([f[19], f[20]]));
+            let mut at = 25;
+            let mut high_pack = 0;
+            if flags & 0x100 != 0 {
+                let hi = f.get(at..at + 8).ok_or("cut short")?;
+                high_pack = u64::from(u32::from_le_bytes([hi[0], hi[1], hi[2], hi[3]]));
+                unpacked |= u64::from(u32::from_le_bytes([hi[4], hi[5], hi[6], hi[7]])) << 32;
+                at += 8;
+            }
+            let name = f.get(at..at + name_len).ok_or("cut short")?;
+            // A Unicode name follows its old-style one after a zero.
+            let name = match name.iter().position(|&c| c == 0) {
+                Some(z) => &name[..z],
+                None => name,
+            };
+            let name = String::from_utf8(name.to_vec())
+                .unwrap_or_else(|_| name.iter().map(|&c| crate::cp1252_char(c)).collect())
+                .replace('\\', "/");
+            let folder = flags & 0xe0 == 0xe0;
+            rows.push(row(&name, Some(unpacked), dos_time(time), folder));
+            return Ok(Some(size + (pack | (high_pack << 32))));
+        }
+        _ => {}
+    }
+    Ok(Some(size + add))
 }
 
 /// A DOS date and time, as `2026-11-28 13:04`; empty when unset.
@@ -378,6 +546,31 @@ mod tests {
         let flow = listing(File::open(&path).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(texts(&flow)[1], ["a.txt", "2 B", "2026-11-28 13:04"]);
+    }
+
+    #[test]
+    fn a_rar5_is_its_file_headers() {
+        let mut v = b"Rar!\x1a\x07\x01\x00".to_vec();
+        let block = |body: &[u8]| {
+            let mut out = vec![0u8; 4]; // crc, not checked
+            out.push(body.len() as u8);
+            out.extend_from_slice(body);
+            out
+        };
+        v.extend(block(&[1, 0, 0])); // main header
+        let mut file = vec![2, 2, 5]; // a file, with 5 bytes of data
+        file.extend([2, 11, 0]); // has a time; 11 bytes; attributes
+        file.extend(1_764_335_040u32.to_le_bytes());
+        file.extend([0, 0, 5]);
+        file.extend(b"a.txt");
+        v.extend(block(&file));
+        v.extend(b"hello");
+        v.extend(block(&[5, 0, 0])); // end
+        let path = std::env::temp_dir().join(format!("scour-listing-{}.rar", std::process::id()));
+        std::fs::write(&path, &v).unwrap();
+        let flow = listing(File::open(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(texts(&flow)[1], ["a.txt", "11 B", "2025-11-28 13:04"]);
     }
 
     #[test]

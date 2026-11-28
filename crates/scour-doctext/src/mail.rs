@@ -60,27 +60,29 @@ pub fn flow(bytes: &[u8]) -> Result<Flow, String> {
             }
         }
     }
-    let attached: Vec<String> = message
-        .attachments()
-        .filter(|a| !a.is_message() || a.attachment_name().is_some())
-        .map(|a| {
-            format!(
-                "📎 {} — {}",
-                a.attachment_name().unwrap_or("(no name)"),
-                size(a.len())
-            )
-        })
-        .collect();
-    if !attached.is_empty() {
-        b.rule();
-        b.list(None);
-        for a in attached {
-            b.item();
-            b.words(&a, false);
-        }
-        b.end_list();
-    }
+    attached(
+        &mut b,
+        message
+            .attachments()
+            .filter(|a| !a.is_message() || a.attachment_name().is_some())
+            .map(|a| (a.attachment_name().unwrap_or("(no name)"), a.len())),
+    );
     Ok(b.finish())
+}
+
+/// What is attached, by name and size, under a rule: a list of its own.
+pub(crate) fn attached<'a>(b: &mut Builder, files: impl Iterator<Item = (&'a str, usize)>) {
+    let mut files = files.peekable();
+    if files.peek().is_none() {
+        return;
+    }
+    b.rule();
+    b.list(None);
+    for (name, bytes) in files {
+        b.item();
+        b.words(&format!("📎 {name} — {}", size(bytes)), false);
+    }
+    b.end_list();
 }
 
 /// Each person as their name and address: `Ada <ada@example.org>`.
@@ -98,7 +100,7 @@ fn people(who: &Address<'_>) -> String {
 }
 
 /// One header line: its name bold, then what it says.
-fn field(b: &mut Builder, name: &str, value: &str) {
+pub(crate) fn field(b: &mut Builder, name: &str, value: &str) {
     b.flush();
     b.look.bold += 1;
     b.words(&format!("{name}: "), false);
@@ -108,7 +110,7 @@ fn field(b: &mut Builder, name: &str, value: &str) {
 }
 
 /// A text body: a paragraph for each run of lines, its lines kept.
-fn plain(b: &mut Builder, text: &str) {
+pub(crate) fn plain(b: &mut Builder, text: &str) {
     for block in text.replace("\r\n", "\n").split("\n\n") {
         let block = block.trim_matches('\n');
         if block.trim().is_empty() {

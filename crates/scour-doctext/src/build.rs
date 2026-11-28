@@ -271,6 +271,8 @@ impl Builder {
             runs: vec![Run {
                 text: code.to_owned(),
                 code: true,
+                // What a program printed, set apart from the program.
+                color: (self.look.quiet > 0).then_some(QUIET),
                 ..Run::default()
             }],
             indent: self.indent(),

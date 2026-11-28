@@ -25,11 +25,13 @@ fn base64_goes_there_and_back() {
 }
 
 #[test]
-fn the_six_formats_of_office_flow() {
+fn what_the_format_table_draws_flows() {
     assert!(flows("docx") && flows("DOC") && flows("xlsx") && flows("xls"));
     assert!(flows("pptx") && flows("ppt"));
     assert!(flows("odt") && flows("ods") && flows("odp"));
-    assert!(!flows("pdf") && !flows("rtf"));
+    assert!(flows("rtf") && flows("md") && flows("csv") && flows("eml"));
+    // A PDF has pages, and a plain text has no drawing.
+    assert!(!flows("pdf") && !flows("txt"));
 }
 
 #[test]

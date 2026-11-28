@@ -32,3 +32,7 @@ quick-xml    = "0.42"
 # already brings; no HTML of its own (`default-features = false`).
 pulldown-cmark = { version = "0.13.4", default-features = false }
 memchr       = { workspace = true }
+# A notebook is JSON.
+serde_json   = { workspace = true }
+# The code pages a message's and an RTF document's bytes are read through.
+scour-extract = { workspace = true }

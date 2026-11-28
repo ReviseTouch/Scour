@@ -78,6 +78,17 @@ fn has_find(block: &Block, m: &Marks) -> bool {
 
 /// Draw `flow` for `path`, which the preview is showing, in `language`.
 pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
+    let started = std::time::Instant::now();
+    let blocks = flow.blocks.len();
+    draw(w, path, flow, language);
+    crate::trace(&format!(
+        "flow: {blocks} blocks drawn in {:.1} ms, {:.1} ms after it was asked",
+        started.elapsed().as_secs_f64() * 1e3,
+        crate::peeking::since_flow_asked(path).map_or(-1.0, |d| d.as_secs_f64() * 1e3)
+    ));
+}
+
+fn draw(w: &MainWindow, path: &str, flow: Flow, language: &str) {
     let marks = found_words(w);
     MARKS.with(|m| *m.borrow_mut() = marks.clone());
     let sheets: Vec<Sheet> = flow.sheets().cloned().collect();

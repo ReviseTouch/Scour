@@ -33,6 +33,9 @@ pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
         "html" => return crate::html::flow(bytes),
         "epub" => return crate::epub::flow(bytes),
         "eml" => return crate::mail::flow(bytes),
+        "msg" => return crate::msg::flow(bytes),
+        "ipynb" => return crate::notebook::flow(bytes),
+        "rtf" => return crate::rtf::flow(bytes),
         "csv" => return crate::csv::flow(bytes, extension),
         other => return Err(format!("{other} has no drawing here")),
     };

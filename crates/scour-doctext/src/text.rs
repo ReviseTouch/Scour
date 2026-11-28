@@ -21,6 +21,7 @@ pub fn text(bytes: &[u8], format: Format, cap: usize) -> Text {
         Format::Pdf => pdf(bytes, cap),
         Format::Doc | Format::Xls | Format::Ppt => office(bytes, format),
         Format::Mail => mail(bytes, cap),
+        Format::Msg => crate::msg::text(bytes),
     };
     match got {
         Ok(mut words) => {

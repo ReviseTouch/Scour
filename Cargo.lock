@@ -5226,8 +5226,10 @@ dependencies = [
  "pdf_oxide",
  "pulldown-cmark",
  "quick-xml 0.42.0",
+ "scour-extract",
  "scour-flow",
  "scour-formats",
+ "serde_json",
  "zip",
 ]
 
