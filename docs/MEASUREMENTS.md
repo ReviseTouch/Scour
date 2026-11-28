@@ -1326,6 +1326,73 @@ Tried and set aside, on the same text:
   characters are marked, so a 16-byte block is seldom all ASCII. It would
   need a vectorised fold written for it; this CPU has no AVX-512 compress.
 
+## Kept texts, read in the order a search reads them (2026-11-28)
+
+A kept text is found by its row in the table, and its block is decompressed
+whole: 4 MiB in about 1.5 ms (2.4 GB/s). Only the last 8 blocks stay
+uncompressed. What a search pays is decided by whether it reads the texts in
+the order they were written.
+
+A search reads files in the order of the answer's sort, by default newest
+first, and the cache was filled by such a search. Read that way, it
+decompresses each block once.
+
+The setup:
+- The installed cache, copied with reflinks: 23,280 texts, 71.8 MB of text,
+  24 blocks; mean 3.1 KB, median 1.3 KB.
+- A cache forty times that size, built from the same texts under other paths:
+  931,200 texts, 2.87 GB, 680 blocks, 337 MB on disk.
+- Every text got through `Store::get`, by one reader or by ten taking the next
+  in turn as a lane's readers do. Release build.
+- Before and after alternated A B B A. The table gives both rounds, and the
+  load average was 4 to 9 during them.
+
+| | before | after |
+|---|---:|---:|
+| installed copy, newest first, 1 reader | 0.107 – 0.112 s | 0.049 – 0.056 s |
+| installed copy, newest first, 10 readers | 0.096 – 0.118 s (0.9 – 1.1 s CPU) | 0.052 – 0.059 s (0.11 s CPU) |
+| installed copy, by path, 10 readers | 2.82 – 3.67 s (28 – 36 s CPU) | 1.23 – 1.25 s (5.7 s CPU) |
+| installed copy compacted, then newest first: blocks decompressed | 12,140 – 12,165 | 22 |
+| the same, 1 reader | 25.9 – 26.3 s | 0.054 – 0.055 s |
+| the same, 10 readers | 6.5 – 7.0 s (64 – 69 s CPU) | 0.059 – 0.062 s |
+| the compaction itself | 28.2 – 29.2 s | 10.0 – 10.2 s |
+| forty times, block order, 1 reader | 4.16 – 4.87 s | 1.83 – 2.17 s |
+| forty times, block order, 10 readers: blocks decompressed | 6,584 – 6,594 of 680 | 680 |
+| the same, time | 2.79 – 3.47 s (26 – 31 s CPU) | 2.40 – 2.62 s (4.4 s CPU) |
+| forty times, newest first, 10 readers: blocks decompressed | 13,683 – 14,126 of 808 | 881 – 882 |
+| the same, time | 4.78 – 6.09 s (46 – 58 s CPU) | 2.09 – 2.25 s (4.7 s CPU) |
+
+Three changes:
+- **A compaction writes the texts again in the order they lay in.** It used
+  to write them in the table's order, which is a hash map's order. A search
+  after it decompressed a block for most documents it read.
+- **A block is decompressed once.** A reader that wants a block another is
+  reading waits for it. Before, each decompressed it for itself, nearly ten
+  times over with ten readers.
+- **A text is checked as UTF-8 by `simdutf8`.** One reader's 4.2 – 4.9 s in
+  block order before, part by part:
+  - copying each text and `std`'s check of it, 2.6 – 2.9 s, the copy 0.1 –
+    0.2 s of that (the check reads this text at 1.1 GB/s);
+  - decompressing, 1.0 – 1.5 s;
+  - the table, 0.3 – 0.4 s.
+
+Ten readers are still no faster than one in block order. They all reach the
+next block together and wait for the one decompressing it. Reading ahead
+would be the next step, and was not tried.
+
+Order still decides the rest, and none of these changes helps an order the
+texts were not written in:
+- **By path, one reader,** a text in ten costs a block: 3.9 s for the
+  installed copy, before and after.
+- **In random order, 30,000 texts of the large copy** decompress 29,520
+  blocks: 48 – 52 s on one reader, 8.6 – 11 s on ten, before and after.
+- At the 1 GB the service keeps by default, that is minutes. Reading a
+  batch's kept documents grouped by block would cut it; not tried.
+
+The harness was a test module pulled into `store.rs` for the runs and taken
+out after. The installed cache was copied with `cp --reflink`, never opened
+in place.
+
 ## Reproducing
 
 ```sh
