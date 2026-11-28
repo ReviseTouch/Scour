@@ -56,6 +56,10 @@
         drawFaces();
         drawSettings();
       });
+    /* Read by the service as a face opens: here it only changes the next opening. */
+    seg("seg-start",
+      [["fresh", T("New screen")], ["new_tab", T("New empty tab")], ["", T("Last active tab")]],
+      k.start || "", (v) => { KEPT.start = v; keep({ start: v }); drawSettings(); });
     seg("seg-theme", [["", T("The desktop's")], ["light", T("Light")], ["dark", T("Dark")]],
       k.theme || "", (v) => { KEPT.theme = v; applyTheme(v); keep({ theme: v }); drawSettings(); });
     const mode = (document.querySelector("#views button[aria-pressed=true]") || {}).dataset;

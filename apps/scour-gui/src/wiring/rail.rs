@@ -265,6 +265,21 @@ pub(crate) fn wire(wiring: &Wiring) {
     {
         let weak = window.as_weak();
         let link = Rc::clone(link);
+        window.on_start_picked(move |start| {
+            if let Some(w) = weak.upgrade() {
+                w.set_start_choice(start.clone());
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    start: Some(start.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(link);
         let state = Rc::clone(state);
         window.on_refresh_picked(move |value| {
             let Some(w) = weak.upgrade() else { return };

@@ -1966,6 +1966,21 @@ msgstr "Scour açılınca"
 msgid "Which face the key and the menu entry open."
 msgstr "Kısayol ve menüdeki giriş hangi yüzü açsın."
 
+msgid "Tabs on opening"
+msgstr "Açılışta sekmeler"
+
+msgid "A new screen of one empty tab, the tabs kept with an empty one in front, or the tabs as they were left."
+msgstr "Tek boş sekmeli yeni bir ekran, sekmeler korunup önde boş bir sekme, ya da sekmeler bırakıldığı gibi."
+
+msgid "New screen"
+msgstr "Yeni ekran"
+
+msgid "New empty tab"
+msgstr "Yeni boş sekme"
+
+msgid "Last active tab"
+msgstr "Son aktif sekme"
+
 msgid "Open another face now"
 msgstr "Şimdi başka bir yüzde aç"
 

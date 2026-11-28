@@ -199,6 +199,11 @@ pub struct Settings {
     /// has chosen", which the launcher reads as the window. Not validated here.
     #[serde(default)]
     pub face: String,
+    /// What a face opens on: `""` the tabs as they were left, the one in front
+    /// again; `new_tab` the same tabs with an empty one in front; `fresh` a new
+    /// screen of one empty tab, the others let go. See [`Settings::opened`].
+    #[serde(default)]
+    pub start: String,
     /// `light` or `dark`, or `""` to follow the desktop — the default.
     #[serde(default)]
     pub theme: String,
@@ -289,12 +294,33 @@ impl Settings {
     /// As a face opening reads them: **newest change first**, in every tab,
     /// whatever order was chosen last time. An order picked is kept for the
     /// session, and is still written, but a window always opens on what is new.
+    /// The tabs are as [`Settings::start`] says.
     pub fn opened(mut self) -> Settings {
         self.sort.clear();
         self.descending = None;
         for tab in &mut self.tabs {
             tab.sort.clear();
             tab.descending = None;
+        }
+        match self.start.as_str() {
+            "fresh" => {
+                self.tabs.clear();
+                self.tab = 0;
+            }
+            "new_tab" if !self.tabs.is_empty() => {
+                // An empty tab left from before is the new one: opening after
+                // opening does not pile them up.
+                let empty = |t: &SearchTab| t.query.trim().is_empty() && t.content.is_empty();
+                match self.tabs.iter().rposition(empty) {
+                    Some(i) => self.tab = i,
+                    None if self.tabs.len() < TABS => {
+                        self.tabs.push(SearchTab::default());
+                        self.tab = self.tabs.len() - 1;
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
         }
         self
     }

@@ -48,6 +48,11 @@ export component SettingsPage inherits Rectangle {
     in property <[string]> face-labels;
     in property <string> face-default;
     callback face-default-picked(string);
+    in property <string> set-start;
+    in property <string> set-start-note;
+    in property <[string]> start-labels;
+    in property <string> start-choice;
+    callback start-picked(string);
     in property <string> set-theme;
     in property <string> set-theme-note;
     in property <[string]> theme-labels;
@@ -469,6 +474,17 @@ export component SettingsPage inherits Rectangle {
                                             // Another face chosen: the foot offers to start it now.
                                             root.armed-face = v == "window" ? "" : v;
                                         }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-start;
+                                    note: root.set-start-note;
+                                    Choice {
+                                        labels: root.start-labels;
+                                        values: ["fresh", "new_tab", ""];
+                                        value: root.start-choice;
+                                        picked(v) => { root.start-picked(v); }
                                     }
                                 }
                                 Rectangle { height: Theme.hair; background: Theme.line; }

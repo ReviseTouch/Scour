@@ -42,6 +42,61 @@ fn a_face_opens_newest_first_in_every_tab_and_keeps_the_rest() {
     assert_eq!(s.tab, 1);
 }
 
+#[test]
+fn a_face_opens_on_the_tabs_as_the_start_setting_says() {
+    let tab = |q: &str| SearchTab {
+        query: q.into(),
+        ..Default::default()
+    };
+    let left = |start: &str, tabs: Vec<SearchTab>| {
+        Settings {
+            start: start.into(),
+            tabs,
+            tab: 0,
+            ..Default::default()
+        }
+        .opened()
+    };
+    let queries = |s: &Settings| s.tabs.iter().map(|t| t.query.clone()).collect::<Vec<_>>();
+    // As they were left: the same tabs, the same one in front.
+    let s = left("", vec![tab("a"), tab("b")]);
+    assert_eq!((queries(&s), s.tab), (vec!["a".into(), "b".into()], 0));
+    // A new empty tab, after the others, in front.
+    let s = left("new_tab", vec![tab("a"), tab("b")]);
+    assert_eq!(
+        (queries(&s), s.tab),
+        (vec!["a".into(), "b".into(), String::new()], 2)
+    );
+    // An empty one left from before is that tab: none piles up.
+    let s = left("new_tab", vec![tab("a"), tab(" "), tab("b")]);
+    assert_eq!((s.tabs.len(), s.tab), (3, 1));
+    // One whose content line is open is not empty.
+    let mut reading = tab("");
+    reading.content = "icra".into();
+    assert_eq!(left("new_tab", vec![reading]).tabs.len(), 2);
+    // At the most tabs kept, the one in front stays.
+    let s = left("new_tab", vec![tab("x"); TABS]);
+    assert_eq!((s.tabs.len(), s.tab), (TABS, 0));
+    // A new screen: one empty tab, which is no tabs kept.
+    let s = left("fresh", vec![tab("a"), tab("b")]);
+    assert_eq!((s.tabs.len(), s.tab), (0, 0));
+    // Only the words a face knows are kept.
+    let mut s = Settings::default();
+    for (asked, kept) in [
+        ("fresh", "fresh"),
+        ("new_tab", "new_tab"),
+        ("new", ""),
+        ("", ""),
+    ] {
+        Change {
+            start: Some(asked.into()),
+            ..Default::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.start, kept);
+    }
+}
+
 fn dir(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("scour-settings-{name}"));
     let _ = std::fs::remove_dir_all(&p);

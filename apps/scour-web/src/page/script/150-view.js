@@ -238,16 +238,10 @@
   /* What the window remembered, over the defaults it has already drawn with.
      Then what another face asked this page to show — `?q=…&tab=report` from
      the window's "open in the browser" — which comes after, so it wins. */
-  /* Newest change first on every opening, in every tab, as the other faces
-     open: an order picked stays for the session. See `Settings::opened`. */
-  const opened = (s) => {
-    delete s.sort;
-    delete s.descending;
-    for (const tab of Array.isArray(s.tabs) ? s.tabs : []) { delete tab.sort; delete tab.descending; }
-    return s;
-  };
-  SERVICE.settings()
-    .then((s) => applySettings(opened(s)))
+  /* As every face opens, from the one rule the service keeps: newest change
+     first in every tab, and the tabs as the start setting says. */
+  SERVICE.settings(true)
+    .then((s) => applySettings(s))
     .catch(() => {})
     .finally(() => {
       const asked = new URLSearchParams(location.search);

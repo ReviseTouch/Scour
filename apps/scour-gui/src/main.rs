@@ -627,6 +627,7 @@ fn main() -> Result<()> {
     } else {
         kept.face.as_str().into()
     });
+    window.set_start_choice(kept.start.as_str().into());
     window.set_removable_choice(kept.removable.as_str().into());
     window.set_refresh_choice(kept.refresh_after().as_secs().to_string().into());
     window.set_memory_choice(kept.memory.as_str().into());

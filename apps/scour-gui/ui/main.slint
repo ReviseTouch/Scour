@@ -882,6 +882,10 @@ export component MainWindow inherits Window {
     in property <string> set-face-note;
     in property <[string]> face-labels;
     in property <string> face-default;
+    in property <string> set-start;
+    in property <string> set-start-note;
+    in property <[string]> start-labels;
+    in property <string> start-choice;
     in property <string> set-switch;
     in property <string> set-theme;
     in property <string> set-theme-note;
@@ -997,6 +1001,7 @@ export component MainWindow inherits Window {
     callback settings-picked(string);
     callback theme-picked(string);
     callback face-default-picked(string);
+    callback start-picked(string);
     callback policy-picked(string, string);
     callback folder-added(string);
     callback folder-dropped(string);
@@ -5806,6 +5811,11 @@ export component MainWindow inherits Window {
         face-labels: root.face-labels;
         face-default: root.face-default;
         face-default-picked(a0) => { root.face-default-picked(a0); }
+        set-start: root.set-start;
+        set-start-note: root.set-start-note;
+        start-labels: root.start-labels;
+        start-choice: root.start-choice;
+        start-picked(a0) => { root.start-picked(a0); }
         set-theme: root.set-theme;
         set-theme-note: root.set-theme-note;
         theme-labels: root.theme-labels;

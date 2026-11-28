@@ -101,7 +101,8 @@
       SERVICE.get("duplicates",
         { under, budget_mb: budgetMb || 0, min_mb: minMb || 1, top: 25 }, signal),
     /* Kept by the service: `localStorage` dies with the process. */
-    settings: () => SERVICE.get("settings", {}),
+    /* `opened`: as a face opening reads them, `Settings::opened`. */
+    settings: (opened) => SERVICE.get("settings", opened ? { opened: 1 } : {}),
     saveSettings: (s) => fetch(
       `/api/settings?${new URLSearchParams({ set: JSON.stringify(s), t: TOKEN })}`,
       { method: "POST" },

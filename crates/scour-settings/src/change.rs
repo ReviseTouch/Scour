@@ -45,6 +45,9 @@ pub struct Change {
     pub layout: Option<String>,
     /// `window`, `browser`, `tui` — or `""` to go back to no opinion.
     pub face: Option<String>,
+    /// `new_tab`, `fresh`, or `""` for the tabs as they were left. See
+    /// [`Settings::start`].
+    pub start: Option<String>,
     /// `light`, `dark`, or `""` to follow the desktop.
     pub theme: Option<String>,
     /// See [`Settings::removable`] and [`Settings::network`].
@@ -208,6 +211,14 @@ impl Change {
         }
         if let Some(v) = self.face {
             to.face = v;
+        }
+        // Only what a face opens on: anything else is the tabs as they were.
+        if let Some(v) = self.start {
+            to.start = if matches!(v.as_str(), "new_tab" | "fresh") {
+                v
+            } else {
+                String::new()
+            };
         }
         if let Some(v) = self.layout {
             to.layout = v;

@@ -103,6 +103,12 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_face(t(cat, "When Scour opens"));
     w.set_set_face_note(t(cat, "Which face the key and the menu entry open."));
     w.set_face_labels(list(&["Window", "Browser", "Terminal"]));
+    w.set_set_start(t(cat, "Tabs on opening"));
+    w.set_set_start_note(t(
+        cat,
+        "A new screen of one empty tab, the tabs kept with an empty one in front, or the tabs as they were left.",
+    ));
+    w.set_start_labels(list(&["New screen", "New empty tab", "Last active tab"]));
     w.set_set_switch(t(cat, "Open another face now"));
     w.set_set_theme(t(cat, "Theme"));
     w.set_set_theme_note(t(cat, "Follows the desktop unless one is chosen."));

@@ -79,11 +79,15 @@ pub(super) fn api_settings(stream: &mut TcpStream, client: &Pool, req: &http::Re
         },
         None => Request::Settings {},
     };
+    // A page opening asks for them as every face opens: `Settings::opened`.
+    let opened = req.param("opened").is_some();
     match call(client, request) {
-        Ok(Response::Settings(s)) => match serde_json::to_value(&s) {
-            Ok(v) => http::json(stream, &v),
-            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
-        },
+        Ok(Response::Settings(s)) => {
+            match serde_json::to_value(if opened { s.opened() } else { *s }) {
+                Ok(v) => http::json(stream, &v),
+                Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+            }
+        }
         Ok(_) => http::json(stream, &serde_json::json!({ "saved": true })),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }
