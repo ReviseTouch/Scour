@@ -241,8 +241,11 @@ fn run(
                 .then(|| scour_formats::of_path(&native))
                 .flatten()
                 .filter(|f| f.flows);
+            // A name others use for binaries, `libc.so.6`, is drawn only
+            // when its bytes are text.
             look.flow = format.is_some_and(|f| {
                 !(f.converts && scour_preview::office::can_convert())
+                    && (!f.text_only || look.shape == "text")
                     && (scour_extract::lists(&native) || crate::documents::shared().is_some())
             });
             Response::Preview(look)

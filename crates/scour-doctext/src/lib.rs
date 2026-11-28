@@ -13,6 +13,7 @@ mod format;
 mod html;
 mod inline;
 mod mail;
+mod man;
 mod markdown;
 mod msg;
 mod notebook;

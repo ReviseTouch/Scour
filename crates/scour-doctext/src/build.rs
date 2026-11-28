@@ -250,6 +250,20 @@ impl Builder {
     }
 
     /// A task's box, for the item it is read in.
+    /// Words are in the paragraph being read.
+    pub fn has_words(&self) -> bool {
+        self.para.as_ref().is_some_and(|p| !p.runs.is_empty())
+    }
+
+    /// The next paragraph's mark, set before its first line: a man page's
+    /// `.IP` tag, which no list numbers.
+    pub fn mark(&mut self, mark: &str) {
+        match self.para.as_mut().filter(|p| p.runs.is_empty()) {
+            Some(p) => p.mark = mark.into(),
+            None => self.mark = Some(mark.into()),
+        }
+    }
+
     pub fn task(&mut self, done: bool) {
         let mark = if done { "☑" } else { "☐" };
         match self.para.as_mut().filter(|p| p.runs.is_empty()) {

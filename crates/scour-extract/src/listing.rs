@@ -20,6 +20,20 @@ const MOST_UNPACKED: u64 = 256 << 20;
 pub fn lists(path: &Path) -> bool {
     scour_formats::of_path(path)
         .is_some_and(|f| f.flows && matches!(f.like, "zip" | "tar" | "rar" | "7z" | "sqlite"))
+        && scour_formats::gzipped(path).is_none()
+}
+
+/// A file gzipped whole, unpacked: up to `most` bytes of it, or refused.
+pub fn gunzip(packed: &[u8], most: u64) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(packed)
+        .take(most + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| e.to_string())?;
+    if out.len() as u64 > most {
+        return Err("too large to draw unpacked".into());
+    }
+    Ok(out)
 }
 
 /// The listing of the archive opened as `file`.
@@ -508,6 +522,17 @@ mod tests {
         out.extend_from_slice(data);
         out.resize(out.len().div_ceil(512) * 512, 0);
         out
+    }
+
+    #[test]
+    fn a_file_gzipped_whole_unpacks_within_its_bound() {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut enc, b".TH LS 1\n").unwrap();
+        let packed = enc.finish().unwrap();
+        assert_eq!(gunzip(&packed, 64).unwrap(), b".TH LS 1\n");
+        assert!(gunzip(&packed, 4).is_err());
+        assert!(gunzip(b"not gzip", 64).is_err());
+        assert!(!lists(Path::new("ls.1.gz")) && lists(Path::new("a.tar.gz")));
     }
 
     #[test]

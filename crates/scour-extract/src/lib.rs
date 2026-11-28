@@ -17,7 +17,7 @@ pub mod zip;
 pub use codepage::*;
 pub use document::*;
 pub use inflate::*;
-pub use listing::{listing, lists};
+pub use listing::{gunzip, listing, lists};
 pub use normal::*;
 pub use rtf::*;
 pub use sqlite::database;

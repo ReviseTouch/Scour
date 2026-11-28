@@ -75,6 +75,9 @@ pub struct Format {
     /// No words in its bytes: inside a zip a content search passes it by
     /// unless asked to read binary.
     pub binary: bool,
+    /// Drawn only when its bytes are text: `ls.1` is a manual page, and
+    /// `libc.so.6` a library whose name ends the same way.
+    pub text_only: bool,
 }
 
 impl Format {
@@ -115,6 +118,18 @@ pub fn of_path(path: &std::path::Path) -> Option<&'static Format> {
     of(path.extension()?.to_str()?)
 }
 
+/// A file gzipped whole, `ls.1.gz`, `data.csv.gz`: the row of what is
+/// inside, when that is drawn from its bytes. An archive inside — a
+/// `.tar.gz` — is listed, and is not one.
+pub fn gzipped(path: &std::path::Path) -> Option<&'static Format> {
+    let name = path.file_name()?.to_str()?;
+    let inner = name
+        .strip_suffix(".gz")
+        .or_else(|| name.strip_suffix(".GZ"))?;
+    of_path(std::path::Path::new(inner))
+        .filter(|f| f.flows && !matches!(f.like, "zip" | "tar" | "rar" | "7z" | "sqlite"))
+}
+
 /// The table as `scour formats` prints it: a row per extension, a column per
 /// question. Pages are made only where that is allowed — Windows and macOS,
 /// with LibreOffice or Microsoft Office there.
@@ -150,7 +165,11 @@ pub fn table() -> String {
             f.ext,
             preview,
             yes(f.converts),
-            yes(f.flows),
+            if f.flows && f.text_only {
+                "text"
+            } else {
+                yes(f.flows)
+            },
             words,
             zip,
             thumb

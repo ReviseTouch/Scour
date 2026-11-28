@@ -1589,6 +1589,11 @@ unconstrained one anywhere. `flow_cost`, release:
 | ninja `manual.asciidoc` (underlined titles) | 51,579 | 1.94 | 42 headings, 336 paragraphs |
 | pandoc's `writer.org` | 11,568 | 0.29 | 32 headings, 273 paragraphs, 1 table |
 
+Manual pages are roff, read with the `man` macros or BSD's `mdoc`: pandoc's
+`man-reader.man` (3,257 bytes) in 0.17 ms with its 5 tables; 4,000 pages of
+`/usr/share/man`, unpacked, with no panic and none refused, the slowest 2.9 ms
+(`calibredb.1`, 55 KB); `ls.1` 0.25 ms, OpenSSH's `ssh.1` (mdoc) 1.09 ms.
+
 Each reader was given 7,858 files of this machine, its own and others —
 Markdown, text, pandoc's whole test directory — 31,000 readings with no
 panic, the slowest 16 ms (a 500 KB change log, cut at the preview's bound).

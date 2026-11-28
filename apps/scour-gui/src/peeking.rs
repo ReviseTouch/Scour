@@ -115,13 +115,17 @@ pub(super) fn peek(
         });
         // A drawing is asked with the rest, not after the answer that says the
         // file flows: the table already says so, and a round trip is saved.
-        // Not where its pages may be made instead (Windows and macOS).
+        // Not where its pages may be made instead (Windows and macOS), nor
+        // for a name binaries share (`libc.so.6`): the service, which reads
+        // its bytes, says.
         let early = scour_formats::of(
             scour_ui::path::leaf(&path)
                 .rsplit_once('.')
                 .map_or("", |(_, e)| e),
         )
-        .is_some_and(|f| f.flows && !(f.converts && cfg!(any(windows, target_os = "macos"))));
+        .is_some_and(|f| {
+            f.flows && !f.text_only && !(f.converts && cfg!(any(windows, target_os = "macos")))
+        });
         if early && !w.get_peek_office_text() {
             ask_flow(link, &path);
         }
@@ -156,7 +160,7 @@ fn warm_beside(
                         .rsplit_once('.')
                         .map_or("", |(_, e)| e),
                 )
-                .is_some_and(|f| f.flows)
+                .is_some_and(|f| f.flows && !f.text_only)
         })
         .map(|(p, _, _)| p)
         .collect();

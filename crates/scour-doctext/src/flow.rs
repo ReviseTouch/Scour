@@ -40,6 +40,7 @@ pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
         "rst" => return crate::rst::flow(bytes),
         "adoc" => return crate::adoc::flow(bytes),
         "org" => return crate::org::flow(bytes),
+        "man" => return crate::man::flow(bytes),
         "csv" => return crate::csv::flow(bytes, extension),
         other => return Err(format!("{other} has no drawing here")),
     };

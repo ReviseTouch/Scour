@@ -18,6 +18,7 @@ const fn f(ext: &'static str) -> Format {
         zip: false,
         markup: false,
         binary: false,
+        text_only: false,
     }
 }
 
@@ -95,6 +96,12 @@ impl Format {
             ..self
         }
     }
+    const fn text_only(self) -> Format {
+        Format {
+            text_only: true,
+            ..self
+        }
+    }
     const fn binary(self) -> Format {
         Format {
             binary: true,
@@ -105,7 +112,21 @@ impl Format {
 
 /// Every extension Scour does something with beyond reading its bytes.
 pub static FORMATS: &[Format] = &[
+    // A manual page, roff in `man` or `mdoc`, by its section's number:
+    // drawn when its bytes are text and say they are roff.
+    f("1").like("man").flows().text_only(),
+    f("1p").like("man").flows().text_only(),
+    f("2").like("man").flows().text_only(),
+    f("3").like("man").flows().text_only(),
+    f("3p").like("man").flows().text_only(),
+    f("3pm").like("man").flows().text_only(),
+    f("4").like("man").flows().text_only(),
+    f("5").like("man").flows().text_only(),
+    f("6").like("man").flows().text_only(),
+    f("7").like("man").flows().text_only(),
     f("7z").flows().binary(),
+    f("8").like("man").flows().text_only(),
+    f("9").like("man").flows().text_only(),
     f("a").binary(),
     f("aac").streamed("audio/aac"),
     // AsciiDoc, drawn as Asciidoctor lays it out.
@@ -166,9 +187,11 @@ pub static FORMATS: &[Format] = &[
     f("lz4").binary(),
     f("m4a").streamed("audio/mp4").binary(),
     f("m4v").streamed("video/mp4").thumbed(),
+    f("man").flows().text_only(),
     f("markdown").like("md").flows(),
     // Markdown, drawn as it reads: headings, lists, tables, code.
     f("md").flows(),
+    f("mdoc").like("man").flows().text_only(),
     f("mkv").streamed("video/x-matroska").thumbed().binary(),
     f("mov").streamed("video/quicktime").thumbed().binary(),
     f("mp3").streamed("audio/mpeg").binary(),

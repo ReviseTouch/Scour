@@ -197,7 +197,12 @@ impl Documents {
     /// A word processor's document as a preview draws it, read by an
     /// extractor; held to the model's bounds here, whatever it sent.
     pub fn flow(&self, path: &Path) -> Result<scour_flow::Flow, String> {
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        // A file gzipped whole, `ls.1.gz`, is drawn as what is inside it.
+        let inside = scour_formats::gzipped(path);
+        let extension = match inside {
+            Some(f) => f.ext,
+            None => path.extension().and_then(|e| e.to_str()).unwrap_or(""),
+        };
         if !scour_flow::flows(extension) {
             return Err("not a document that flows".into());
         }
@@ -205,7 +210,10 @@ impl Documents {
         if len > MOST_FLOW_BYTES {
             return Err("too large to draw".into());
         }
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let mut bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        if inside.is_some() {
+            bytes = scour_extract::gunzip(&bytes, MOST_FLOW_BYTES)?;
+        }
         let format = format!("{}{extension}", scour_extract::wire::FLOW);
         match self.pool.extract(&format, &bytes) {
             Answer::Flow(json) => serde_json::from_str::<scour_flow::Flow>(&json)

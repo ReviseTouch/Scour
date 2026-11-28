@@ -166,6 +166,9 @@ fn the_same_documents_are_made_into_pages_and_flow() {
                 ],
                 &["ttf", "otf", "ttc"],
                 &["rst", "adoc", "asciidoc", "org"],
+                &[
+                    "1", "1p", "2", "3", "3p", "3pm", "4", "5", "6", "7", "8", "9", "man", "mdoc"
+                ],
             ]
             .concat()
         )
@@ -300,4 +303,18 @@ fn the_printed_table_has_a_line_for_every_row() {
         assert_eq!(line.split_whitespace().next(), Some(f.ext));
     }
     assert!(table.contains("extractor:pdf") && table.contains("application/pdf"));
+}
+
+#[test]
+fn a_file_gzipped_whole_is_what_is_inside() {
+    use std::path::Path;
+    let inside = |p: &str| gzipped(Path::new(p)).map(|f| f.ext);
+    assert_eq!(inside("/usr/share/man/man1/ls.1.gz"), Some("1"));
+    assert_eq!(inside("perlfunc.3pm.GZ"), Some("3pm"));
+    assert_eq!(inside("data.csv.gz"), Some("csv"));
+    // An archive inside is listed; a name with nothing inside it is no row.
+    assert_eq!(inside("src.tar.gz"), None);
+    assert_eq!(inside("notes.gz"), None);
+    assert_eq!(inside("log.txt.gz"), None);
+    assert!(of("1").is_some_and(|f| f.text_only && f.like == "man"));
 }
