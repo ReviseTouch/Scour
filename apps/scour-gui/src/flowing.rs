@@ -9,9 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use i_slint_common::styled_text::{
-    FormattedSpan, MARKDOWN_INTERPOLATION_PLACEHOLDER, Style, StyledTextParagraph,
-};
+use i_slint_common::styled_text::{FormattedSpan, Style, StyledTextParagraph};
 use scour_flow::{Align, Block, Flow, Locale, Marks, Para, Sheet};
 
 use crate::ui::{FlowCell, FlowRow, GridCellView, GridRowView, MainWindow};
@@ -22,6 +20,14 @@ thread_local! {
     static BOOK: RefCell<Option<(Vec<Sheet>, Locale)>> = const { RefCell::new(None) };
     /// The words a search found in the file on show.
     static MARKS: RefCell<Marks> = RefCell::new(Marks::default());
+}
+
+/// Rows as shares of `total`, each at its middle: a rail's ticks, for a list
+/// whose place is the share of the rows above it.
+fn shares(rows: &[usize], total: usize) -> Vec<f32> {
+    rows.iter()
+        .map(|&n| (n as f32 + 0.5) / total.max(1) as f32)
+        .collect()
 }
 
 /// A find's ink: no fill behind a word in styled text, so a colour that reads
@@ -90,18 +96,16 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
     let mut pictures = Vec::new();
     let mut rows: Vec<FlowRow> = Vec::with_capacity(flow.blocks.len());
     let mut slides = 0;
-    let mut first: Option<usize> = None;
     let deck = flow.blocks.iter().any(|b| matches!(b, Block::Slide(_)));
-    for block in &flow.blocks {
-        if first.is_none() {
-            let inner = match block {
-                Block::Slide(s) => s.blocks.iter().any(|b| has_find(b, &marks)),
-                b => has_find(b, &marks),
-            };
-            if inner {
-                first = Some(rows.len());
-            }
+    // The first row of each block holding a find is a tick on the rail, and
+    // the first of them is where the view opens.
+    let mut held: Vec<usize> = Vec::new();
+    let mut found = |rows: &[FlowRow], at: usize, block: &Block| {
+        if at < rows.len() && has_find(block, &marks) {
+            held.push(at);
         }
+    };
+    for block in &flow.blocks {
         match block {
             Block::Slide(slide) => {
                 slides += 1;
@@ -119,8 +123,10 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
                     ..blank_row()
                 }));
                 for inner in &slide.blocks {
-                    note_picture(inner, rows.len(), &mut pictures);
+                    let at = rows.len();
+                    note_picture(inner, at, &mut pictures);
                     rows.extend(rows_of(inner).into_iter().map(|r| card.row(r)));
+                    found(&rows, at, inner);
                 }
                 rows.push(card.row(FlowRow {
                     kind: 5,
@@ -128,11 +134,15 @@ pub fn show(w: &MainWindow, path: &str, flow: Flow, language: &str) {
                 }));
             }
             _ => {
-                note_picture(block, rows.len(), &mut pictures);
+                let at = rows.len();
+                note_picture(block, at, &mut pictures);
                 rows.extend(rows_of(block));
+                found(&rows, at, block);
             }
         }
     }
+    let first = held.first().copied();
+    w.set_peek_flow_marks(ModelRc::new(VecModel::from(shares(&held, rows.len()))));
     let model = Rc::new(VecModel::from(rows));
     w.set_peek_flow(ModelRc::from(Rc::clone(&model)));
     w.set_peek_deck(deck);
@@ -194,6 +204,9 @@ impl Card {
 
 /// Back to nothing: another file, or none.
 pub fn clear(w: &MainWindow) {
+    if w.get_peek_flow_marks().row_count() > 0 {
+        w.set_peek_flow_marks(ModelRc::default());
+    }
     if w.get_peek_flowing() {
         w.set_peek_flowing(false);
     }
@@ -226,11 +239,13 @@ pub fn pick(w: &MainWindow, index: usize) {
         let px: Vec<f32> = sheet.widths.iter().map(|w| w * GRID_EM).collect();
         let marks = MARKS.with(|m| m.borrow().clone());
         let mut first = None;
+        let mut held = Vec::new();
         let mut rows: Vec<GridRowView> = Vec::with_capacity(sheet.rows.len());
         for (n, r) in sheet.rows.iter().enumerate() {
             let (cells, found) = cells(r, &px, locale, &marks);
-            if found && first.is_none() {
-                first = Some(n);
+            if found {
+                first.get_or_insert(n);
+                held.push(n);
             }
             rows.push(GridRowView {
                 cells: ModelRc::new(VecModel::from(cells)),
@@ -238,10 +253,13 @@ pub fn pick(w: &MainWindow, index: usize) {
         }
         let head = if sheet.frozen && !rows.is_empty() {
             first = first.and_then(|n| n.checked_sub(1));
+            held = held.into_iter().filter_map(|n| n.checked_sub(1)).collect();
             rows.remove(0).cells
         } else {
             ModelRc::default()
         };
+        // Every row one height: a row's share of the sheet is its place.
+        w.set_peek_grid_marks(ModelRc::new(VecModel::from(shares(&held, rows.len()))));
         w.set_peek_grid_width(px.iter().sum());
         w.set_peek_grid_head(head);
         w.set_peek_grid(ModelRc::new(VecModel::from(rows)));
@@ -453,11 +471,23 @@ fn color(c: [u8; 3]) -> slint::Color {
 /// Paragraphs as one styled text, a paragraph each. A heading, and a heading
 /// row's cells, are bold throughout.
 fn styled(paras: &[&Para], bold: bool) -> StyledText {
-    let args: Vec<Vec<StyledTextParagraph>> =
-        paras.iter().map(|p| vec![paragraph(p, bold)]).collect();
-    let placeholder = MARKDOWN_INTERPOLATION_PLACEHOLDER.to_string();
-    let format = vec![placeholder; args.len()].join("\n\n");
-    StyledText::parse_interpolated(&format, &args).unwrap_or_default()
+    from_paragraphs(paras.iter().map(|p| paragraph(p, bold)).collect())
+}
+
+/// Spans already made, as Slint's styled text. Slint 1.19 builds one only
+/// from markdown, and a document's runs are not markdown: rendering them as
+/// `**`, `*` and `~~` and parsing that back reads two neighbouring runs as one
+/// delimiter. The type is a `#[repr(transparent)]` vector of exactly these
+/// paragraphs, so the vector is the styled text.
+fn from_paragraphs(paragraphs: slint::SharedVector<StyledTextParagraph>) -> StyledText {
+    const _: () = assert!(
+        std::mem::size_of::<StyledText>()
+            == std::mem::size_of::<slint::SharedVector<StyledTextParagraph>>()
+    );
+    // SAFETY: `i_slint_core::styled_text::StyledText` is `#[repr(transparent)]`
+    // over one field of this type, in the release pinned exactly in Cargo.toml
+    // (i-slint-core and i-slint-common =1.19.1), and holds no other invariant.
+    unsafe { std::mem::transmute(paragraphs) }
 }
 
 fn paragraph(p: &Para, bold: bool) -> StyledTextParagraph {
@@ -504,5 +534,30 @@ fn paragraph(p: &Para, bold: bool) -> StyledTextParagraph {
         text,
         formatting,
         links: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paragraphs_made_here_are_the_styled_text_slint_draws() {
+        let one = StyledTextParagraph {
+            text: "bold then plain".into(),
+            formatting: vec![FormattedSpan {
+                range: 0..4,
+                style: Style::Strong,
+            }],
+            links: Vec::new(),
+        };
+        let two = i_slint_common::styled_text::paragraph_from_plain_text("second".into());
+        let text = from_paragraphs([one, two].into_iter().collect());
+        assert_eq!(
+            i_slint_core::styled_text::get_raw_text(&text),
+            "bold then plain\nsecond"
+        );
+        assert_eq!(text, text.clone());
+        assert_ne!(text, StyledText::default());
     }
 }

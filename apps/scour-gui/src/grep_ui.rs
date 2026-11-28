@@ -89,7 +89,7 @@ pub fn trigger(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, appe
         s.grep.next = None;
         w.set_grep_summary(cat.get("Scanning matching files…").as_ref().into());
         w.set_grep_more_on(false);
-        w.set_grep_items(ModelRc::new(VecModel::from(Vec::<GrepItem>::new())));
+        crate::grep_list::set(w, Vec::new(), false);
         w.set_grep_active(true);
     }
     link.send(Ask::Grep {
@@ -282,7 +282,7 @@ pub fn answered(
     } else {
         slint::SharedString::new()
     });
-    w.set_grep_items(ModelRc::new(VecModel::from(items)));
+    crate::grep_list::set(w, items, append);
     w.set_grep_active(true);
     // A new stream opens on its first file, so the preview shows what was
     // found at once; more of the same stream leaves where the reader is.
@@ -303,6 +303,7 @@ pub fn select(w: &MainWindow, s: &mut State, link: &Link, cat: &Catalogue, fi: i
     };
     s.grep.selected = fi;
     w.set_grep_sel(fi);
+    crate::grep_list::reveal(w, fi);
     s.peek_path = gf.path.clone();
     w.set_peeking(true);
     // The heading the list's rows get, path and buttons with it: written here
@@ -354,6 +355,14 @@ pub fn wire(
     cat: &Rc<RefCell<Rc<Catalogue>>>,
 ) {
     crate::grep_field::wire(window, state, link, cat);
+    {
+        let weak = window.as_weak();
+        window.on_grep_moved(move || {
+            if let Some(w) = weak.upgrade() {
+                crate::grep_list::place(&w);
+            }
+        });
+    }
     {
         let (weak, state, link, cat) = (
             window.as_weak(),

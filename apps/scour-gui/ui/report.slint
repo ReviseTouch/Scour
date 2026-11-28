@@ -65,7 +65,7 @@ export component ReportPaper inherits ScrollView {
     min-height: 0px;
     // Said, not inferred: a `ScrollView` does not learn its content's
     // height from a layout inside it, so there would be no overflow.
-    viewport-height: sheet.preferred-height;
+    content-height: sheet.preferred-height;
 
     sheet := VerticalLayout {
     // Its natural height: a layout inside a `ScrollView` otherwise

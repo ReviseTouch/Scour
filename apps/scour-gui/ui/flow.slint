@@ -3,6 +3,7 @@
 
 import { FlowRow, FlowCell, GridCellView, GridRowView } from "types.slint";
 import { ListView } from "std-widgets.slint";
+import { PeekRail } from "widgets.slint";
 
 // Paper is paper in a dark theme too: the document's own colours are for it.
 global Paper {
@@ -166,27 +167,52 @@ component FlowLine {
 
 export component FlowView inherits Rectangle {
     in property <[FlowRow]> rows;
-    // A row to open on: the first find. Rows differ in height, so where it
-    // lies is the list's own guess from the rows it has laid out.
+    // A row to open on: the first find. Past it first, so it is above the
+    // view and comes in at the top edge, the row before it leading in: the
+    // list measures that row itself rather than guessing where it lies.
     in property <int> goto: -1;
     changed goto => {
         if (root.goto >= 0 && root.rows.length > 0) {
-            list.viewport-y = -max(0px,
-                root.goto * list.viewport-height / root.rows.length - 32px);
+            list.content-y = 0px - list.content-height;
+            list.ensure-row-visible(max(0, root.goto - 1), ScrollBehavior.instant);
         }
     }
     // A presentation's cards stand on grey, so a white slide is seen as one.
     in property <bool> deck;
     // The body's size: everything else is in ems of it.
     in property <length> em: 13px;
+    /// The rows holding a find, as shares of the document's rows.
+    in property <[float]> marks;
     background: root.deck ? #eef1f4 : #ffffff;
 
+    // A `ListView` reckons its height from the rows in sight, so in pixels a
+    // document of uneven rows is a guess that moves; its place over that
+    // height is, steadily, the share of the rows above it. The rail is drawn
+    // in that share — the lens, the ticks and a press alike — and laying out
+    // every row instead cost 2.2 s and froze the window on a long document
+    // (measured 2026-11-28, 4,000 blocks).
     list := ListView {
-        width: parent.width;
+        width: parent.width - 18px;
         height: parent.height;
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
         for row in root.rows: FlowLine {
             line: row;
             em: root.em;
+        }
+    }
+
+    PeekRail {
+        x: parent.width - 18px;
+        height: parent.height;
+        marks: root.marks;
+        seen-top: -list.content-y / max(1px, list.content-height);
+        seen-tall: list.height / max(1px, list.content-height);
+        go(r, pressed) => {
+            list.content-y = -clamp(r * list.content-height - list.height / 2,
+                0px, max(0px, list.content-height - list.height));
+        }
+        wheel(dy) => {
+            list.content-y = clamp(list.content-y + dy, min(0px, list.height - list.content-height), 0px);
         }
     }
 }
@@ -234,11 +260,13 @@ export component SheetView inherits Rectangle {
     in property <[GridRowView]> rows;
     in property <[GridCellView]> head;
     in property <length> grid-width;
+    /// The rows holding a find, as shares of the sheet: every row is one height.
+    in property <[float]> marks;
     // A row to open on, the first holding a find: every row is one height.
     in property <int> goto: -1;
     changed goto => {
         if (root.goto >= 0) {
-            grid.viewport-y = -max(0px, root.goto * root.tall - root.tall);
+            grid.content-y = -max(0px, root.goto * root.tall - root.tall);
         }
     }
     callback picked(int);
@@ -285,10 +313,13 @@ export component SheetView inherits Rectangle {
         Rectangle {
             clip: true;
             property <length> head-tall: root.head.length > 0 ? root.tall : 0px;
+            // Every row one height, so the list's own reckoning is exact; its
+            // up-and-down scrollbar is the rail beside it.
             grid := ListView {
                 y: parent.head-tall;
-                width: parent.width;
+                width: parent.width - 18px;
                 height: parent.height - parent.head-tall;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                 for r in root.rows: HorizontalLayout {
                     width: max(root.grid-width, grid.width);
                     height: root.tall;
@@ -302,13 +333,14 @@ export component SheetView inherits Rectangle {
             // Over the grid and moved with it sideways, so its columns stay
             // over theirs.
             if root.head.length > 0: Rectangle {
+                x: 0px;
                 y: 0px;
                 height: root.tall;
-                width: parent.width;
+                width: parent.width - 18px;
                 background: #ffffff;
                 clip: true;
                 HorizontalLayout {
-                    x: grid.viewport-x;
+                    x: grid.content-x;
                     width: root.grid-width;
                     alignment: start;
                     for c in root.head: GridBox {
@@ -320,6 +352,22 @@ export component SheetView inherits Rectangle {
                     y: parent.height - 1px;
                     height: 1px;
                     background: #d0d7de;
+                }
+            }
+            PeekRail {
+                x: parent.width - 18px;
+                y: parent.head-tall;
+                height: parent.height - parent.head-tall;
+                property <length> sheet: max(1px, root.rows.length * root.tall);
+                marks: root.marks;
+                seen-top: -grid.content-y / self.sheet;
+                seen-tall: grid.height / self.sheet;
+                go(r, pressed) => {
+                    grid.content-y = -clamp(r * self.sheet - grid.height / 2,
+                        0px, max(0px, self.sheet - grid.height));
+                }
+                wheel(dy) => {
+                    grid.content-y = clamp(grid.content-y + dy, min(0px, grid.height - self.sheet), 0px);
                 }
             }
         }

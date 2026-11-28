@@ -303,7 +303,6 @@ export component SettingsPage inherits Rectangle {
                         font-size: 16px;
                         font-weight: 600;
                         height: 34px;
-                        x: 10px;
                     }
                     NavRow {
                         label: root.section-labels[0];
@@ -419,7 +418,7 @@ export component SettingsPage inherits Rectangle {
 
                 ScrollView {
                     vertical-stretch: 1;
-                    viewport-height: page-body.preferred-height;
+                    content-height: page-body.preferred-height;
                     page-body := VerticalLayout {
                         spacing: 6px;
                         padding-right: 8px;

@@ -87,9 +87,10 @@ anyhow       = { workspace = true }
 # The same two flags the terminal face has, spelled the same way — and an
 # answer to `--version` that is not a window.
 clap         = { workspace = true }
-# Pinned exactly, and not out of caution. 1.17's winit backend divides by a
-# refresh rate it reads as zero (`frame_throttle.rs:58`), which crashes on
-# every start under Wine — and a caret is enough for Cargo to pick it.
+# Pinned exactly: a caret is enough for Cargo to pick a release nobody has
+# run this window on. 1.16.1 was held for months because 1.17's winit backend
+# divided by a refresh rate it read as zero and crashed on every start under
+# Wine; 1.19.1 reads zero as 60 Hz (`frame_throttle.rs:56`).
 # **CPU drawing, and no OpenGL.** The owner's call, made twice: once on the
 # argument, and once again after the GPU renderer was compiled in and measured
 # against this one. Alternating runs, window left to settle, this machine:
@@ -111,24 +112,29 @@ clap         = { workspace = true }
 # never runs. Verified by taking EGL away: `Error: the event loop failed`, exit
 # 1, no window. Choosing femtovg means writing the fallback by hand.
 #
-# The price of this choice is real and worth writing down: the software
-# renderer places every glyph at an `i16` coordinate, so a single text laid out
-# past 32 767 physical pixels panics with no error path. That is Slint's own
-# bug — slint-ui/slint#12985, filed 2026-08-23, fixed on master in #12994, in
-# no release — and it closed this window for days. Five places where a string
-# could reach it are capped and tested: the preview, the query field, and the
-# rules field. **A new `Text` bound to something unbounded reopens it**, so
-# anything of that shape needs a cap or `overflow: elide`.
-slint        = { version = "=1.16.1", default-features = false, features = [
+# The software renderer placed every glyph at an `i16` coordinate, so a single
+# text laid out past 32 767 physical pixels panicked with no error path —
+# slint-ui/slint#12985, fixed in 1.18 (#12994), and rectangles, texts and
+# carets past that size in 1.19. It closed this window for days, so the five
+# places where a string could reach it stay capped and tested (the preview,
+# the query field, the rules field): a cap is also what keeps a frame cheap.
+#
+# **Since 1.17 a wheel notch is a 180 ms animation** in every `Flickable`;
+# nothing in Scour animates, so `start::still_motion` tells Slint the user
+# asked for less motion, which scrolls at once as 1.16 did.
+slint        = { version = "=1.19.1", default-features = false, features = [
     "compat-1-2", "backend-winit", "renderer-software", "std",
 ] }
 # For `WinitWindowAccessor` alone: raising the window when a second copy is
 # started. Same pin as `slint`, and no renderer of its own.
-i-slint-backend-winit = { version = "=1.16.1", default-features = false }
+i-slint-backend-winit = { version = "=1.19.1", default-features = false }
 # A document's paragraphs as Slint's styled text, built span by span: the types
 # are Slint's own (`StyledTextParagraph`), and the only way into a `styled-text`
 # property is `private_unstable_api` — held by the same exact pin.
-i-slint-common = { version = "=1.16.1", default-features = false }
+i-slint-common = { version = "=1.19.1", default-features = false }
+# For the motion preference alone (`SlintContext::set_motion_preference`),
+# which the public API does not reach. Same pin.
+i-slint-core = { version = "=1.19.1", default-features = false }
 rfd = { version = "0.15", default-features = false, features = ["async-std", "xdg-portal"] }
 
 # Installing for one account on Windows: a Start menu shortcut is a COM
@@ -139,8 +145,9 @@ rfd = { version = "0.15", default-features = false, features = ["async-std", "xd
 # every error, and on a GNOME 51 desktop Ctrl+V and the menu's Paste put
 # nothing in the query field (11 November) — not reproduced in a headless
 # GNOME with GPaste, IBus and a Turkish layout. Mutter keeps the two
-# selections in step, and X11 needs no keyboard focus to read. Already in the
-# tree through Slint; the same version, with X11 only.
+# selections in step, and X11 needs no keyboard focus to read. Slint 1.19
+# moved to arboard and fixed GNOME's paste without data-control; until that
+# is tried on the desktop where it failed, this stays, X11 only.
 [target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
 copypasta = { version = "=0.10.2", default-features = false, features = ["x11"] }
 
@@ -156,4 +163,4 @@ windows = { version = "0.62", features = [
 
 [build-dependencies]
 scour-icon = { workspace = true }
-slint-build  = "=1.16.1"
+slint-build  = "=1.19.1"

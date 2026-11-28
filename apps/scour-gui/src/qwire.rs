@@ -42,6 +42,9 @@ pub struct QueryBar {
     /// The narrowing line: the query it is for, its answers, and its chips
     /// as label, count and the term a press writes.
     pub narrow_for: String,
+    /// The query's revision its asks carry: an answer for an older one is
+    /// dropped, so the same text under a newer revision is asked again.
+    narrow_revision: u64,
     narrow_total: u64,
     /// Moved by each new ask and each hiding: a wait still running for an
     /// older one sends nothing.
@@ -577,11 +580,20 @@ fn narrow_asks(w: &MainWindow, s: &mut State, cat: &Catalogue, total: u64) -> Op
     }
     w.set_narrow_shown(true);
     let text = s.query.clone();
-    if s.qb.narrow_for == text && (s.qb.narrow_total < 2) == (total < 2) {
+    // The same text again is not enough: the query asked anew moves its
+    // revision, and the answers to the last asks are dropped for it. Without
+    // the revision the line asked once, lost its answers, and stayed empty —
+    // a window that opened quickly enough re-sent its first query inside the
+    // 250 ms wait (2026-11-28, Slint 1.19).
+    if s.qb.narrow_for == text
+        && s.qb.narrow_revision == s.query_revision
+        && (s.qb.narrow_total < 2) == (total < 2)
+    {
         return None;
     }
     s.qb.narrow_gen += 1;
     s.qb.narrow_for = text.clone();
+    s.qb.narrow_revision = s.query_revision;
     s.qb.narrow_total = total;
     s.qb.narrow_facets = None;
     s.qb.narrow_usage = None;

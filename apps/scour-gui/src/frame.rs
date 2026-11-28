@@ -27,6 +27,12 @@ pub fn let_go_on_the_frame(w: &slint::Window) {
     let held = Rc::new(Cell::new(false));
     let at = Rc::new(Cell::new(slint::LogicalPosition::default()));
     w.on_winit_window_event(move |w, event| {
+        // Windows' own motion preference is read again on focus, after this
+        // filter; less motion is asked for once Slint has done that.
+        #[cfg(windows)]
+        if matches!(event, WindowEvent::Focused(true)) {
+            slint::Timer::single_shot(std::time::Duration::ZERO, crate::start::still_motion);
+        }
         let on = wayland.get().unwrap_or_else(|| {
             let on = on_wayland(w);
             wayland.set(Some(on));

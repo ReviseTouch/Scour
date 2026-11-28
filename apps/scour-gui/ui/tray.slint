@@ -25,13 +25,13 @@ export component DragTray inherits Window {
 
     /// Pulled far enough to be a drag, with the pointer in the window.
     callback drag(length, length);
-    callback close();
+    callback dismissed();
 
     forward-focus: keys;
     keys := FocusScope {
         key-pressed(e) => {
             if (e.text == Key.Escape) {
-                root.close();
+                root.dismissed();
                 return accept;
             }
             reject

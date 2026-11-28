@@ -1309,22 +1309,55 @@ export component Shade inherits Rectangle {
     }
 }
 
-// The rail beside a preview, after Colpan's minimap: the finds as ticks —
-// dimmer ones outside the stretch shown — that stretch as a band when it is
-// not the whole of the file, where the eye is as a box. It decides nothing:
-// a press, a drag and the wheel are handed to whoever holds what scrolls.
+// The rail beside a preview, Colpan's minimap: where the eye is as a lens on
+// the whole of what scrolls, the finds as ticks — dimmer ones outside the
+// stretch shown — and that stretch as a band when it is not the whole file.
+// Everything is a share of the whole, 0 at its top. **The lens and the ticks
+// share one mapping**: a share is drawn where the lens's middle stands once
+// that share is in the middle of the view, so a press on a tick brings its
+// find to the middle and the lens lands on the tick. The lens is never under
+// 24px; it travels the rail less its own height. Nothing on it moves by
+// itself: a press, a drag and the wheel go to whoever holds what scrolls.
 export component PeekRail inherits Rectangle {
     in property <[float]> marks;
     in property <[float]> far;
+    /// Ticks as places in what scrolls, for a view that knows where its rows
+    /// are laid out but not as shares: each over `whole`.
+    in property <[length]> ys;
+    in property <length> whole: 1px;
     in property <float> band0: 0;
     in property <float> band1: 1;
     in property <float> seen-top;
     in property <float> seen-tall: 1;
-    /// A share of the rail: pressed, or dragged to.
+    /// A share of the whole to bring to the middle of the view: pressed, or
+    /// dragged to.
     callback go(float, bool);
     callback wheel(length);
-    width: 14px;
+    width: 18px;
     background: Theme.panel-2;
+
+    property <bool> all: root.seen-tall >= 0.999;
+    property <length> lens: root.all ? root.height : max(24px, root.height * root.seen-tall);
+    property <length> travel: max(0px, root.height - root.lens);
+    /// How far the view has gone of the way it can go.
+    property <float> gone: root.all ? 0 : max(0, min(1, root.seen-top / max(0.0001, 1 - root.seen-tall)));
+    /// Where a share is drawn: where the lens's middle is with it in the middle.
+    pure function at(r: float) -> length {
+        if (root.all) {
+            return root.height * max(0, min(1, r));
+        }
+        return root.lens / 2 + root.travel
+            * max(0, min(1, (r - root.seen-tall / 2) / max(0.0001, 1 - root.seen-tall)));
+    }
+    /// The share whose place is `y`.
+    pure function share(y: length) -> float {
+        if (root.all || root.travel <= 0px) {
+            return max(0, min(1, y / max(1px, root.height)));
+        }
+        return max(0, min(1, (y - root.lens / 2) / root.travel)) * (1 - root.seen-tall)
+            + root.seen-tall / 2;
+    }
+
     Rectangle {
         x: 0px;
         width: 1px;
@@ -1332,52 +1365,100 @@ export component PeekRail inherits Rectangle {
         background: Theme.line-soft;
     }
     if root.band1 - root.band0 < 0.999: Rectangle {
-        y: parent.height * root.band0;
-        height: parent.height * (root.band1 - root.band0);
+        x: 1px;
+        width: parent.width - 1px;
+        y: root.at(root.band0);
+        height: max(2px, root.at(root.band1) - root.at(root.band0));
         background: Theme.line-soft;
     }
-    for r in root.far: Rectangle {
-        x: 3px;
-        width: parent.width - 6px;
-        y: parent.height * r - 1px;
-        height: 3px;
-        border-radius: 1.5px;
-        background: Theme.t0;
-        opacity: 0.55;
-    }
-    for r in root.marks: Rectangle {
-        x: 3px;
-        width: parent.width - 6px;
-        y: parent.height * r - 1px;
-        height: 3px;
-        border-radius: 1.5px;
-        background: Theme.t0;
-    }
-    Rectangle {
-        x: 1px;
-        width: parent.width - 2px;
-        y: parent.height * root.seen-top;
-        height: parent.height * max(0.025, root.seen-tall);
+    lens := Rectangle {
+        x: 2px;
+        width: parent.width - 3px;
+        y: root.travel * root.gone;
+        height: root.lens;
         border-radius: 3px;
-        background: Theme.ink.with-alpha(0.09);
+        background: Theme.ink.with-alpha(drag.has-hover || drag.pressed ? 0.17 : 0.10);
         border-width: 1px;
-        border-color: Theme.ink.with-alpha(0.14);
+        border-color: Theme.ink.with-alpha(0.26);
     }
-    TouchArea {
+    drag := TouchArea {
         mouse-cursor: pointer;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && self.height > 0px) {
-                root.go(clamp(self.mouse-y / self.height, 0, 1), true);
+                root.go(root.share(self.mouse-y), true);
             }
         }
         moved => {
             if (self.pressed && self.height > 0px) {
-                root.go(clamp(self.mouse-y / self.height, 0, 1), false);
+                root.go(root.share(self.mouse-y), false);
             }
         }
         scroll-event(e) => {
             root.wheel(e.delta-y);
             return accept;
+        }
+    }
+    // Over the drag area, so a press within four pixels of a tick lands on it.
+    for r in root.far: Rectangle {
+        y: root.at(r) - 4px;
+        height: 8px;
+        Rectangle {
+            x: 4px;
+            width: parent.width - 7px;
+            y: 2.5px;
+            height: 3px;
+            border-radius: 1.5px;
+            background: Theme.t0;
+            opacity: 0.55;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.go(r, true); }
+            scroll-event(e) => {
+                root.wheel(e.delta-y);
+                return accept;
+            }
+        }
+    }
+    for r in root.marks: Rectangle {
+        y: root.at(r) - 4px;
+        height: 8px;
+        Rectangle {
+            x: 4px;
+            width: parent.width - 7px;
+            y: 2.5px;
+            height: 3px;
+            border-radius: 1.5px;
+            background: Theme.t0;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.go(r, true); }
+            scroll-event(e) => {
+                root.wheel(e.delta-y);
+                return accept;
+            }
+        }
+    }
+    for at-px in root.ys: Rectangle {
+        property <float> r: at-px / max(1px, root.whole);
+        y: root.at(self.r) - 4px;
+        height: 8px;
+        Rectangle {
+            x: 4px;
+            width: parent.width - 7px;
+            y: 2.5px;
+            height: 3px;
+            border-radius: 1.5px;
+            background: Theme.t0;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.go(parent.r, true); }
+            scroll-event(e) => {
+                root.wheel(e.delta-y);
+                return accept;
+            }
         }
     }
 }

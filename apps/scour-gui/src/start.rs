@@ -88,12 +88,33 @@ pub(super) fn still_caret() {
 
     struct Still(i_slint_backend_winit::Backend);
 
+    // **Everything winit's backend answers is handed on**, or Slint quietly
+    // falls back to its own defaults: `bind_context` is where it starts
+    // watching the desktop's settings (the colour scheme among them), and
+    // `click_interval` is the desktop's double-click time.
     impl Platform for Still {
+        fn bind_context(
+            &self,
+            ctx: i_slint_core::SlintContextWeak,
+            t: i_slint_core::InternalToken,
+        ) {
+            self.0.bind_context(ctx, t);
+        }
         fn create_window_adapter(&self) -> Result<std::rc::Rc<dyn WindowAdapter>, PlatformError> {
             self.0.create_window_adapter()
         }
         fn run_event_loop(&self) -> Result<(), PlatformError> {
             self.0.run_event_loop()
+        }
+        fn process_events(
+            &self,
+            timeout: Option<std::time::Duration>,
+            t: i_slint_core::InternalToken,
+        ) -> Result<std::ops::ControlFlow<()>, PlatformError> {
+            self.0.process_events(timeout, t)
+        }
+        fn click_interval(&self) -> std::time::Duration {
+            self.0.click_interval()
         }
         fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
             self.0.new_event_loop_proxy()
@@ -123,6 +144,18 @@ pub(super) fn still_caret() {
     if let Ok(backend) = i_slint_backend_winit::Backend::new_with_renderer_by_name(renderer) {
         let _ = slint::platform::set_platform(Box::new(Still(backend)));
     }
+}
+
+/// Nothing in Scour moves by itself, and since Slint 1.17 a wheel notch is a
+/// 180 ms glide in every `Flickable`. Asking for less motion is the switch
+/// Slint has for it: the view moves by the notch at once, as before. After the
+/// first component exists, which is when there is a context to ask; on
+/// Windows Slint reads the system's preference again whenever the window takes
+/// the focus, so [`crate::frame`] asks again then.
+pub(crate) fn still_motion() {
+    let _ = i_slint_core::with_existing_context(|ctx| {
+        ctx.set_motion_preference(i_slint_core::MotionPreference::Reduced);
+    });
 }
 
 /// The lock a running window holds: a socket beside the service's, removed on

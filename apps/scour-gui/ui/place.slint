@@ -149,7 +149,7 @@ export component PlaceLens inherits Rectangle {
                     Flickable {
                         width: parent.width;
                         height: parent.height;
-                        viewport-height: left-col.preferred-height;
+                        content-height: left-col.preferred-height;
                         left-col := VerticalLayout {
                             for pl in root.places: Rectangle {
                                 height: 26px;
@@ -255,7 +255,7 @@ export component PlaceLens inherits Rectangle {
                         Flickable {
                             horizontal-stretch: 1;
                             interactive: false;
-                            viewport-width: crumb-row.preferred-width;
+                            content-width: crumb-row.preferred-width;
                             crumb-row := HorizontalLayout {
                                 spacing: 2px;
                                 alignment: start;
@@ -362,16 +362,16 @@ export component PlaceLens inherits Rectangle {
                 dir-list := Flickable {
                     width: parent.width;
                     height: parent.height;
-                    viewport-height: dir-col.preferred-height;
+                    content-height: dir-col.preferred-height;
                     // The line the keys are on is scrolled into sight.
                     property <int> at: root.sel - root.here-at - 1;
                     changed at => {
                         if (self.at >= 0) {
-                            if ((self.at + 1) * 26px + self.viewport-y > self.height) {
-                                self.viewport-y = self.height - (self.at + 1) * 26px;
+                            if ((self.at + 1) * 26px + self.content-y > self.height) {
+                                self.content-y = self.height - (self.at + 1) * 26px;
                             }
-                            if (self.at * 26px + self.viewport-y < 0px) {
-                                self.viewport-y = 0px - self.at * 26px;
+                            if (self.at * 26px + self.content-y < 0px) {
+                                self.content-y = 0px - self.at * 26px;
                             }
                         }
                     }

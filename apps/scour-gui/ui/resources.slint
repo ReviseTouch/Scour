@@ -818,7 +818,7 @@ export component ResourcePanel inherits Rectangle {
         Hairline { height: Theme.hair; }
         ScrollView {
             vertical-stretch: 1;
-            viewport-height: body.preferred-height;
+            content-height: body.preferred-height;
             body := VerticalLayout {
                 // The mock's 1.25 : 1, whatever either side would rather have.
                 if root.wide: HorizontalLayout {

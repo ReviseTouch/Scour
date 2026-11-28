@@ -38,6 +38,7 @@ mod flowing;
 mod frame;
 mod grep_field;
 mod grep_lay;
+mod grep_list;
 mod grep_ui;
 mod hotkey;
 mod install;
@@ -413,6 +414,7 @@ fn main() -> Result<()> {
         &language(&kept, &config),
     ))));
     let window = MainWindow::new().context("the window could not be created")?;
+    still_motion();
     // `scour`, the desktop entry's own name: that is how a Wayland desktop
     // finds the icon and the menu entry for a window. **After `new`, before
     // the window is shown**: before any component exists Slint has no

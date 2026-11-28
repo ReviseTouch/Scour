@@ -1484,6 +1484,37 @@ text (eight full blocks), structured-zstd:
 - It was written as version 4, and reopened with the same counts and the
   same 50,649 texts.
 
+## The window's preview scrolling, Slint 1.16.1 → 1.19.1 (2026-11-28)
+
+The window in a headless GNOME of its own (1600×900), against a test service,
+release builds. The wheel is turned over the preview by the window itself
+(`SCOUR_GUI_WHEEL=60`, `SCOUR_GUI_WHEEL_AT=-190,450`, a notch every 50 ms, 100
+notches), and `SCOUR_GUI_STALLS` reports, a second at a time, how long a 2 ms
+timer was held up. "Busy" is the sum of the overruns, per second.
+
+| preview | Slint | busy while scrolling | longest stall |
+|---|---|---|---|
+| Word document, 1,100 rows (`ListView`) | 1.16.1 | 37–56 ms/s | 5.5 ms |
+| same | 1.19.1 | 24–34 ms/s | 4.9 ms |
+| same, every row laid out (`Flickable`) | 1.19.1 | 84–141 ms/s | 10.4 ms |
+| Word document, 4,000 blocks, every row laid out | 1.19.1 | one stall of 2,189 ms, then no frame for 20 s | — |
+| Word document, 4,000 blocks (`ListView`) | 1.19.1 | 28–41 ms/s | 4.3 ms |
+| PDF, 352 pages | 1.19.1 | 12–21 ms/s | 3.3 ms |
+
+What a person saw as stutter in a document was not time: no frame over 6 ms
+either way. A `ListView` reckons its height as the average of the rows in
+sight times their count, and its place from that, every frame, so with rows of
+uneven height the scrollbar and the place under the wheel moved by
+themselves. Laying every row out fixes the numbers and costs the window: Slint
+visits every element each frame, on screen or not. The document stays a
+`ListView`, and its rail is drawn in the one measure that holds still — the
+share of rows above the view. The content search's list, two heights known in
+advance, is placed exactly by the window instead (`grep_list.rs`).
+
+Every screen photographed with both releases and compared pixel by pixel
+(1–5 % of pixels differ): text lines are 1–2 px tighter and glyph advances a
+hair wider in 1.19 (a segmented control 245 → 247 px); nothing moved.
+
 ## Reproducing
 
 ```sh

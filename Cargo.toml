@@ -55,7 +55,7 @@ members = [
 # version without a suffix is a promise about all of that.
 version      = "0.2.0-alpha.12"
 edition      = "2024"
-rust-version = "1.92"          # structured-zstd's MSRV, the highest of any dependency
+rust-version = "1.95"          # Slint 1.19's MSRV, the highest of any dependency
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/ReviseTouch/Scour"
 publish      = false

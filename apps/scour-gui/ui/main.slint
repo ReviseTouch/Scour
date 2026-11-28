@@ -11,10 +11,10 @@ export { DragTray }
 import { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow, GrepInk, GrepPill, GrepMenu } from "grep-parts.slint";
 export { GrepRun, GrepCap, GrepBit, GrepSel, GrepRow }
 import { ListView, ScrollView } from "std-widgets.slint";
-import { Cell, HeadInfo, Found, PeekCrumb, PeekAct, PeekHeavy, PeekNew, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced, FlowRow, GridRowView, GridCellView } from "types.slint";
+import { Cell, HeadInfo, Found, PeekCrumb, PeekAct, PeekHeavy, PeekNew, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, GrepSlot, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced, FlowRow, GridRowView, GridCellView } from "types.slint";
 import { FlowView, SheetView } from "flow.slint";
 // Re-exported for the generated Rust API.
-export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
+export { Cell, HeadInfo, Found, PlaceLeft, PlaceCrumb, PlaceDir, DiskTile, StripSeg, PlaceHeld, ScopeDot, PlaceWords, GrepItem, GrepSlot, Row, Slot, Fact, PeekPage, Bar, MenuItem, Rule, Disk, Kid, Seg, Slice, Big, Dupe, Span, Cap, QMeasure, QBit, QFrame, Sel, Reach, CalDay, CalMonth, LensRow, FolderRow, Facet, Spliced }
 import { SettingsPage } from "settings.slint";
 import { RowMenu, AskSheet } from "menu.slint";
 import { ReportPaper } from "report.slint";
@@ -245,7 +245,17 @@ export component MainWindow inherits Window {
     in property <string> grep-summary;
     in property <string> grep-empty;
     in property <bool> grep-more-on;
-    in property <[GrepItem]> grep-items;
+    // The stream's list, placed by Rust (`grep_list`): the slots in sight,
+    // and the whole list's height, known there exactly.
+    in property <[GrepSlot]> grep-slots;
+    in property <length> grep-tall;
+    out property <length> grep-down: 0px - grep-view.content-y;
+    out property <length> grep-shown: grep-view.height;
+    /// The stream's list moved or changed size: Rust covers what is in sight.
+    callback grep-moved();
+    public function grep-scroll-to(down: length) {
+        grep-view.content-y = 0px - max(0px, min(down, grep-view.content-height - grep-view.height));
+    }
     in property <string> similar-query;
     changed grep-focus-ask => { grep-input.focus(); grep-input.select-all(); }
     callback lens-step(int);
@@ -366,6 +376,10 @@ export component MainWindow inherits Window {
     in property <[PeekPage]> peek-pages;
     // A word processor's document drawn as it flows, and whether it is shown.
     in property <[FlowRow]> peek-flow;
+    /// The flow's rows holding a find, as shares of its rows: its rail's ticks.
+    in property <[float]> peek-flow-marks;
+    /// The sheet's rows holding a find, as shares of it.
+    in property <[float]> peek-grid-marks;
     in property <bool> peek-flowing;
     // A spreadsheet's book instead: its sheets' names, the one shown, its grid.
     in property <bool> peek-book;
@@ -558,15 +572,18 @@ export component MainWindow inherits Window {
     // the list, invisible on a dark panel and sitting on the size column. The
     // list gives up 14px; the arithmetic below is the flickable's own.
     property <length> sb-inset: 4px;
-    property <length> sb-reach: root.grid ? tiles.viewport-height : list.viewport-height;
-    property <length> sb-shown: root.grid ? tiles.visible-height : list.visible-height;
+    property <length> sb-reach: root.grep-active ? grep-view.content-height
+        : root.grid ? tiles.content-height : list.content-height;
+    property <length> sb-shown: root.grep-active ? grep-view.height
+        : root.grid ? tiles.visible-height : list.visible-height;
     property <length> sb-span: max(0px, root.sb-reach - root.sb-shown);
     property <length> sb-track: root.sb-shown - 2 * root.sb-inset;
     /// Never shorter than 36px: millions of rows put the thumb below hitting size.
     property <length> sb-thumb: root.sb-span <= 0px ? 0px
         : max(36px, root.sb-track * root.sb-shown / root.sb-reach);
     property <length> sb-travel: max(0px, root.sb-track - root.sb-thumb);
-    property <length> sb-at: 0px - (root.grid ? tiles.viewport-y : list.viewport-y);
+    property <length> sb-at: 0px - (root.grep-active ? grep-view.content-y
+        : root.grid ? tiles.content-y : list.content-y);
     property <length> sb-y: root.sb-inset + (root.sb-span <= 0px ? 0px
         : root.sb-travel * min(1.0, max(0.0, root.sb-at / root.sb-span)));
 
@@ -575,19 +592,24 @@ export component MainWindow inherits Window {
         if (root.sb-travel <= 0px) {
             return;
         }
-        root.scroll-to(root.sb-span * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel)));
+        let down = root.sb-span * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel));
+        if (root.grep-active) {
+            root.grep-scroll-to(down);
+        } else {
+            root.scroll-to(down);
+        }
     }
 
     /// Put the list back to the top, or a measured distance down it. A function
     /// rather than a binding: the scroll position is the `ListView`'s to keep.
     public function scroll-to(down: length) {
-        list.viewport-y = 0px - down;
-        tiles.viewport-y = 0px - down;
-        paper.viewport-y = 0px - down;
+        list.content-y = 0px - down;
+        tiles.content-y = 0px - down;
+        paper.content-y = 0px - down;
     }
     /// Scroll the rail from outside, for `SCOUR_GUI_RAIL`.
     public function scroll-rail(down: length) {
-        railview.viewport-y = 0px - down;
+        railview.content-y = 0px - down;
     }
     /// The first row of the result the list is showing, read off the viewport
     /// so the fetch decision never depends on the model reporting a miss.
@@ -600,7 +622,7 @@ export component MainWindow inherits Window {
     out property <int> pool: Math.ceil(list.visible-height / Theme.row-height) + 3;
     /// How far down the detail list is, for keeping the row being read in
     /// place when rows arrive above it.
-    out property <length> list-down: 0px - list.viewport-y;
+    out property <length> list-down: 0px - list.content-y;
     out property <length> view-down: root.sb-at;
     out property <length> list-shown: root.sb-shown;
     callback navigated(int);
@@ -610,8 +632,8 @@ export component MainWindow inherits Window {
     property <length> row-w: root.cw.length == 0 ? 0px
         : root.cx[root.cw.length - 1] + root.cw[root.cw.length - 1] + 12px;
     out property <int> first-row: root.grid
-        ? max(0, Math.floor((0px - tiles.viewport-y) / root.tile-h)) * root.per-line
-        : max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
+        ? max(0, Math.floor((0px - tiles.content-y) / root.tile-h)) * root.per-line
+        : max(0, Math.floor((0px - list.content-y) / Theme.row-height));
     /// The list moved by at least one row. Fires only while scrolling, and at
     /// once; the timer stays as the backstop for a resize.
     callback moved();
@@ -2026,9 +2048,9 @@ export component MainWindow inherits Window {
                         if (e.text == Key.DownArrow) {
                             root.selected = min(root.selected + 1, root.rows.length - 1);
                             root.navigated(root.selected);
-                            if ((root.selected + 1) * Theme.row-height + list.viewport-y
+                            if ((root.selected + 1) * Theme.row-height + list.content-y
                                 > list.visible-height) {
-                                list.viewport-y = list.visible-height
+                                list.content-y = list.visible-height
                                     - (root.selected + 1) * Theme.row-height;
                             }
                             return accept;
@@ -2036,8 +2058,8 @@ export component MainWindow inherits Window {
                         if (e.text == Key.UpArrow) {
                             root.selected = max(root.selected - 1, 0);
                             root.navigated(root.selected);
-                            if (root.selected * Theme.row-height + list.viewport-y < 0px) {
-                                list.viewport-y = 0px - root.selected * Theme.row-height;
+                            if (root.selected * Theme.row-height + list.content-y < 0px) {
+                                list.content-y = 0px - root.selected * Theme.row-height;
                             }
                             return accept;
                         }
@@ -2048,14 +2070,14 @@ export component MainWindow inherits Window {
                                 0,
                                 root.rows.length - 1);
                             root.navigated(root.selected);
-                            list.viewport-y = min(0px,
+                            list.content-y = min(0px,
                                 -(root.selected * Theme.row-height) + list.visible-height / 2);
                             return accept;
                         }
                         if (e.text == Key.Home || e.text == Key.End) {
                             root.selected = e.text == Key.Home ? 0 : root.rows.length - 1;
                             root.navigated(root.selected);
-                            list.viewport-y = e.text == Key.Home
+                            list.content-y = e.text == Key.Home
                                 ? 0px
                                 : min(0px, list.visible-height - root.rows.length * Theme.row-height);
                             return accept;
@@ -2775,11 +2797,11 @@ export component MainWindow inherits Window {
                         if root.chips.length > 0 && root.fix-said == "" && !root.reading-warn: chip-flick := Flickable {
                             horizontal-stretch: 1;
                             interactive: false;
-                            viewport-width: chip-row.preferred-width;
+                            content-width: chip-row.preferred-width;
                             // The wheel moves the line sideways: it holds more
                             // than a window is wide.
                             function nudge(dx: length) {
-                                chip-flick.viewport-x = clamp(chip-flick.viewport-x + dx,
+                                chip-flick.content-x = clamp(chip-flick.content-x + dx,
                                     min(0px, chip-flick.width - chip-row.preferred-width), 0px);
                             }
                             chip-row := HorizontalLayout {
@@ -2891,7 +2913,7 @@ export component MainWindow inherits Window {
                                         x: 0px;
                                         y: 6px;
                                         height: parent.height - 12px;
-                                        viewport-height: root.chips.length * 28px;
+                                        content-height: root.chips.length * 28px;
                                         for c[ci] in root.chips: Rectangle {
                                             y: ci * 28px;
                                             height: 28px;
@@ -3098,7 +3120,7 @@ export component MainWindow inherits Window {
                 railview := ScrollView {
                     visible: root.rail-shown;
                     // Told how tall it is, or there is no overflow to scroll.
-                    viewport-height: rail.preferred-height;
+                    content-height: rail.preferred-height;
 
                     rail := VerticalLayout {
                     height: self.preferred-height;
@@ -3294,8 +3316,8 @@ export component MainWindow inherits Window {
                     // in, and Slint repaints the whole window for every element
                     // it frees. Rust moves a slot to its new row — see `Slots`.
                     // The length is the whole result, so the scrollbar is too.
-                    viewport-height: root.rows.length * Theme.row-height;
-                    viewport-width: max(self.visible-width, root.row-w);
+                    content-height: root.rows.length * Theme.row-height;
+                    content-width: max(self.visible-width, root.row-w);
                     // The slots' origin, at the first row they cover. Inside it a
                     // slot is at most a screen down: positions a million rows
                     // down are past what a 32-bit float keeps to the pixel, and
@@ -3757,10 +3779,25 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.grep-empty == "": ListView {
+                    // Placed by Rust (`grep_list`), not a `ListView`: that one
+                    // guesses the list's height from the rows in sight, and with a
+                    // heading taller than a line the guess moved under the hand.
+                    // The scrollbar is the window's own, in the lane beside it.
+                    grep-view := Flickable {
+                        visible: root.grep-empty == "";
+                        min-height: 0px;
+                        max-height: root.grep-empty == "" ? 100000px : 0px;
                         vertical-stretch: 1;
-                        for gitem in root.grep-items: Rectangle {
-                            height: gitem.header ? 32px : 25px;
+                        content-width: self.width;
+                        content-height: root.grep-tall;
+                        changed content-y => { root.grep-moved(); }
+                        changed height => { root.grep-moved(); }
+                        for gs in root.grep-slots: Rectangle {
+                            property <GrepItem> gitem: gs.item;
+                            visible: gs.shown;
+                            y: gs.y;
+                            width: parent.width;
+                            height: gs.h;
                             background: gitem.file-idx == root.grep-sel ? Theme.selection
                                 : ghit.has-hover ? Theme.hover : gitem.header ? Theme.ground : transparent;
                             if gitem.header: Rectangle {
@@ -4127,7 +4164,7 @@ export component MainWindow inherits Window {
                             property <length> card-w: max(80px, self.width - 28px);
                             property <length> slot-h: max(80px, self.card-w * root.peek-aspect) + 12px;
                             property <int> current-page: clamp(
-                                Math.floor((-doc-view.viewport-y + doc-view.visible-height * 0.35) / self.slot-h),
+                                Math.floor((-doc-view.content-y + doc-view.visible-height * 0.35) / self.slot-h),
                                 0,
                                 max(0, root.peek-pages.length - 1));
 
@@ -4140,15 +4177,18 @@ export component MainWindow inherits Window {
                             // `changed` does not fire for the place it opens on.
                             init => {
                                 if (root.peek-doc-at >= 0) {
-                                    doc-view.viewport-y = -max(0px,
+                                    doc-view.content-y = -max(0px,
                                         root.peek-doc-at * root.peek-pages.length * self.slot-h - doc-view.height / 3);
                                     root.peek-page-scrolled(self.current-page);
                                 }
                             }
 
+                            // Every page one height, so the list's own reckoning is
+                            // exact; its scrollbar is the rail beside it.
                             doc-view := ListView {
-                                width: parent.width - (root.peek-doc-marks.length > 0 ? 14px : 0px);
+                                width: parent.width - 18px;
                                 height: parent.height;
+                                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                                 for page[idx] in root.peek-pages: Rectangle {
                                     width: doc-view.visible-width;
                                     height: doc-box.slot-h;
@@ -4181,27 +4221,28 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // The finds over the whole document, by where they fall
-                            // in its text: a page of similar length each, near enough.
-                            if root.peek-doc-marks.length > 0: PeekRail {
-                                x: parent.width - 14px;
+                            // Where the eye is in the document, and the finds by where
+                            // they fall in its text: a page of similar length each,
+                            // near enough.
+                            PeekRail {
+                                x: parent.width - 18px;
                                 height: parent.height;
                                 marks: root.peek-doc-marks;
                                 property <length> tall: max(1px, root.peek-pages.length * doc-box.slot-h);
-                                seen-top: -doc-view.viewport-y / self.tall;
+                                seen-top: -doc-view.content-y / self.tall;
                                 seen-tall: doc-view.height / self.tall;
                                 go(r, pressed) => {
-                                    doc-view.viewport-y = -clamp(r * self.tall - doc-view.height / 2,
+                                    doc-view.content-y = -clamp(r * self.tall - doc-view.height / 2,
                                         0px, max(0px, self.tall - doc-view.height));
                                 }
                                 wheel(dy) => {
-                                    doc-view.viewport-y = clamp(doc-view.viewport-y + dy,
+                                    doc-view.content-y = clamp(doc-view.content-y + dy,
                                         min(0px, doc-view.height - self.tall), 0px);
                                 }
                             }
 
                             Rectangle {
-                                x: parent.width - self.width - 18px - (root.peek-doc-marks.length > 0 ? 14px : 0px);
+                                x: parent.width - self.width - 18px - 18px;
                                 y: 10px;
                                 width: page-badge.preferred-width + 14px;
                                 height: 22px;
@@ -4244,6 +4285,7 @@ export component MainWindow inherits Window {
                             rows: root.peek-flow;
                             deck: root.peek-deck;
                             goto: root.peek-goto;
+                            marks: root.peek-flow-marks;
                         }
                         if root.peek-flowing && root.peek-book: SheetView {
                             sheets: root.peek-sheets;
@@ -4251,6 +4293,7 @@ export component MainWindow inherits Window {
                             rows: root.peek-grid;
                             head: root.peek-grid-head;
                             grid-width: root.peek-grid-width;
+                            marks: root.peek-grid-marks;
                             goto: root.peek-goto;
                             picked(i) => { root.peek-sheet-picked(i); }
                         }
@@ -4260,13 +4303,13 @@ export component MainWindow inherits Window {
                             && root.peek-text != "": Rectangle {
                             peek-flick := Flickable {
                                 x: 0px;
-                                width: parent.width - 14px;
+                                width: parent.width - 18px;
                                 height: parent.height;
                                 // The wheel scrolls; a drag selects. An interactive
                                 // flickable takes the drag for itself.
                                 interactive: false;
-                                viewport-width: self.width;
-                                viewport-height: body.preferred-height;
+                                content-width: self.width;
+                                content-height: body.preferred-height;
 
                                 body := VerticalLayout {
                                     padding: 12px;
@@ -4281,7 +4324,12 @@ export component MainWindow inherits Window {
                                         cursor-position-changed(p) => {
                                             root.peek-from = self.anchor-position-byte-offset;
                                             root.peek-to = self.cursor-position-byte-offset;
-                                            root.peek-caret-moved(self.cursor-position-byte-offset);
+                                            // Only a caret a hand put there: since Slint
+                                            // 1.17 new text moves it too, and the badge
+                                            // stood over every file's first line.
+                                            if (self.has-focus) {
+                                                root.peek-caret-moved(self.cursor-position-byte-offset);
+                                            }
                                         }
                                         key-pressed(e) => {
                                             if (e.modifiers.control && (e.text == "c" || e.text == "C")) {
@@ -4304,7 +4352,7 @@ export component MainWindow inherits Window {
 
                             // The caret's line, where the pages' badge stands.
                             if root.peek-line-said != "": Rectangle {
-                                x: parent.width - 14px - self.width - 10px;
+                                x: parent.width - 18px - self.width - 10px;
                                 y: 10px;
                                 width: line-badge.preferred-width + 14px;
                                 height: 22px;
@@ -4325,7 +4373,7 @@ export component MainWindow inherits Window {
                             // The rail: a press inside the stretch shown goes there,
                             // the place in the middle; outside it, that place is read.
                             PeekRail {
-                                x: parent.width - 14px;
+                                x: parent.width - 18px;
                                 height: parent.height;
                                 marks: root.peek-rail;
                                 far: root.peek-far;
@@ -4333,21 +4381,21 @@ export component MainWindow inherits Window {
                                 band1: root.peek-band1;
                                 property <float> span: max(0.0001, root.peek-band1 - root.peek-band0);
                                 seen-top: root.peek-band0
-                                    + (-peek-flick.viewport-y / max(1px, peek-flick.viewport-height)) * self.span;
-                                seen-tall: (peek-flick.height / max(1px, peek-flick.viewport-height)) * self.span;
+                                    + (-peek-flick.content-y / max(1px, peek-flick.content-height)) * self.span;
+                                seen-tall: (peek-flick.height / max(1px, peek-flick.content-height)) * self.span;
                                 go(r, pressed) => {
                                     if (r >= root.peek-band0 && r <= root.peek-band1) {
-                                        peek-flick.viewport-y = clamp(
-                                            -((r - root.peek-band0) / self.span * peek-flick.viewport-height
+                                        peek-flick.content-y = clamp(
+                                            -((r - root.peek-band0) / self.span * peek-flick.content-height
                                                 - peek-flick.height / 2),
-                                            min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
+                                            min(0px, peek-flick.height - peek-flick.content-height), 0px);
                                     } else if (pressed) {
                                         root.peek-reread(r, self.height);
                                     }
                                 }
                                 wheel(dy) => {
-                                    peek-flick.viewport-y = clamp(peek-flick.viewport-y + dy,
-                                        min(0px, peek-flick.height - peek-flick.viewport-height), 0px);
+                                    peek-flick.content-y = clamp(peek-flick.content-y + dy,
+                                        min(0px, peek-flick.height - peek-flick.content-height), 0px);
                                 }
                             }
                         }
@@ -5276,14 +5324,14 @@ export component MainWindow inherits Window {
                 past-scroll := Flickable {
                     width: parent.width;
                     height: parent.height;
-                    viewport-height: root.past.length * 24px + 8px;
+                    content-height: root.past.length * 24px + 8px;
                     property <int> follow: root.past-picked;
                     changed follow => {
                         let top = 4px + self.follow * 24px;
-                        if (top + self.viewport-y < 0px) {
-                            self.viewport-y = -top;
-                        } else if (top + 24px + self.viewport-y > self.height) {
-                            self.viewport-y = self.height - top - 24px;
+                        if (top + self.content-y < 0px) {
+                            self.content-y = -top;
+                        } else if (top + 24px + self.content-y > self.height) {
+                            self.content-y = self.height - top - 24px;
                         }
                     }
                     VerticalLayout {
@@ -5480,15 +5528,15 @@ export component MainWindow inherits Window {
 
                 lens-flick := Flickable {
                     visible: root.lens-kind != "place" && !lens-box.panel;
-                    viewport-height: lens-body.preferred-height;
+                    content-height: lens-body.preferred-height;
                     property <int> sel: root.lens-sel;
                     changed sel => {
                         let at = 30px + self.sel * (root.lens-launching ? 40px : 26px);
-                        if (at + 30px + self.viewport-y > self.height) {
-                            self.viewport-y = self.height - at - 30px;
+                        if (at + 30px + self.content-y > self.height) {
+                            self.content-y = self.height - at - 30px;
                         }
-                        if (at + self.viewport-y < 30px) {
-                            self.viewport-y = min(0px, 30px - at);
+                        if (at + self.content-y < 30px) {
+                            self.content-y = min(0px, 30px - at);
                         }
                     }
                     lens-body := VerticalLayout {

@@ -54,6 +54,9 @@ pub(crate) fn wire(wiring: &Wiring) {
     // A wheel turned over the middle of the window, `SCOUR_GUI_WHEEL=px` a
     // notch, one every `SCOUR_GUI_SCROLL_MS`: the events a person sends, so
     // only what a person moves is redrawn — `scroll_to` moves hidden views too.
+    // `SCOUR_GUI_WHEEL_AT=x,y` turns it elsewhere, a negative x counted from
+    // the right edge (the preview's side), and `SCOUR_GUI_WHEEL_AFTER=ms`
+    // waits for what is under it to arrive.
     if let Ok(px) = std::env::var("SCOUR_GUI_WHEEL")
         && let Ok(px) = px.parse::<f32>()
     {
@@ -65,22 +68,36 @@ pub(crate) fn wire(wiring: &Wiring) {
             .ok()
             .and_then(|n| n.parse().ok())
             .unwrap_or(400usize);
+        let at: Option<(f32, f32)> = std::env::var("SCOUR_GUI_WHEEL_AT").ok().and_then(|s| {
+            let (x, y) = s.split_once(',')?;
+            Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+        });
+        let after = std::env::var("SCOUR_GUI_WHEEL_AFTER")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(0u64);
         let weak = window.as_weak();
         let done = std::cell::Cell::new(0usize);
+        let start = std::time::Instant::now();
         let t = Box::leak(Box::new(slint::Timer::default()));
         t.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(every),
             move || {
                 let Some(w) = weak.upgrade() else { return };
-                if done.get() >= steps {
+                if done.get() >= steps || start.elapsed().as_millis() < u128::from(after) {
                     return;
                 }
                 done.set(done.get() + 1);
                 let size = w.window().size().to_logical(w.window().scale_factor());
+                let (x, y) = match at {
+                    Some((x, y)) if x < 0.0 => (size.width + x, y),
+                    Some(xy) => xy,
+                    None => (size.width / 2.0, size.height / 2.0),
+                };
                 w.window()
                     .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-                        position: slint::LogicalPosition::new(size.width / 2.0, size.height / 2.0),
+                        position: slint::LogicalPosition::new(x, y),
                         delta_x: 0.0,
                         delta_y: -px,
                     });

@@ -73,7 +73,7 @@ pub fn run(asked: &[String], config: &scour_config::Config) -> Result<()> {
             .into(),
     );
 
-    tray.on_close(|| {
+    tray.on_dismissed(|| {
         let _ = slint::quit_event_loop();
     });
     {

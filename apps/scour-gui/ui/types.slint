@@ -159,6 +159,16 @@ export struct GrepItem {
     post: string,
 }
 
+/// One slot of the content search's list, placed by Rust (`grep_list`): the
+/// item it shows, where its top is in the list and how tall it is, and
+/// whether it shows one.
+export struct GrepSlot {
+    y: length,
+    h: length,
+    shown: bool,
+    item: GrepItem,
+}
+
 export struct Row {
     // One per shown column, in the order they are shown. Rebuilt only when the
     // chosen columns change; widths travel separately in `cw`.

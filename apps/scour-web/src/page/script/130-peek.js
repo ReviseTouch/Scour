@@ -362,11 +362,16 @@
     peekRail(scroller, pre, rail, found, view);
   }
 
-  /* The rail beside a text preview, after Colpan's minimap: where the finds
-   * are, where the eye is, and a press that goes there. When only a stretch of
-   * a large file is shown the rail is the whole file: the stretch a band on it,
+  /* The rail beside a text preview, Colpan's minimap: where the finds are,
+   * where the eye is, and a press that goes there. When only a stretch of a
+   * large file is shown the rail is the whole file: the stretch a band on it,
    * finds outside the band marked by their byte, and a press outside it reads
-   * the stretch around that place instead. Nothing on it moves by itself. */
+   * the stretch around that place instead. Everything is a share of the whole.
+   * **The lens and the ticks share one mapping**, as in the window's
+   * `PeekRail`: a share is drawn where the lens's middle stands once that
+   * share is in the middle of the view, so a press on a tick brings its find
+   * to the middle with the lens on the tick. The lens is never under 24 px.
+   * Nothing on it moves by itself. */
   function peekRail(scroller, pre, rail, found, view) {
     const whole = view.from === 0 && !view.cut;
     const len = Math.max(1, view.len);
@@ -375,54 +380,74 @@
     const outside = whole ? [] : found
       .filter((x) => x.offset != null && (x.offset < view.from || x.offset >= view.from + view.bytes))
       .map((x) => x.offset);
-    const at = (r) => `${(Math.min(1, Math.max(0, r)) * 100).toFixed(3)}%`;
+    const clamp = (r) => Math.min(1, Math.max(0, r));
+    /* The rail's measures: how much of the whole is in sight, how tall the
+       lens is and how far it travels. */
+    function measure() {
+      const h = rail.clientHeight || 1;
+      const tall = Math.max(1, scroller.scrollHeight);
+      const seenTall = Math.min(1, (scroller.clientHeight / tall) * (b1 - b0));
+      const all = seenTall >= 0.999;
+      const lens = all ? h : Math.max(24, h * seenTall);
+      return { h, tall, seenTall, all, lens, travel: Math.max(0, h - lens) };
+    }
+    /* Where a share is drawn, and the share drawn at `y`. */
+    const at = (m, r) => m.all ? m.h * clamp(r)
+      : m.lens / 2 + m.travel * clamp((r - m.seenTall / 2) / Math.max(1e-4, 1 - m.seenTall));
+    const share = (m, y) => m.all || m.travel <= 0 ? clamp(y / m.h)
+      : clamp((y - m.lens / 2) / m.travel) * (1 - m.seenTall) + m.seenTall / 2;
+    let ticks = [];
     function draw() {
+      const m = measure();
       const tall = Math.max(1, pre.scrollHeight);
-      let html = whole ? "" : `<b class="band" style="top:${at(b0)};height:${at(b1 - b0)}"></b>`;
+      ticks = [];
       for (const row of pre.querySelectorAll("span.hit")) {
-        html += `<i style="top:${at(b0 + (row.offsetTop / tall) * (b1 - b0))}"></i>`;
+        ticks.push({ r: b0 + (row.offsetTop / tall) * (b1 - b0), far: false });
       }
-      for (const o of outside) html += `<i class="far" style="top:${at(o / len)}"></i>`;
+      for (const o of outside) ticks.push({ r: o / len, far: true, o });
+      let html = whole ? ""
+        : `<b class="band" style="top:${at(m, b0)}px;height:${Math.max(2, at(m, b1) - at(m, b0))}px"></b>`;
       html += '<u class="view"></u>';
+      for (const t of ticks) html += `<i${t.far ? ' class="far"' : ""} style="top:${at(m, t.r).toFixed(1)}px"></i>`;
       rail.innerHTML = html;
       seen();
     }
     function seen() {
-      const tall = Math.max(1, scroller.scrollHeight);
       const v = rail.querySelector(".view");
       if (!v) return;
-      const top = b0 + (scroller.scrollTop / tall) * (b1 - b0);
-      const h = Math.max(0.025, (scroller.clientHeight / tall) * (b1 - b0));
-      v.style.top = at(top);
-      v.style.height = at(h);
+      const m = measure();
+      const top = b0 + (scroller.scrollTop / m.tall) * (b1 - b0);
+      const gone = m.all ? 0 : clamp(top / Math.max(1e-4, 1 - m.seenTall));
+      v.style.top = `${m.travel * gone}px`;
+      v.style.height = `${m.lens}px`;
     }
-    /* A press inside the band scrolls there, the place in the middle; outside
-       it, the nearest find within a few pixels, or the place itself, is read. */
-    function go(clientY) {
+    /* A press: on a tick (within four pixels) that find, otherwise the place
+       under it. Inside the band it scrolls there, the place in the middle;
+       outside it, the stretch around that place is read. */
+    function go(clientY, pressed) {
       const box = rail.getBoundingClientRect();
-      const r = Math.min(1, Math.max(0, (clientY - box.top) / box.height));
+      const m = measure();
+      const y = clientY - box.top;
+      const hit = pressed ? ticks.reduce((best, t) => {
+        const d = Math.abs(at(m, t.r) - y);
+        return d <= 4 && (!best || d < best[0]) ? [d, t] : best;
+      }, null) : null;
+      const r = hit ? hit[1].r : share(m, y);
       if (r >= b0 && r <= b1) {
         const inner = (r - b0) / Math.max(1e-9, b1 - b0);
         scroller.scrollTop = inner * scroller.scrollHeight - scroller.clientHeight / 2;
         return;
       }
-      const near = outside.reduce((best, o) => {
-        const d = Math.abs(o / len - r) * box.height;
-        return d < 8 && (!best || d < best[0]) ? [d, o] : best;
-      }, null);
-      view.reread(near ? near[1] : Math.floor(r * len));
+      if (pressed) view.reread(hit && hit[1].o != null ? hit[1].o : Math.floor(r * len));
     }
     let held = false;
     rail.addEventListener("pointerdown", (e) => {
       held = true;
       rail.setPointerCapture(e.pointerId);
-      go(e.clientY);
+      go(e.clientY, true);
     });
     rail.addEventListener("pointermove", (e) => {
-      if (!held) return;
-      const box = rail.getBoundingClientRect();
-      const r = (e.clientY - box.top) / box.height;
-      if (r >= b0 && r <= b1) go(e.clientY);
+      if (held) go(e.clientY, false);
     });
     rail.addEventListener("pointerup", (e) => { held = false; rail.releasePointerCapture(e.pointerId); });
     rail.addEventListener("wheel", (e) => { e.preventDefault(); scroller.scrollTop += e.deltaY; }, { passive: false });
