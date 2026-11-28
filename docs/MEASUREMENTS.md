@@ -1380,14 +1380,39 @@ Ten readers are still no faster than one in block order. They all reach the
 next block together and wait for the one decompressing it. Reading ahead
 would be the next step, and was not tried.
 
-Order still decides the rest, and none of these changes helps an order the
-texts were not written in:
+None of these changes helps an order the texts were not written in:
 - **By path, one reader,** a text in ten costs a block: 3.9 s for the
   installed copy, before and after.
 - **In random order, 30,000 texts of the large copy** decompress 29,520
   blocks: 48 – 52 s on one reader, 8.6 – 11 s on ten, before and after.
-- At the 1 GB the service keeps by default, that is minutes. Reading a
-  batch's kept documents grouped by block would cut it; not tried.
+
+**So a lane now reads its kept documents by block, then everything else.**
+- Before reading, the scanner asks where each document's text is kept
+  (`Texts::place`, by path alone), and sorts those documents by block and
+  offset.
+- A reader takes all the documents of one block at once (`Texts::kept_each`),
+  and its block is held until the last of them. Readers therefore open
+  different blocks side by side, however few the hot ones.
+- A document whose text no longer answers is read from its file, as before.
+- The finds are the same: outcomes are kept by file, so the order of reading
+  within a batch does not change them.
+
+The real scanner over the 50,649 files the installed cache then held, each
+file stat'ed, texts from a copy of the cache, nothing extracted. Batches of
+2,048, as the engine hands them over; ten readers a disk. Before is the
+commit above, alternated B A B A after a warm-up:
+
+| order given | before | after |
+|---|---:|---:|
+| newest first | 0.210 – 0.211 s | 0.198 – 0.213 s |
+| by path | 9.04 – 9.09 s (74 s CPU) | 0.367 – 0.378 s (3.0 s CPU) |
+| random | 14.43 – 14.46 s (134 s CPU) | 0.667 – 0.688 s (6.5 s CPU) |
+
+The grouping stays inside a batch, and it pays when a batch holds many texts
+of each block it touches. In random order, a batch of 2,048 spread over the
+cache's 2,400 or so blocks at the 1 GB cap would touch about 1,400 of them.
+That would save a third, not twentyfold. This is computed, not measured.
+Smaller units of compression are what would help there.
 
 The harness was a test module pulled into `store.rs` for the runs and taken
 out after. The installed cache was copied with `cp --reflink`, never opened

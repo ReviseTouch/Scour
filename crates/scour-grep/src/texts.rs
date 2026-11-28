@@ -33,6 +33,18 @@ pub trait Texts: Send + Sync {
     fn kept(&self, doc: &Doc<'_>) -> Option<DocText>;
     /// Its words, from its bytes. May keep them for next time.
     fn read(&self, doc: &Doc<'_>, bytes: &[u8]) -> DocText;
+    /// Where a document's text is kept, if anywhere: texts of one group read
+    /// together and in this order cost the group once. Asked by path alone;
+    /// whether the text still answers is [`Texts::kept`]'s to say.
+    fn place(&self, _path: &Path) -> Option<(u32, u32)> {
+        None
+    }
+    /// [`Texts::kept`] for each of these, given to `each` with its index.
+    fn kept_each(&self, docs: &[Doc<'_>], each: &mut dyn FnMut(usize, Option<DocText>)) {
+        for (i, doc) in docs.iter().enumerate() {
+            each(i, self.kept(doc));
+        }
+    }
 }
 
 /// Extensions of the documents handed over. The bytes decide in the end:

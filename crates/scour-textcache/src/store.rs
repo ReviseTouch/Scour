@@ -185,6 +185,35 @@ impl Store {
     /// was another size or time is not returned; nor is a failure under
     /// another `version` of the readers.
     pub fn get(&self, key: &Key, version: u32) -> Option<Kept> {
+        self.get_from(key, version, &mut None)
+    }
+
+    /// What is kept for each of these files, given to `each` with its index.
+    /// The block of the last text is held, so keys in the order of
+    /// [`Store::place`] decompress each block once, however many readers
+    /// come and go through the hot few meanwhile.
+    pub fn get_each(&self, keys: &[Key], version: u32, mut each: impl FnMut(usize, Option<Kept>)) {
+        let mut last = None;
+        for (i, key) in keys.iter().enumerate() {
+            each(i, self.get_from(key, version, &mut last));
+        }
+    }
+
+    /// Where the text kept for `path` lies, its block then its offset: texts
+    /// read in this order are read a block at a time. None when no text is
+    /// kept for it.
+    pub fn place(&self, path: &str) -> Option<(u32, u32)> {
+        let inner = self.shared.inner.lock();
+        let row = inner.table.get(path)?;
+        (row.state == State::Words).then_some((row.block, row.offset))
+    }
+
+    fn get_from(
+        &self,
+        key: &Key,
+        version: u32,
+        last: &mut Option<(u32, Arc<Vec<u8>>)>,
+    ) -> Option<Kept> {
         let (row, held) = {
             let inner = self.shared.inner.lock();
             let row = *inner.table.get(&key.path)?;
@@ -208,7 +237,17 @@ impl Store {
             State::Words => {
                 let text = match held {
                     Some(text) => text?,
-                    None => text_at(&self.shared.block(row.block).ok()?, &row)?,
+                    None => {
+                        let block = match last {
+                            Some((n, block)) if *n == row.block => Arc::clone(block),
+                            _ => {
+                                let block = self.shared.block(row.block).ok()?;
+                                *last = Some((row.block, Arc::clone(&block)));
+                                block
+                            }
+                        };
+                        text_at(&block, &row)?
+                    }
                 };
                 Some(Kept::Words(text))
             }
@@ -633,6 +672,65 @@ mod tests {
             .reads
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(reads, blocks);
+    }
+
+    #[test]
+    fn a_text_s_place_is_where_it_was_put() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), 0).unwrap();
+        for i in 0..3 {
+            store
+                .put(&key(i), &Kept::Words(format!("metin {i}")))
+                .unwrap();
+        }
+        store.put(&key(3), &Kept::NoText).unwrap();
+        let places: Vec<_> = (0..5).map(|i| store.place(&key(i).path)).collect();
+        assert_eq!(
+            places,
+            [Some((0, 0)), Some((0, 7)), Some((0, 14)), None, None]
+        );
+    }
+
+    #[test]
+    fn readers_each_given_a_block_s_texts_decompress_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = |i: usize| format!("{i:03} ") + &"Asliye Hukuk Mahkemesi ".repeat(13_000);
+        {
+            let store = Store::open(dir.path(), 0).unwrap();
+            for i in 0..140 {
+                store.put(&key(i), &Kept::Words(text(i))).unwrap();
+            }
+            store.flush().unwrap();
+        }
+        let store = Store::open(dir.path(), 0).unwrap();
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        for i in 0..140 {
+            let (block, _) = store.place(&key(i).path).unwrap();
+            if runs.len() <= block as usize {
+                runs.resize(block as usize + 1, Vec::new());
+            }
+            runs[block as usize].push(i);
+        }
+        // More readers at once than blocks are kept hot.
+        assert!(runs.len() > HOT, "{}", runs.len());
+        let start = std::sync::Barrier::new(runs.len());
+        std::thread::scope(|s| {
+            for run in &runs {
+                let (start, store) = (&start, &store);
+                s.spawn(move || {
+                    let keys: Vec<Key> = run.iter().map(|&i| key(i)).collect();
+                    start.wait();
+                    store.get_each(&keys, 0, |k, got| {
+                        assert_eq!(got, Some(Kept::Words(text(run[k]))));
+                    });
+                });
+            }
+        });
+        let reads = store
+            .shared
+            .reads
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(reads, runs.len());
     }
 
     #[test]

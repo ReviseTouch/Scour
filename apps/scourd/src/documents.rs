@@ -228,14 +228,36 @@ fn key_of(doc: &Doc<'_>) -> Key {
     }
 }
 
+fn doc_text(kept: Kept) -> DocText {
+    match kept {
+        Kept::Words(words) => DocText::Words(words),
+        Kept::NoText => DocText::NoText,
+        Kept::Failed { .. } => DocText::Broken,
+    }
+}
+
 impl Texts for Documents {
     fn kept(&self, doc: &Doc<'_>) -> Option<DocText> {
         let keep = self.keep.read();
-        match keep.as_ref()?.store.get(&key_of(doc), readers_version())? {
-            Kept::Words(words) => Some(DocText::Words(words)),
-            Kept::NoText => Some(DocText::NoText),
-            Kept::Failed { .. } => Some(DocText::Broken),
-        }
+        let kept = keep.as_ref()?.store.get(&key_of(doc), readers_version())?;
+        Some(doc_text(kept))
+    }
+
+    fn place(&self, path: &Path) -> Option<(u32, u32)> {
+        let keep = self.keep.read();
+        keep.as_ref()?.store.place(&path.to_string_lossy())
+    }
+
+    fn kept_each(&self, docs: &[Doc<'_>], each: &mut dyn FnMut(usize, Option<DocText>)) {
+        let keep = self.keep.read();
+        let Some(k) = keep.as_ref() else {
+            (0..docs.len()).for_each(|i| each(i, None));
+            return;
+        };
+        let keys: Vec<Key> = docs.iter().map(key_of).collect();
+        k.store.get_each(&keys, readers_version(), |i, kept| {
+            each(i, kept.map(doc_text))
+        });
     }
 
     fn read(&self, doc: &Doc<'_>, bytes: &[u8]) -> DocText {
