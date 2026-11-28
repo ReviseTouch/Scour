@@ -331,9 +331,20 @@ impl Tag {
         }
     }
 
-    /// Hidden by the page: `hidden`, `aria-hidden`, or a style that says so.
+    /// Hidden by the page: `hidden`, `aria-hidden`, or a style that says so —
+    /// or a box a page keeps out of sight until asked, which only its style
+    /// sheet hides: a dialog, a pop-up, a modal, a tooltip.
     fn hidden(&self) -> bool {
+        let boxed = |v: &str| {
+            let v = v.to_ascii_lowercase();
+            ["popup", "modal", "tooltip"].iter().any(|w| v.contains(w))
+        };
         self.attr("hidden").is_some()
+            || self
+                .attr("role")
+                .is_some_and(|r| matches!(r, "dialog" | "alertdialog" | "tooltip"))
+            || self.attr("id").is_some_and(boxed)
+            || self.attr("class").is_some_and(boxed)
             || self
                 .attr("aria-hidden")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true"))
@@ -560,7 +571,9 @@ mod tests {
     #[test]
     fn what_the_page_hides_is_not_shown() {
         let html = "<div style=\"display: none\"><div>yardım</div><p>gizli</p></div>\
-                    <p hidden>yok</p><span aria-hidden=true>süs</span><p>görünen</p>";
+                    <p hidden>yok</p><span aria-hidden=true>süs</span><p>görünen</p>\
+                    <div id=\"mdbook-help-popup\"><h2>Keyboard shortcuts</h2></div>\
+                    <div role=dialog>soru</div>";
         let flow = flow(html.as_bytes()).unwrap();
         let all: Vec<String> = paras(&flow).iter().map(|p| p.text()).collect();
         assert_eq!(all, ["görünen"]);
