@@ -3,6 +3,8 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
+use crate::{Encoding, decode, encoding_of};
+
 /// How much text is worth sending: the head of any source file or config, far
 /// short of what a log grows to.
 pub(super) const TEXT_CAP: u64 = 256 * 1024;
@@ -30,16 +32,20 @@ pub fn open_file(path: &std::path::Path) -> std::io::Result<File> {
 
 /// The head of a file as text, whether that is all of it, and the file's length.
 /// Lossy: a file that sniffed as text can still hold one bad byte further in.
+/// In the encoding its first bytes say: see [`crate::encoding_of`].
 pub fn text_head(path: &std::path::Path) -> std::io::Result<(String, bool, u64)> {
     let f = open_file(path)?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut buf = Vec::with_capacity(TEXT_CAP.min(len.max(1)) as usize);
     f.take(TEXT_CAP).read_to_end(&mut buf)?;
-    Ok((
-        String::from_utf8_lossy(&buf).into_owned(),
-        len <= TEXT_CAP,
-        len,
-    ))
+    let encoding = encoding_at(&buf);
+    Ok((decode(&buf, encoding, true), len <= TEXT_CAP, len))
+}
+
+/// What a file whose first bytes are `buf`'s is written in; UTF-8 when they
+/// say nothing, as for a file that is not text but is shown as text anyway.
+fn encoding_at(buf: &[u8]) -> Encoding {
+    encoding_of(&buf[..buf.len().min(super::shape::SNIFF)]).unwrap_or(Encoding::Utf8)
 }
 
 /// A stretch of a text file around one place in it, and where that stretch
@@ -83,8 +89,14 @@ pub fn text_near(
             first_line: 1,
         });
     }
-    let f = open_file(path)?;
+    let mut f = open_file(path)?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut head = Vec::with_capacity(super::shape::SNIFF);
+    (&mut f)
+        .take(super::shape::SNIFF as u64)
+        .read_to_end(&mut head)?;
+    let encoding = encoding_at(&head);
+    f.seek(SeekFrom::Start(0))?;
     let mut reader = std::io::BufReader::with_capacity(CHUNK, f);
     // Walked to the place, counting newlines and keeping where the last few
     // lines began, as (byte, line).
@@ -129,17 +141,25 @@ pub fn text_near(
     let floor = at.saturating_sub(BEFORE_BYTES);
     // The earliest of the last few line starts that is close enough; when even
     // the place's own line began further back, inside it.
-    let (from, first_line) = starts
+    let (mut from, first_line) = starts
         .iter()
         .copied()
         .find(|&(b, _)| b >= floor && b <= at)
         .unwrap_or((floor, newlines + 1));
+    // UTF-16 is read two bytes at a time, from the first after the mark.
+    if matches!(encoding, Encoding::Utf16Le | Encoding::Utf16Be) {
+        from &= !1;
+        if from > 0 && from < 2 {
+            from = 2;
+        }
+    }
     let mut f = open_file(path)?;
     f.seek(SeekFrom::Start(from))?;
     let mut buf = Vec::with_capacity(TEXT_CAP.min(len.saturating_sub(from).max(1)) as usize);
     f.take(TEXT_CAP).read_to_end(&mut buf)?;
-    // Entered mid-line: not in the middle of a character.
-    let skip = if starts.iter().any(|&(b, _)| b == from) {
+    // Entered mid-line: not in the middle of a character, which only UTF-8
+    // has more than one byte of and does not say by its first.
+    let skip = if encoding != Encoding::Utf8 || starts.iter().any(|&(b, _)| b == from) {
         0
     } else {
         buf.iter()
@@ -149,7 +169,7 @@ pub fn text_near(
     };
     let read = buf.len() as u64;
     Ok(Near {
-        text: String::from_utf8_lossy(&buf[skip..]).into_owned(),
+        text: decode(&buf[skip..], encoding, from == 0),
         cut: from + read < len,
         len,
         from: from + skip as u64,

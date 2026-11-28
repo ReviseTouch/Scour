@@ -5,9 +5,11 @@
 //! (nothing here checks) and the response headers.
 
 mod helpers;
+mod means;
 mod read;
 mod shape;
 pub use helpers::*;
+pub use means::*;
 pub use read::*;
 pub use shape::*;
 

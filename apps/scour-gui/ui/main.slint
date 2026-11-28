@@ -903,6 +903,8 @@ export component MainWindow inherits Window {
     in property <string> set-preview-note;
     in property <string> set-office;
     in property <string> set-office-note;
+    in property <string> set-peek-means;
+    in property <string> peek-means;
     in property <[string]> office-labels: ["Drawn", "Text"];
     in property <bool> preview-on;
     /// How much bigger or smaller than the desktop everything is drawn: the
@@ -5848,6 +5850,8 @@ export component MainWindow inherits Window {
         set-preview-note: root.set-preview-note;
         set-office: root.set-office;
         set-office-note: root.set-office-note;
+        set-peek-means: root.set-peek-means;
+        peek-means: root.peek-means;
         office-labels: root.office-labels;
         office-text: root.peek-office-text;
         office-picked(text) => {

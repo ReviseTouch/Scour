@@ -325,6 +325,13 @@ fn serve(mut stream: TcpStream, client: &Pool, addr: &str, token: &str, doing: D
         "/api/rescan" => disks::api_rescan(&mut stream, client, &req),
         "/api/reread" => disks::api_reread(&mut stream, client, &req),
         "/api/texts" => disks::api_texts(&mut stream, client, &req),
+        "/api/means" => http::json(
+            &mut stream,
+            &serde_json::to_value(scour_preview::means(
+                QUICKLOOK.get().and_then(|q| q.as_deref()),
+            ))
+            .unwrap_or_default(),
+        ),
         "/api/index" => disks::api_index(&mut stream, client),
         "/api/index-do" => disks::api_index_do(&mut stream, client, &req, doing.launch),
         "/api/resources" => resources::api_resources(&mut stream, client),

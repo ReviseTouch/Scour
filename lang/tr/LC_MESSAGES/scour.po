@@ -3409,3 +3409,24 @@ msgstr "belge yer olmadığı için tutulmadı"
 
 msgid "room for all"
 msgstr "hepsine yetecek yer"
+
+msgid "Previews on this machine"
+msgstr "Bu makinede önizleme"
+
+msgid "PDF pages"
+msgstr "PDF sayfaları"
+
+msgid "Office pages"
+msgstr "Office sayfaları"
+
+msgid "Scour's own drawing"
+msgstr "Scour'un kendi çizimi"
+
+msgid "Quick look (Space)"
+msgstr "Hızlı bakış (Boşluk)"
+
+msgid "none"
+msgstr "yok"
+
+msgid "Text in UTF-8, UTF-16 and Windows-1254"
+msgstr "Metin: UTF-8, UTF-16 ve Windows-1254"

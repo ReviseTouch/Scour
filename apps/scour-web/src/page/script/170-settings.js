@@ -78,6 +78,7 @@
       setOfficeView(v);
       drawSettings();
     });
+    drawMeans();
     seg("seg-refresh",
       [["1", T("1 s")], ["2", T("2 s")], ["5", T("5 s")], ["15", T("15 s")], ["60", T("1 min")]],
       String(k.refresh_every || 2),
@@ -193,6 +194,21 @@
     drawIndexReset();
   }
   /* Documents' kept text, beside the index it serves. */
+  /* What shows previews here, asked once: the window says the same, from
+     `scour_preview::means`. */
+  let MEANS = null;
+  function drawMeans() {
+    const el = document.getElementById("peek-means");
+    const say = (m) => {
+      const or = (v, none) => v || T(none);
+      el.textContent = `${T("PDF pages")}: ${or(m.pdf_pages, "none")} · ` +
+        `${T("Office pages")}: ${or(m.office_pages, "Scour's own drawing")} · ` +
+        `${T("Quick look (Space)")}: ${or(m.quick_look, "none")} · ` +
+        T("Text in UTF-8, UTF-16 and Windows-1254");
+    };
+    if (MEANS) { say(MEANS); return; }
+    SERVICE.get("means", {}).then((m) => { MEANS = m; say(m); }).catch(() => {});
+  }
   function loadTexts() {
     SERVICE.get("texts", {}).then((x) => {
       const facts = document.getElementById("texts-facts");

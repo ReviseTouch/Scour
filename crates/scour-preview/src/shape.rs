@@ -187,8 +187,22 @@ pub fn shape_of(path: &std::path::Path, is_dir: bool) -> Shape {
     }
 }
 
-/// Is the head of this file readable: valid UTF-8 with no NUL? The NUL rejects
-/// binaries, the UTF-8 check other encodings. An empty file is text.
+/// How a text file is written, as its first bytes say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Utf8,
+    /// With its byte-order mark: Windows' Notepad wrote these as "Unicode".
+    Utf16Le,
+    Utf16Be,
+    /// Not UTF-8 and no NUL in it, and few control characters: an older
+    /// Turkish machine's code page, read as content search reads it.
+    Cp1254,
+}
+
+/// Is the head of this file text, and in what? A NUL rejects binaries, a
+/// byte-order mark says UTF-16, valid UTF-8 is UTF-8, and anything else with
+/// almost no control characters is 1254. Before, a file of 1254 showed
+/// nothing in the preview, though content search read it (28 Nov).
 fn looks_like_text(path: &std::path::Path) -> bool {
     let Ok(mut f) = open_file(path) else {
         return false;
@@ -198,13 +212,58 @@ fn looks_like_text(path: &std::path::Path) -> bool {
         return false;
     };
     head.truncate(n);
-    if head.contains(&0) {
-        return false;
+    encoding_of(&head).is_some()
+}
+
+/// What `head`, a file's first bytes, is written in; None when it is not text.
+pub fn encoding_of(head: &[u8]) -> Option<Encoding> {
+    if head.starts_with(&[0xFF, 0xFE]) {
+        return Some(Encoding::Utf16Le);
     }
-    match std::str::from_utf8(&head) {
-        Ok(_) => true,
+    if head.starts_with(&[0xFE, 0xFF]) {
+        return Some(Encoding::Utf16Be);
+    }
+    if head.contains(&0) {
+        return None;
+    }
+    match std::str::from_utf8(head) {
+        Ok(_) => return Some(Encoding::Utf8),
         // A character cut by the buffer's edge is not a reason to refuse.
-        Err(e) => e.valid_up_to() + 4 >= head.len(),
+        Err(e) if e.valid_up_to() + 4 >= head.len() => return Some(Encoding::Utf8),
+        Err(_) => {}
+    }
+    let controls = head
+        .iter()
+        .filter(|&&b| b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r' | 0x0C | 0x1A))
+        .count();
+    (controls * 100 <= head.len()).then_some(Encoding::Cp1254)
+}
+
+/// Bytes of a file written in `encoding` as text. `from_start`: they begin
+/// the file, so a byte-order mark is skipped.
+pub fn decode(bytes: &[u8], encoding: Encoding, from_start: bool) -> String {
+    let units = |be: bool| {
+        let body = if from_start {
+            &bytes[2.min(bytes.len())..]
+        } else {
+            bytes
+        };
+        let units = body.as_chunks::<2>().0.iter().map(move |&pair| {
+            if be {
+                u16::from_be_bytes(pair)
+            } else {
+                u16::from_le_bytes(pair)
+            }
+        });
+        char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect()
+    };
+    match encoding {
+        Encoding::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
+        Encoding::Cp1254 => scour_extract::cp1254_decode(bytes),
+        Encoding::Utf16Le => units(false),
+        Encoding::Utf16Be => units(true),
     }
 }
 

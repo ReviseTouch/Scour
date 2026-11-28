@@ -250,6 +250,27 @@ and the page draw the same panel:
 | the facts | the service (`Request::Stat`) — four of them are in no column |
 | whether it is open | `Settings::preview` — a panel pinned in one face opens in the other |
 
+**What is shown of a file**, decided once, by `scour_preview::shape_of` in the
+service (`Request::Preview`), and drawn by each face as it can. This table is
+the rule; `scour-preview`'s tests check that it names every extension the
+code draws.
+
+| file | shown as | where it depends on the machine |
+|---|---|---|
+| a folder | its facts | — |
+| png jpg jpeg jfif gif webp avif bmp ico svg | the picture, thumbnail first | — |
+| pdf | its pages | the window draws them with CoreGraphics (macOS), `Windows.Data.Pdf` (Windows) or the first of Poppler, MuPDF, Ghostscript on the path (Linux); with none, its text. The page leaves a PDF to the browser |
+| mp3 m4a aac oga ogg opus wav flac · mp4 m4v webm ogv mov mkv | played | the page only, by the browser, which decides the codec; the window shows the facts |
+| Word, Excel, PowerPoint (`office::is_office`) | its pages, where LibreOffice or Microsoft Office turns it into a PDF; else drawn by Scour (`office_view`: drawn) or its text | pages only on Windows and macOS: on Linux LibreOffice is never used, a document's seconds being no preview's |
+| OpenDocument (odt ods odp), RTF | its pages where a converter is, as Word's; else its text | as Word's |
+| anything else whose first 8 KB has no NUL | text: UTF-8; UTF-16 with its mark; else, with almost no control bytes, Windows-1254 as content search reads it | — |
+| anything else | its facts | — |
+
+Space opens the desktop's own preview where there is one: `qlmanage`,
+`sushi`, `gnome-sushi`, `nemo-preview`, `gloobus-preview`, `QuickLook.exe`, or
+`scour-web --quicklook CMD`. The settings show, under the list's section, what
+this machine has (`scour_preview::means`).
+
 Pictures are **thumbnail first**: a 380-pixel panel does not decode forty
 megapixels. Failing that, the service is asked (the same door as the grid, the
 same four-at-a-time limit); a file under 512 KB is drawn directly — icons,

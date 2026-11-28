@@ -138,6 +138,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "Word, Excel and PowerPoint files: drawn as they look, or as their plain text.",
     ));
     w.set_office_labels(list(&["Drawn", "Text"]));
+    w.set_set_peek_means(t(cat, "Previews on this machine"));
+    w.set_peek_means(peek_means(cat).into());
     w.set_word_office_drawn(t(cat, "Drawn"));
     w.set_word_office_text(t(cat, "Text"));
     w.set_set_service(t(cat, "Windows service"));
@@ -639,4 +641,27 @@ pub(super) fn grouped(n: u64) -> String {
 /// (`scour_settings::Settings::language`), then the config, then the desktop.
 pub(crate) fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> String {
     scour_i18n::choose(&kept.language, &cfg.ui.language)
+}
+
+/// What shows previews here, as the settings say it: the same words as the
+/// page's, from `scour_preview::means`.
+fn peek_means(cat: &Catalogue) -> String {
+    let m = scour_preview::means(scour_preview::quicklook(None).as_deref());
+    let or = |s: &str, none: &str| {
+        if s.is_empty() {
+            t(cat, none).to_string()
+        } else {
+            s.to_owned()
+        }
+    };
+    format!(
+        "{}: {} · {}: {} · {}: {} · {}",
+        t(cat, "PDF pages"),
+        or(&m.pdf_pages, "none"),
+        t(cat, "Office pages"),
+        or(&m.office_pages, "Scour's own drawing"),
+        t(cat, "Quick look (Space)"),
+        or(&m.quick_look, "none"),
+        t(cat, "Text in UTF-8, UTF-16 and Windows-1254"),
+    )
 }

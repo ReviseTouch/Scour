@@ -34,6 +34,19 @@ pub fn can_convert() -> bool {
     cfg!(any(windows, target_os = "macos")) && (soffice().is_some() || ms_office_available())
 }
 
+/// What turns an Office document into pages here, by name; None where
+/// [`can_convert`] says no.
+pub fn converter() -> Option<&'static str> {
+    if !can_convert() {
+        return None;
+    }
+    Some(if soffice().is_some() {
+        "LibreOffice"
+    } else {
+        "Microsoft Office"
+    })
+}
+
 /// Convert an Office document to a cached PDF, returning its path.
 pub fn to_pdf(path: &Path) -> Option<PathBuf> {
     if !can_convert() {

@@ -75,10 +75,26 @@ fn inspect_pdf(pdf: &Path) -> Option<DocInfo> {
 }
 
 fn has_pdf_renderer() -> bool {
-    cfg!(any(target_os = "macos", windows))
-        || crate::find_on_path("pdftoppm").is_some()
-        || crate::find_on_path("mutool").is_some()
-        || crate::find_on_path("gs").is_some()
+    pdf_renderer().is_some()
+}
+
+/// What draws a PDF's pages here, by name: the system's own, or the first of
+/// Poppler, MuPDF and Ghostscript found on the path.
+pub fn pdf_renderer() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        return Some("CoreGraphics");
+    }
+    if cfg!(windows) {
+        return Some("Windows.Data.Pdf");
+    }
+    [
+        ("pdftoppm", "Poppler"),
+        ("mutool", "MuPDF"),
+        ("gs", "Ghostscript"),
+    ]
+    .into_iter()
+    .find(|(bin, _)| crate::find_on_path(bin).is_some())
+    .map(|(_, name)| name)
 }
 
 fn is_pdf(path: &Path) -> bool {

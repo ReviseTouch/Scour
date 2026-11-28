@@ -57,10 +57,12 @@ fn something_with_a_nul_in_it_is_not_text() {
 }
 
 #[test]
-fn a_file_in_another_encoding_is_not_offered_as_utf8() {
-    // "Türkçe" in ISO-8859-9: no NUL, so only the UTF-8 check can reject it.
+fn a_file_in_another_encoding_is_read_in_it_not_offered_as_utf8() {
+    // "Türkçe" in ISO-8859-9, whose letters are 1254's: shown as written,
+    // never as UTF-8's replacement characters.
     let p = tmp("latin5.txt", b"T\xfcrk\xe7e metin");
-    assert_eq!(shape_of(&p, false), Shape::Nothing);
+    assert_eq!(shape_of(&p, false), Shape::Text);
+    assert_eq!(text_head(&p).unwrap().0, "Türkçe metin");
     let _ = std::fs::remove_file(p);
 }
 
@@ -192,4 +194,93 @@ fn an_office_document_is_its_words_not_its_markup() {
         "{:?}",
         look.head
     );
+}
+
+#[test]
+fn an_older_turkish_file_is_shown_in_its_code_page() {
+    // "Şirket kâğıdı" in Windows-1254: not UTF-8, no NUL.
+    let p = tmp(
+        "eski.txt",
+        b"\xDEirket k\xE2\xF0\xFDd\xFD\nikinci sat\xFDr\n",
+    );
+    assert_eq!(shape_of(&p, false), Shape::Text);
+    let (head, whole, _) = text_head(&p).unwrap();
+    assert_eq!(
+        (head.as_str(), whole),
+        ("Şirket kâğıdı\nikinci satır\n", true)
+    );
+    let near = text_near(&p, None, Some(2)).unwrap();
+    assert!(near.text.starts_with("Şirket"), "{:?}", near.text);
+    let _ = std::fs::remove_file(p);
+}
+
+#[test]
+fn a_file_with_a_byte_order_mark_is_shown_as_utf16() {
+    let words = "Dava dilekçesi\nikinci satır\n";
+    let mut le = vec![0xFF, 0xFE];
+    le.extend(words.encode_utf16().flat_map(u16::to_le_bytes));
+    let mut be = vec![0xFE, 0xFF];
+    be.extend(words.encode_utf16().flat_map(u16::to_be_bytes));
+    for (name, bytes) in [("le.txt", le), ("be.txt", be)] {
+        let p = tmp(name, &bytes);
+        assert_eq!(shape_of(&p, false), Shape::Text, "{name}");
+        assert_eq!(text_head(&p).unwrap().0, words, "{name}");
+        // Around the second line's place: not mid-character, the mark not read.
+        let at = (bytes.len() / 2) as u64 | 1;
+        let near = text_near(&p, Some(at), None).unwrap();
+        assert!(
+            words.contains(near.text.trim_end_matches('\n')),
+            "{name}: {:?}",
+            near.text
+        );
+        assert_eq!(near.from % 2, 0, "{name}");
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+#[test]
+fn what_is_text_and_in_what_is_said_by_the_first_bytes() {
+    assert_eq!(encoding_of(b"plain"), Some(Encoding::Utf8));
+    assert_eq!(encoding_of("şirket".as_bytes()), Some(Encoding::Utf8));
+    assert_eq!(encoding_of(b"\xFEirket"), Some(Encoding::Cp1254));
+    assert_eq!(encoding_of(b"\xFF\xFEa\x00"), Some(Encoding::Utf16Le));
+    assert_eq!(encoding_of(b"a\x00b"), None, "a NUL is a binary");
+    // Not UTF-8 and full of control bytes: a binary with no NUL in its head.
+    let noise: Vec<u8> = (0..200u8)
+        .map(|i| (i.wrapping_mul(37) % 0x20) | (0x80 * (i % 2)))
+        .collect();
+    assert_eq!(encoding_of(&noise), None);
+}
+
+#[test]
+fn what_previews_here_is_said_by_name() {
+    let m = means(Some(&["/usr/bin/sushi".to_owned(), "--x".to_owned()]));
+    assert_eq!(m.quick_look, "sushi");
+    assert_eq!(means(None).quick_look, "");
+    // Linux never turns Office into pages: it draws them.
+    if cfg!(target_os = "linux") {
+        assert_eq!(m.office_pages, "");
+    }
+    if cfg!(any(windows, target_os = "macos")) {
+        assert!(!m.pdf_pages.is_empty());
+    }
+}
+
+/// The architecture's table of what is shown of a file is the rule a person
+/// reads: every extension the code draws is named in it.
+#[test]
+fn the_written_rule_names_every_extension_drawn() {
+    let doc = include_str!("../../../docs/ARCHITECTURE.md");
+    let heading = doc
+        .find("**What is shown of a file**")
+        .expect("the table's heading");
+    let rows = &doc[heading..];
+    let rows = &rows[rows.find("\n|").expect("the table")..];
+    let table = &rows[..rows[1..].find("\n\n").map_or(rows.len(), |end| end + 1)];
+    for (ext, _) in crate::shape::DRAWN {
+        let named = table
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| word == *ext);
+        assert!(named, "{ext} is drawn but not in the written rule");
+    }
 }

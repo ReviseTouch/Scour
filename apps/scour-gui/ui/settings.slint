@@ -81,6 +81,8 @@ export component SettingsPage inherits Rectangle {
     in property <string> set-preview-note;
     in property <string> set-office;
     in property <string> set-office-note;
+    in property <string> set-peek-means;
+    in property <string> peek-means;
     in property <[string]> office-labels;
     in property <bool> office-text;
     callback office-picked(bool);
@@ -596,6 +598,11 @@ export component SettingsPage inherits Rectangle {
                                         value: root.office-text ? "text" : "drawn";
                                         picked(v) => { root.office-picked(v == "text"); }
                                     }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-peek-means;
+                                    note: root.peek-means;
                                 }
                                 Rectangle { height: Theme.hair; background: Theme.line; }
                                 SettingRow {
