@@ -37,6 +37,9 @@ pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
         "ipynb" => return crate::notebook::flow(bytes),
         "rtf" => return crate::rtf::flow(bytes),
         "ttf" => return crate::font::flow(bytes),
+        "rst" => return crate::rst::flow(bytes),
+        "adoc" => return crate::adoc::flow(bytes),
+        "org" => return crate::org::flow(bytes),
         "csv" => return crate::csv::flow(bytes, extension),
         other => return Err(format!("{other} has no drawing here")),
     };

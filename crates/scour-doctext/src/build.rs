@@ -49,6 +49,8 @@ pub(crate) struct Builder {
     table: Option<(Vec<Align>, Vec<Row>)>,
     row: Option<Row>,
     cell: Option<Vec<Para>>,
+    /// Columns the cell being read covers.
+    span: u32,
     /// Pictures' bytes so far, as base64.
     pictures: usize,
     text: usize,
@@ -222,6 +224,8 @@ impl Builder {
     pub fn end_list(&mut self) {
         self.flush();
         self.lists.pop();
+        // An item that said nothing leaves no mark for what follows.
+        self.mark = None;
         // The gap a list leaves under it.
         if self.lists.is_empty()
             && let Some(Block::Para(p)) = self.blocks.last_mut()
@@ -333,6 +337,12 @@ impl Builder {
             self.row(false);
         }
         self.cell = Some(Vec::new());
+        self.span = 1;
+    }
+
+    /// The cell being read covers `columns` of the table's columns.
+    pub fn span(&mut self, columns: u32) {
+        self.span = columns.max(1);
     }
 
     pub fn end_cell(&mut self) {
@@ -358,7 +368,7 @@ impl Builder {
         if let Some(row) = self.row.as_mut() {
             row.cells.push(Cell {
                 paras,
-                span: 1,
+                span: self.span.max(1),
                 shade: None,
             });
         }
@@ -448,10 +458,16 @@ fn same(a: &Run, b: &Run) -> bool {
 
 /// A table's rows, its columns as wide as their words ask, within reason.
 fn table(mut rows: Vec<Row>) -> Table {
-    let columns = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0);
+    let covered = |r: &Row| {
+        r.cells
+            .iter()
+            .map(|c| c.span.max(1) as usize)
+            .sum::<usize>()
+    };
+    let columns = rows.iter().map(covered).max().unwrap_or(0);
     // A short row is filled, so the grid's lines run across.
     for row in &mut rows {
-        while row.cells.len() < columns {
+        for _ in covered(row)..columns {
             row.cells.push(Cell {
                 paras: Vec::new(),
                 span: 1,
@@ -459,11 +475,16 @@ fn table(mut rows: Vec<Row>) -> Table {
             });
         }
     }
+    // A column is as wide as the words of the cells that are in it alone.
     let mut want = vec![3.0f32; columns];
     for row in &rows {
-        for (i, cell) in row.cells.iter().enumerate() {
-            let chars: usize = cell.paras.iter().map(|p| p.text().chars().count()).sum();
-            want[i] = want[i].max((chars as f32).min(40.0));
+        let mut column = 0;
+        for cell in &row.cells {
+            if cell.span <= 1 {
+                let chars: usize = cell.paras.iter().map(|p| p.text().chars().count()).sum();
+                want[column] = want[column].max((chars as f32).min(40.0));
+            }
+            column += cell.span.max(1) as usize;
         }
     }
     let total: f32 = want.iter().sum::<f32>().max(1.0);

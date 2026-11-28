@@ -165,6 +165,7 @@ fn the_same_documents_are_made_into_pages_and_flow() {
                     "ipynb", "msg", "rtf", "rar", "7z", "db", "sqlite", "sqlite3"
                 ],
                 &["ttf", "otf", "ttc"],
+                &["rst", "adoc", "asciidoc", "org"],
             ]
             .concat()
         )

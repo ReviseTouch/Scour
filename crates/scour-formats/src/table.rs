@@ -108,6 +108,9 @@ pub static FORMATS: &[Format] = &[
     f("7z").flows().binary(),
     f("a").binary(),
     f("aac").streamed("audio/aac"),
+    // AsciiDoc, drawn as Asciidoctor lays it out.
+    f("adoc").flows(),
+    f("asciidoc").like("adoc").flows(),
     f("avi").thumb("video/x-msvideo").binary(),
     f("avif").whole("image/avif").thumbed().binary(),
     f("bmp").whole("image/bmp").thumbed().direct().binary(),
@@ -186,6 +189,8 @@ pub static FORMATS: &[Format] = &[
     f("opf").markup(),
     f("opus").streamed("audio/ogg").binary(),
     // A font, drawn as its letters.
+    // Org, drawn as Org mode lays it out: headlines, lists, tables, blocks.
+    f("org").flows(),
     f("otf").like("ttf").flows().binary(),
     // OpenDocument's templates: its documents' containers.
     f("otp").like("odp").converts().flows().here().zip(),
@@ -212,6 +217,8 @@ pub static FORMATS: &[Format] = &[
     f("rar").flows().binary(),
     f("rlib").binary(),
     f("rmeta").binary(),
+    // reStructuredText, drawn as it reads: titles, lists, tables, directives.
+    f("rst").flows(),
     f("rtf").converts().flows().here(),
     f("so").binary(),
     f("sqlite").flows().binary(),

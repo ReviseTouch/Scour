@@ -1570,6 +1570,33 @@ below are drawn ahead once the hand rests. Nine arrow presses 70 ms apart
 over ten files: seven drawn, three never asked for, each on screen 2–39 ms
 after it was asked.
 
+## Markup pandoc reads, read by Scour (2026-11-28)
+
+reStructuredText, AsciiDoc and Org are drawn by readers of Scour's own, with
+pandoc's test documents (`test/rst-reader.rst`, `test/asciidoc-reader.adoc`,
+`test/writer.org`) as the reference for what each construct is: pandoc is
+not run, and none of its code is in Scour. The three share one reader of
+inline marks: a constrained delimiter counts at a word's edge, an
+unconstrained one anywhere. `flow_cost`, release:
+
+| file | bytes | ms | drawn |
+|---|---|---|---|
+| pandoc's `rst-reader.rst` | 9,941 | 0.44 | 31 headings, 208 paragraphs, 8 tables (cells spanning rows and columns) |
+| fish `CHANGELOG.rst` | 304,517 | 5.65 | 262 headings, 2,295 paragraphs |
+| Python's `library/os.rst` (Sphinx) | 202,754 | 3.27 | 2,025 paragraphs: each `function::` its signature over its body |
+| pandoc's `asciidoc-reader.adoc` | 12,602 | 0.53 | 55 headings, 299 paragraphs, 18 tables |
+| ccache `news.adoc` | 161,524 | 6.12 | 342 headings, 1,266 paragraphs |
+| ninja `manual.asciidoc` (underlined titles) | 51,579 | 1.94 | 42 headings, 336 paragraphs |
+| pandoc's `writer.org` | 11,568 | 0.29 | 32 headings, 273 paragraphs, 1 table |
+
+Each reader was given 7,858 files of this machine, its own and others —
+Markdown, text, pandoc's whole test directory — 31,000 readings with no
+panic, the slowest 16 ms (a 500 KB change log, cut at the preview's bound).
+**What it cost was depth.** A file of 3,000 lines each indented one more
+than the last took 7.8 s: each level dedents and reads again all the lines
+under it. Past 32 blocks deep, what is deeper is drawn as plain words, and
+the same file takes 270 ms.
+
 ## Reproducing
 
 ```sh
