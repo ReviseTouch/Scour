@@ -477,6 +477,10 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             disk,
             dead,
             reader,
+            full,
+            refused,
+            needed_mb,
+            memory,
         } => {
             if !*reader {
                 println!("no document reader is installed: PDF and legacy Office are not read");
@@ -493,6 +497,18 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     format_size(u64::from(*max_mb) << 20, BINARY),
                     format_size(*dead, BINARY),
                 );
+                println!("in memory {}", format_size(*memory, BINARY));
+                if *full {
+                    println!(
+                        "full      what was read within a day is kept; nothing new until some is older"
+                    );
+                }
+                if *refused > 0 {
+                    println!(
+                        "not kept  {refused} documents for want of room; all would fit in about {}",
+                        format_size(needed_mb << 20, BINARY)
+                    );
+                }
             }
         }
         Response::Resources(r) => resources(r),

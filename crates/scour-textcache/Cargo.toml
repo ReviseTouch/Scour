@@ -18,6 +18,7 @@ workspace = true
 structured-zstd = { workspace = true }
 parking_lot = { workspace = true }
 simdutf8 = { workspace = true }
+hashbrown = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

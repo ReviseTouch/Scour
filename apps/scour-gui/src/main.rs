@@ -634,6 +634,7 @@ fn main() -> Result<()> {
     window.set_narrow_on(!kept.narrow_off);
     window.set_texts_on(!kept.texts_off);
     window.set_texts_ahead_on(kept.texts_ahead);
+    window.set_texts_max_choice(kept.texts_max_mb.to_string().into());
     window.set_threads_choice(kept.search_threads.to_string().into());
     window.set_fresh_choice(kept.fresh_within.to_string().into());
     window.set_every_choice(

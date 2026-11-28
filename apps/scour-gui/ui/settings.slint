@@ -241,6 +241,10 @@ export component SettingsPage inherits Rectangle {
     in property <bool> texts-on: true;
     in property <string> set-texts-kept;
     in property <string> texts-facts;
+    in property <string> set-texts-max;
+    in property <string> set-texts-max-note;
+    in property <[string]> texts-max-labels;
+    in property <string> texts-max-choice;
     in property <string> set-texts-clear;
     callback texts-forget();
     in property <string> set-texts-ahead;
@@ -1337,6 +1341,17 @@ export component SettingsPage inherits Rectangle {
                                             enabled: root.texts-on;
                                             clicked => { root.texts-forget(); }
                                         }
+                                    }
+                                }
+                                Rectangle { height: Theme.hair; background: Theme.line; }
+                                SettingRow {
+                                    label: root.set-texts-max;
+                                    note: root.set-texts-max-note;
+                                    Choice {
+                                        labels: root.texts-max-labels;
+                                        values: ["512", "0", "2048", "5120", "10240", "20480"];
+                                        value: root.texts-max-choice;
+                                        picked(v) => { root.perf-picked("texts-max", v); }
                                     }
                                 }
                                 Rectangle { height: Theme.hair; background: Theme.line; }

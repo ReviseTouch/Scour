@@ -153,6 +153,9 @@ regex       = "1"
 # check reads Turkish text at 0.9 GB/s, slower than the search it decides.
 # Already here under `encoding_rs`.
 simdutf8    = "0.1"
+# The text cache's table, keyed by paths kept in one buffer of their own.
+# Already here under three crates; no default hasher, the cache hashes.
+hashbrown   = { version = "0.16", default-features = false }
 
 # One writer per index directory. The lock has to be released by the *kernel*
 # when a process dies — a pid file leaves a stale claim after exactly the crash

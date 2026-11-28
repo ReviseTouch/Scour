@@ -319,6 +319,7 @@ fn run(
             match crate::documents::shared() {
                 Some(documents) => {
                     let held = documents.held(&settings);
+                    let needed_mb = held.needed_mb();
                     Response::Texts {
                         on: held.on,
                         dir: held.dir,
@@ -329,6 +330,10 @@ fn run(
                         disk: held.stats.disk,
                         dead: held.stats.dead,
                         reader: true,
+                        full: held.stats.full,
+                        refused: held.stats.refused,
+                        needed_mb,
+                        memory: held.stats.memory,
                     }
                 }
                 None => Response::Texts {
@@ -341,6 +346,10 @@ fn run(
                     disk: 0,
                     dead: 0,
                     reader: false,
+                    full: false,
+                    refused: 0,
+                    needed_mb: 0,
+                    memory: 0,
                 },
             }
         }

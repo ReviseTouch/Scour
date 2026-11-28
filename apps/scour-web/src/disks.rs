@@ -120,12 +120,17 @@ pub fn api_texts(stream: &mut TcpStream, client: &Pool, req: &http::Req) {
             disk,
             dead,
             reader,
+            full,
+            refused,
+            needed_mb,
+            memory,
         }) => http::json(
             stream,
             &serde_json::json!({
                 "on": on, "dir": dir, "max_mb": max_mb, "documents": documents,
                 "no_text": no_text, "failed": failed, "disk": disk, "dead": dead,
-                "reader": reader,
+                "reader": reader, "full": full, "refused": refused,
+                "needed_mb": needed_mb, "memory": memory,
             }),
         ),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),

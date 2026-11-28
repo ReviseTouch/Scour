@@ -5781,6 +5781,7 @@ dependencies = [
 name = "scour-textcache"
 version = "0.2.0-alpha.12"
 dependencies = [
+ "hashbrown 0.16.1",
  "parking_lot",
  "simdutf8",
  "structured-zstd",

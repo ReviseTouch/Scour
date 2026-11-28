@@ -54,6 +54,26 @@ pub struct Held {
     pub stats: Stats,
 }
 
+impl Held {
+    /// About how many megabytes would hold what is kept and what was refused
+    /// for want of room: the refused text at the ratio the kept text shows,
+    /// or level 19's 6.6 on documents when nothing is kept yet. Zero when
+    /// nothing was refused.
+    pub fn needed_mb(&self) -> u64 {
+        let s = &self.stats;
+        if s.refused == 0 {
+            return 0;
+        }
+        let ratio = if s.disk > 0 && s.live > 0 {
+            s.live as f64 / s.disk as f64
+        } else {
+            6.6
+        };
+        let needed = s.disk as f64 + s.refused_text as f64 / ratio;
+        (needed / (1 << 20) as f64).ceil() as u64
+    }
+}
+
 /// The extractor beside this program, if it was shipped.
 fn extractor() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;

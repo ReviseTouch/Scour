@@ -818,6 +818,10 @@ pub(super) fn places(cx: &Cx, got: Got) {
         disk,
         max_mb,
         reader,
+        full,
+        refused,
+        needed_mb,
+        memory,
         ..
     } = &*reply
     {
@@ -838,7 +842,29 @@ pub(super) fn places(cx: &Cx, got: Got) {
                 t(cat, "would not open"),
                 compact_bytes(*disk),
                 compact_bytes(u64::from(*max_mb) << 20),
-            )
+            ) + &format!(" · {} {}", compact_bytes(*memory), t(cat, "in memory"))
+                + &if *full {
+                    format!(
+                        "\n{}",
+                        t(
+                            cat,
+                            "Full: what was read within a day is kept, and nothing new until some of it is older."
+                        )
+                    )
+                } else {
+                    String::new()
+                }
+                + &if *refused > 0 {
+                    format!(
+                        "\n{} {} · {}: {}",
+                        grouped(*refused),
+                        t(cat, "not kept for want of room"),
+                        t(cat, "room for all"),
+                        compact_bytes(needed_mb << 20),
+                    )
+                } else {
+                    String::new()
+                }
         };
         w.set_texts_facts(facts.into());
         return;

@@ -71,6 +71,16 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "PDF, Word, Excel and PowerPoint files of the old kind and e-mail are read by a helper; kept, the next search finds their words without opening them. Off, every search reads them again.",
     ));
     w.set_set_texts_kept(t(cat, "Documents' text kept"));
+    w.set_set_texts_max(t(cat, "Size limit"));
+    w.set_set_texts_max_note(t(
+        cat,
+        "How much compressed text is kept at most. Full, it keeps what was read within a day and takes nothing new.",
+    ));
+    w.set_texts_max_labels(ModelRc::new(VecModel::from(
+        ["512 MB", "1 GB", "2 GB", "5 GB", "10 GB", "20 GB"]
+            .map(slint::SharedString::from)
+            .to_vec(),
+    )));
     w.set_set_texts_clear(t(cat, "Clear"));
     w.set_set_texts_move(t(cat, "Move…"));
     w.set_set_texts_ahead(t(cat, "Read ahead while idle"));

@@ -78,6 +78,19 @@ pub enum Response {
         /// not read.
         #[serde(default)]
         reader: bool,
+        /// At its size with every block read within a day: new texts are not
+        /// kept until one is older.
+        #[serde(default)]
+        full: bool,
+        /// Documents not kept for want of room since the service started, and
+        /// about how many megabytes would have held them and all kept now.
+        #[serde(default)]
+        refused: u64,
+        #[serde(default)]
+        needed_mb: u64,
+        /// The cache's table in the service's memory, about.
+        #[serde(default)]
+        memory: u64,
     },
     /// A piece of an export: CSV text, whole lines, so a relay never buffers a partial
     /// one. The first piece carries the byte-order mark and the heading row. Sized by

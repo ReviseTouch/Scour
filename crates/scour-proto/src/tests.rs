@@ -237,6 +237,10 @@ fn every_response_round_trips() {
             disk: 4096,
             dead: 9,
             reader: true,
+            full: true,
+            refused: 12,
+            needed_mb: 2048,
+            memory: 1 << 20,
         },
         Response::Resources(crate::Resources {
             version: "0.2.0".into(),

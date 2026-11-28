@@ -331,6 +331,10 @@ pub(crate) fn wire(wiring: &Wiring) {
                     w.set_texts_ahead_on(on);
                     change.texts_ahead = Some(on);
                 }
+                "texts-max" => {
+                    w.set_texts_max_choice(value.clone());
+                    change.texts_max_mb = value.parse().ok();
+                }
                 _ => {
                     w.set_fresh_choice(value.clone());
                     change.fresh_within = value.parse().ok();

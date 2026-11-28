@@ -1418,6 +1418,72 @@ The harness was a test module pulled into `store.rs` for the runs and taken
 out after. The installed cache was copied with `cp --reflink`, never opened
 in place.
 
+## Kept texts at scale: the table, a full cache, compaction (2026-11-28)
+
+What grows with the cache is the bookkeeping, not the reading: a kept text is
+never slower to read than to extract. The table was measured on synthetic
+rows (paths of about 90 bytes, as an archive's are), release build:
+
+| rows | before: in memory | after | before: written for each 4 MiB block | after |
+|---|---:|---:|---:|---:|
+| 100,000 | 19 MB | 16 MB | the whole table, 13.4 MB | 139 KB |
+| 1,000,000 | 237 MB | 149 MB | 134 MB | 139 KB |
+| 3,000,000 | 580 MB | 435 MB | 402 MB | 139 KB |
+
+**Memory.**
+- A map of strings held a path, its allocation and its row: 200 to 250 bytes
+  a document.
+- Now paths are kept end to end in one buffer and a row names its path by
+  offset, with a `hashbrown` index of slot numbers: about 150.
+- Loading at start is slower, 0.62 s for a million against 0.45. The base is
+  encoded faster, 39 ms against 60.
+
+**Writes.**
+- The table was encoded under the lock searches wait on, 60 to 224 ms, and
+  written whole after every block. Filling a cache of a million documents
+  wrote hundreds of gigabytes.
+- Now each change is a record appended to a log after the base: checksummed,
+  a torn tail ends it.
+- The base is written whole again only when the log has grown to half of it,
+  or after a compaction or a clearing. A generation number ties the log to
+  its base.
+- A block's number is never used twice: a row whose block was lost in a crash
+  keeps that number taken.
+
+**Full.**
+- At its size the cache gave up its oldest block for every new one. A search
+  wider than the cache therefore extracted, compressed and threw away what it
+  had kept a minute before, and kept nothing.
+- Now the block read longest ago is given up only if nobody read it within a
+  day. Otherwise the cache says it is full and keeps no new text.
+- Documents refused are counted once a path, with their text. The settings
+  show the count and about how much would hold them all, beside a size limit
+  from 512 MB to 20 GB; the default stays 1 GB.
+
+**Compaction and packing.** Level by level, on 33.6 MB of this machine's kept
+text (eight full blocks), structured-zstd:
+
+| level | ratio | compress |
+|---|---:|---:|
+| 3 | 6.68 | 537 MB/s |
+| 9 | 8.72 | 146 MB/s |
+| 12 | 9.10 | 101 MB/s |
+| 15 | 9.50 | 9.7 MB/s |
+| 19 | 10.10 | 6.8 MB/s |
+
+- Compaction wrote every live text again at level 19: about a quarter of an
+  hour of a core a gigabyte.
+- Now a block nine tenths of whose text is still pointed at is left as it
+  is, and the rest are written at level 12.
+- New blocks stay at 19, unless more than two wait for the packer. Then the
+  next is written at 12, so full blocks do not pile up in memory while the
+  readers outrun level 19.
+
+**The installed cache, copied:** a table of version 3, 50,649 texts, 31 MiB.
+- It opened in 36 ms, and every text read back.
+- It was written as version 4, and reopened with the same counts and the
+  same 50,649 texts.
+
 ## Reproducing
 
 ```sh

@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 
 /// zstd's level 19: 6.60x on documents' text in 4 MiB blocks, and read back
 /// at 2 GB/s; compressed once, by a thread nobody waits on.
-const LEVEL: i32 = 19;
+pub(crate) const LEVEL: i32 = 19;
+/// Level 12, where somebody does wait or the work piles up: a compaction, a
+/// packer behind. On this machine's kept text 9.10x at 101 MB/s, where 19 gave
+/// 10.10x at 6.8 MB/s (28 Nov).
+pub(crate) const FAST: i32 = 12;
 
 /// A block's name: eight digits and `.zst`, exactly as [`path_of`] writes.
 pub(crate) fn is_block(name: &str) -> bool {
@@ -19,8 +23,8 @@ pub(crate) fn path_of(dir: &Path, block: u32) -> PathBuf {
     dir.join(format!("{block:08}.zst"))
 }
 
-pub(crate) fn write(dir: &Path, block: u32, text: &[u8]) -> io::Result<u64> {
-    let level = structured_zstd::encoding::CompressionLevel::from_level(LEVEL);
+pub(crate) fn write(dir: &Path, block: u32, text: &[u8], level: i32) -> io::Result<u64> {
+    let level = structured_zstd::encoding::CompressionLevel::from_level(level);
     let packed = structured_zstd::encoding::compress_to_vec(text, level);
     write_private(&path_of(dir, block), &packed)?;
     Ok(packed.len() as u64)

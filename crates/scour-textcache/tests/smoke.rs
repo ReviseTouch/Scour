@@ -68,7 +68,7 @@ fn changed_documents_leave_dead_text_that_compaction_removes() {
 }
 
 #[test]
-fn a_full_cache_gives_up_its_oldest_blocks() {
+fn a_full_cache_keeps_what_it_has_rather_than_trade_it_for_what_comes() {
     let dir = tempfile::tempdir().unwrap();
     // Text that does not compress: random letters.
     let mut seed = 7u64;
@@ -87,9 +87,17 @@ fn a_full_cache_gives_up_its_oldest_blocks() {
             .unwrap();
     }
     store.flush().unwrap();
-    assert!(store.stats().disk <= 3 << 20);
-    assert!(store.get(&key("/d/0", 1, 1), 0).is_none());
+    // Every block was read within the day: none is given up, and the cache
+    // says it is full rather than throw away what a search just kept.
+    let stats = store.stats();
+    assert!(stats.full && stats.disk > 3 << 20, "{stats:?}");
+    assert!(store.get(&key("/d/0", 1, 1), 0).is_some());
     assert!(store.get(&key("/d/7", 1, 1), 0).is_some());
+    store
+        .put(&key("/d/8", 1, 1), &Kept::Words(noise(1 << 10)))
+        .unwrap();
+    assert!(store.get(&key("/d/8", 1, 1), 0).is_none());
+    assert_eq!(store.stats().refused, 1);
 }
 
 #[test]

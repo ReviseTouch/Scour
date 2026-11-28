@@ -99,6 +99,15 @@
       setTimeout(loadTexts, 300);
       drawSettings();
     });
+    seg("seg-texts-max",
+      [["512", "512 MB"], ["0", "1 GB"], ["2048", "2 GB"], ["5120", "5 GB"], ["10240", "10 GB"], ["20480", "20 GB"]],
+      String(k.texts_max_mb || 0),
+      (v) => {
+        KEPT.texts_max_mb = Number(v);
+        keep({ texts_max_mb: Number(v) });
+        setTimeout(loadTexts, 300);
+        drawSettings();
+      });
     seg("seg-texts-ahead", [["on", T("On")], ["off", T("Off")]], k.texts_ahead ? "on" : "off", (v) => {
       KEPT.texts_ahead = v === "on";
       keep({ texts_ahead: KEPT.texts_ahead });
@@ -193,7 +202,12 @@
         : !x.on
           ? T("Not kept: every search reads them again.")
           : `${x.dir}\n${fmt(x.documents)} ${T("with text")} · ${fmt(x.no_text)} ${T("without text")} · ` +
-            `${fmt(x.failed)} ${T("would not open")} · ${bytes(x.disk)} / ${bytes(x.max_mb * 1048576)}`;
+            `${fmt(x.failed)} ${T("would not open")} · ${bytes(x.disk)} / ${bytes(x.max_mb * 1048576)} · ` +
+            `${bytes(x.memory || 0)} ${T("in memory")}` +
+            (x.full ? `\n${T("Full: what was read within a day is kept, and nothing new until some of it is older.")}` : "") +
+            (x.refused
+              ? `\n${fmt(x.refused)} ${T("not kept for want of room")} · ${T("room for all")}: ${bytes(x.needed_mb * 1048576)}`
+              : "");
       document.getElementById("texts-clear").disabled = !x.on;
       document.getElementById("texts-move").disabled = !x.on;
     }).catch(() => {});

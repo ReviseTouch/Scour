@@ -3391,3 +3391,21 @@ msgstr "Word, Excel ve PowerPoint dosyaları: göründükleri gibi çizilmiş ya
 
 msgid "Drawn"
 msgstr "Çizim"
+
+msgid "Size limit"
+msgstr "Boyut sınırı"
+
+msgid "How much compressed text is kept at most. Full, it keeps what was read within a day and takes nothing new."
+msgstr "En çok ne kadar sıkıştırılmış metin tutulur. Dolunca son bir günde okunanları korur, yenisini almaz."
+
+msgid "in memory"
+msgstr "bellekte"
+
+msgid "Full: what was read within a day is kept, and nothing new until some of it is older."
+msgstr "Dolu: son bir günde okunanlar korunuyor; bir kısmı eskiyene dek yeni metin alınmıyor."
+
+msgid "not kept for want of room"
+msgstr "belge yer olmadığı için tutulmadı"
+
+msgid "room for all"
+msgstr "hepsine yetecek yer"

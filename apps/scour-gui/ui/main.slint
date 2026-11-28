@@ -858,6 +858,10 @@ export component MainWindow inherits Window {
     in property <bool> texts-on: true;
     in property <string> set-texts-kept;
     in property <string> texts-facts;
+    in property <string> set-texts-max;
+    in property <string> set-texts-max-note;
+    in property <[string]> texts-max-labels;
+    in-out property <string> texts-max-choice;
     in property <string> set-texts-clear;
     callback texts-forget();
     in property <string> set-texts-ahead;
@@ -6007,6 +6011,10 @@ export component MainWindow inherits Window {
         texts-on: root.texts-on;
         set-texts-kept: root.set-texts-kept;
         texts-facts: root.texts-facts;
+        set-texts-max: root.set-texts-max;
+        set-texts-max-note: root.set-texts-max-note;
+        texts-max-labels: root.texts-max-labels;
+        texts-max-choice: root.texts-max-choice;
         set-texts-clear: root.set-texts-clear;
         texts-forget() => { root.texts-forget(); }
         set-texts-ahead: root.set-texts-ahead;
