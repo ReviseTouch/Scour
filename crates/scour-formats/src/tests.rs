@@ -49,8 +49,48 @@ fn an_extension_is_found_in_any_case_and_nothing_else_is() {
 }
 
 // **The lists the table replaced, as they stood (2026-11-28), each against the
-// question now asked of it.** A change here is a change in what Scour does
-// with a file, and should read as one in the diff.
+// question now asked of it** — and what was added to them since, named where
+// it was. A change here is a change in what Scour does with a file, and
+// should read as one in the diff.
+
+/// Added 2026-11-28: the macro-enabled documents and the templates of
+/// Microsoft's formats (office_oxide reads them as their documents),
+/// OpenDocument's templates and its flat XML. Not the legacy templates:
+/// `.dot` is Graphviz's as often, `.pot` gettext's.
+const VARIANTS: &[&str] = &[
+    "docm", "dotm", "dotx", "xlsm", "xltm", "xltx", "pptm", "potm", "potx", "ppsm", "ppsx", "ott",
+    "ots", "otp", "fodt", "fods", "fodp",
+];
+/// The variants that are zips read here, as their documents are.
+const ZIPPED: &[&str] = &[
+    "docm", "dotm", "dotx", "xlsm", "xltm", "xltx", "pptm", "potm", "potx", "ppsm", "ppsx", "ott",
+    "ots", "otp",
+];
+
+fn with(old: &[&str], added: &[&str]) -> BTreeSet<String> {
+    set(old).union(&set(added)).cloned().collect()
+}
+
+#[test]
+fn a_variant_is_read_by_a_row_that_reads_itself() {
+    for f in FORMATS {
+        let like = of(f.like).unwrap_or_else(|| panic!("{} is like {}, not a row", f.ext, f.like));
+        assert_eq!(
+            like.like, like.ext,
+            "{} → {} → {}",
+            f.ext, f.like, like.like
+        );
+        assert_eq!(
+            (f.flows, f.converts),
+            (like.flows, like.converts),
+            "{}",
+            f.ext
+        );
+    }
+    for ext in VARIANTS {
+        assert!(of(ext).is_some(), "{ext}");
+    }
+}
 
 #[test]
 fn the_preview_draws_what_it_drew() {
@@ -101,16 +141,29 @@ fn the_same_documents_are_made_into_pages_and_flow() {
     // scour-preview `office::OFFICE_EXTS`.
     assert_eq!(
         rows(|f| f.converts),
-        set(&[
-            "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp", "xls", "xlsx", "ods"
-        ])
+        with(
+            &[
+                "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp", "xls", "xlsx", "ods"
+            ],
+            VARIANTS
+        )
     );
     // scour-flow `flows`.
     assert_eq!(
         rows(|f| f.flows),
-        set(&[
-            "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp"
-        ])
+        with(
+            &[
+                "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp"
+            ],
+            &[
+                VARIANTS,
+                &[
+                    "md", "markdown", "csv", "tsv", "html", "htm", "xhtml", "epub", "eml"
+                ],
+                &["zip", "jar", "whl", "tar", "tgz", "gz"],
+            ]
+            .concat()
+        )
     );
 }
 
@@ -119,7 +172,10 @@ fn words_are_read_where_they_were() {
     // scour-extract `document::kind_of`.
     assert_eq!(
         rows(|f| f.read == Read::Here),
-        set(&["docx", "odt", "ods", "odp", "pptx", "xlsx", "udf", "rtf"])
+        with(
+            &["docx", "odt", "ods", "odp", "pptx", "xlsx", "udf", "rtf"],
+            &[ZIPPED, &["fodt", "fods", "fodp"]].concat()
+        )
     );
     // scour-grep `texts::handed_over`.
     assert_eq!(
@@ -150,9 +206,12 @@ fn a_zip_is_opened_and_passed_by_as_it_was() {
     // scour-grep `zip::role`.
     assert_eq!(
         rows(|f| f.zip),
-        set(&[
-            "udf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "zip", "jar", "whl"
-        ])
+        with(
+            &[
+                "udf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "zip", "jar", "whl"
+            ],
+            ZIPPED
+        )
     );
     assert_eq!(
         rows(|f| f.markup),
@@ -211,8 +270,15 @@ fn thumbnails_and_the_windows_own_pictures_are_the_same() {
     }
     let exts: Vec<&str> = core.iter().map(|(e, _)| *e).collect();
     assert_eq!(rows(|f| f.thumb), set(&exts));
-    // scour-gui `peeking::has_direct_image_ext`.
-    assert_eq!(rows(|f| f.direct), set(&["png", "jpg", "jpeg", "jfif"]));
+    // scour-gui `peeking::has_direct_image_ext`; and since 2026-11-28 the
+    // pictures `image` decodes with its features turned on there.
+    assert_eq!(
+        rows(|f| f.direct),
+        with(
+            &["png", "jpg", "jpeg", "jfif"],
+            &["gif", "webp", "bmp", "ico", "tif", "tiff"]
+        )
+    );
 }
 
 #[test]

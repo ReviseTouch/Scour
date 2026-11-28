@@ -627,7 +627,8 @@ pub(super) fn show_peek(
 
     doc_marks(w);
     let px = ((480.0 * w.window().scale_factor()) as u32).clamp(256, 1024);
-    let direct_image = look.shape == "image" && has_direct_image_ext(path);
+    // A picture the window decodes itself, whether or not a browser would.
+    let direct_image = has_direct_image_ext(path);
     let paged = scour_preview::doc::is_paged(&scour_core::path::to_path(path));
     let cached = scour_thumbs::cache::existing(path).is_some();
     let coming = !scour_thumbs::native::available()
@@ -658,7 +659,7 @@ pub(super) fn show_peek(
         w,
         peek::Request {
             path,
-            is_image: look.shape == "image",
+            is_image: look.shape == "image" || direct_image,
             px,
             waiting_on_service: coming,
             reading_note: String::new(),

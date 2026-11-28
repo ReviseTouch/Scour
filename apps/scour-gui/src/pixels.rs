@@ -29,14 +29,14 @@ pub fn load_cached_png(path: &Path) -> Option<RgbaBuf> {
     to_rgba_buf(img)
 }
 
-/// Decode a local PNG or JPEG directly at preview resolution, honouring JPEG
-/// EXIF orientation so phone photographs match the desktop's file manager.
+/// Decode a local picture the format table marks `direct` at preview
+/// resolution, honouring JPEG EXIF orientation so phone photographs match the
+/// desktop's file manager.
 pub fn load_direct_image(path: &Path, max_px: u32) -> Option<RgbaBuf> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    let fmt = match ext.as_str() {
-        "png" => ImageFormat::Png,
-        "jpg" | "jpeg" | "jfif" => ImageFormat::Jpeg,
-        _ => return None,
+    let f = scour_formats::of_path(path).filter(|f| f.direct)?;
+    let fmt = match f.ext {
+        "jfif" => ImageFormat::Jpeg,
+        ext => ImageFormat::from_extension(ext)?,
     };
     let bytes = read_bounded(path, DIRECT_CAP)?;
     let orient = if fmt == ImageFormat::Jpeg {

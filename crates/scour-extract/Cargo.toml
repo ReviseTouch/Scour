@@ -17,6 +17,8 @@ workspace = true
 [dependencies]
 # Which documents are read here, by extension: the format table.
 scour-formats = { workspace = true }
+# An archive's listing is a sheet the faces already draw.
+scour-flow = { workspace = true }
 flate2 = { workspace = true }
 memchr = { workspace = true }
 icu_normalizer = { workspace = true }

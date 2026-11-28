@@ -133,12 +133,10 @@ fn ms_office_available() -> bool {
 
 #[cfg(windows)]
 fn convert_via_ms_office(input: &Path, target: &Path) -> bool {
-    let ext = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let script = match ext.as_str() {
+    // By the reader the format table names: a template opens in its
+    // document's program (`scour_formats`).
+    let ext = scour_formats::of_path(input).map_or("", |f| f.like);
+    let script = match ext {
         "doc" | "docx" | "rtf" | "odt" => {
             "$app = New-Object -ComObject Word.Application; $app.Visible = $false; $app.DisplayAlerts = 0; \
              try { $d = $app.Documents.Open($env:SCOUR_IN, $false, $true); $d.ExportAsFixedFormat($env:SCOUR_OUT, 17); $d.Close($false) } \

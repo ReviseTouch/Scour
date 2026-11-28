@@ -77,6 +77,7 @@ hr{border:0;border-top:1px dashed #b8bec5;margin:1em 0}\
 body.book{padding:0;overflow-wrap:normal}\
 .sheet{display:none}.sheet:target,.sheet:has(:target){display:block}\
 .book:not(:has(:target))>.sheet:first-child{display:block}\
+code{font:.92em/1.4 ui-monospace,'Noto Sans Mono',monospace}\
 mark{background:#fff0a6;color:#1f2328;border-radius:2px;padding:0 1px;scroll-margin:5em 0 0}\
 .tabs{display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid #d0d7de;background:#f6f8fa;\
 position:sticky;left:0;width:max-content;min-width:100%;box-sizing:border-box}\
@@ -278,6 +279,7 @@ fn run(r: &Run, m: &Marks, out: &mut String) {
         (r.strike, "s"),
         (r.raise > 0, "sup"),
         (r.raise < 0, "sub"),
+        (r.code, "code"),
     ] {
         if on {
             let _ = write!(open, "<{tag}>");

@@ -96,12 +96,12 @@ pub fn reads_document(path: &Path) -> bool {
     kind_of(path).is_some()
 }
 
-/// The table's documents read in this process (`scour_formats`), by their
-/// extension as the table spells it.
+/// The table's documents read in this process (`scour_formats`), by the
+/// reader the table names: a template is read as its document.
 fn kind_of(path: &Path) -> Option<&'static str> {
     scour_formats::of_path(path)
         .filter(|f| f.read == scour_formats::Read::Here)
-        .map(|f| f.ext)
+        .map(|f| f.like)
 }
 
 /// RTF read whole: it is text with its markup inline, no container.
@@ -111,6 +111,16 @@ const MAX_RTF: u64 = 32 << 20;
 pub fn document(path: &Path, mut file: File, sink: &mut dyn Sink) -> Option<()> {
     let kind = kind_of(path)?;
     let len = file.metadata().ok()?.len();
+    // A flat OpenDocument file is its `content.xml`, with its styles in it.
+    if kind == "fodt" {
+        if len > MAX_ARCHIVE {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(len as usize);
+        std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
+        plain(&bytes, sink);
+        return Some(());
+    }
     if kind == "rtf" {
         if len > MAX_RTF {
             return None;

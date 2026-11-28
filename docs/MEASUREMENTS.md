@@ -1515,6 +1515,36 @@ Every screen photographed with both releases and compared pixel by pixel
 (1–5 % of pixels differ): text lines are 1–2 px tighter and glyph advances a
 hair wider in 1.19 (a segmented control 245 → 247 px); nothing moved.
 
+## Drawing more formats, a file at a time (2026-11-28)
+
+`cargo run --release -p scour-doctext --example flow_cost -- FILE...` reads
+each file as the extractor does and draws it; one run each, this machine.
+A drawing stops at its bounds (`scour_flow::MOST_*`), so a large file costs
+what reaching the bounds costs.
+
+| what | file | bytes | ms | came out as |
+|---|---|---|---|---|
+| Word, macro-enabled | poi `45690.docm` | 49,596 | 3.12 | 3 headings, 11 paragraphs, 2 pictures, 2 tables |
+| Word template | poi `60316.dotx` | 59,583 | 1.00 | 4 headings, 21 paragraphs |
+| Excel, macro-enabled | poi `57181.xlsm` | 334,727 | 39.69 | 6 sheets |
+| PowerPoint template | poi `bug59273.potx` | 617,839 | 1.46 | 1 slide |
+| OpenDocument template | LibreOffice `Candy.otp` | 1,652,392 | 2.13 | 13 slides |
+| flat OpenDocument | LibreOffice `CREDITS.fodt` | 2,054,738 | 17.24 | 5 headings, 9 paragraphs, a picture, 5 tables |
+| Markdown | this repository's `MEASUREMENTS.md` | 76,060 | 0.52 | 43 headings, 237 paragraphs, 54 tables |
+| Markdown | a 2.3 MB notices file | 2,329,787 | 2.54 | cut at the bounds |
+| CSV | csv crate `game.csv` | 2,600,000 | 2.25 | a sheet, cut at 2,000 rows |
+| CSV, 1,602 columns | nvidia `dlsnetparams.csv` | 2,673,928 | 8.39 | a sheet (74.47 before fields past 80 columns were passed over unread) |
+| HTML | rustdoc `struct.Vec.html` | 952,692 | 6.50 | 901 headings, 1,726 paragraphs |
+| HTML | Chromium's licences | 20,115,518 | 9.01 | cut (46.75 before end tags were found in place) |
+| HTML | Rust's `COPYRIGHT.html` | 15,380,909 | 4.80 | cut (109.85 before) |
+| e-book | a 2 MB EPUB | 2,067,824 | 4.53 | 31 chapters, cut at the bounds |
+| e-book | a 31 MB EPUB | 31,662,481 | 1.42 | 6 chapters, 2 pictures |
+| message | mail-parser's `legacy/015.eml` | 11,502 | 0.10 | its two inline pictures drawn |
+
+An archive's listing is read in the service, not drawn from its bytes: a
+zip's central directory from its end whatever its size, a tar's headers from
+its start.
+
 ## Reproducing
 
 ```sh

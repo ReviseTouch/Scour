@@ -36,6 +36,27 @@ pub fn flow(bytes: &[u8]) -> Result<Flow, String> {
         styles.read(&tree);
     }
     styles.read(&content);
+    write(&content, styles, Some(zip))
+}
+
+/// A flat OpenDocument file — `.fodt`, `.fods`, `.fodp` — in `bytes`: the
+/// same document as one XML file, its styles and its body in it, and its
+/// pictures written into it rather than beside it.
+pub fn flow_flat(bytes: &[u8]) -> Result<Flow, String> {
+    if bytes.len() as u64 > MOST_PART {
+        return Err("too large to draw".into());
+    }
+    let content = parse(bytes)?;
+    let mut styles = Styles::default();
+    styles.read(&content);
+    write(&content, styles, None)
+}
+
+fn write(
+    content: &El,
+    styles: Styles,
+    zip: Option<zip::ZipArchive<Cursor<&[u8]>>>,
+) -> Result<Flow, String> {
     let body = content
         .find("office:body")
         .and_then(|b| b.els().next())
@@ -519,7 +540,8 @@ struct Writer<'a> {
     styles: Styles,
     /// The frame being read: its paragraphs are set on its style.
     frame_style: Option<Style>,
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    /// Where the pictures are, by their names; none in a flat file.
+    zip: Option<zip::ZipArchive<Cursor<&'a [u8]>>>,
     blocks: Vec<Block>,
     text: usize,
     pictures: usize,
@@ -558,6 +580,7 @@ impl<'e> Line<'e> {
             color: look.color.or(link.then_some(LINK)),
             marker: look.marker,
             raise: look.raise.unwrap_or(0),
+            code: false,
         };
         let pt = look.pt();
         match self.runs.last_mut() {
@@ -998,7 +1021,7 @@ impl<'a> Writer<'a> {
                 let picture = el
                     .els()
                     .filter(|k| k.name == "draw:image")
-                    .find_map(|img| self.picture(img.attr("xlink:href")?, w, h));
+                    .find_map(|img| self.picture(img, w, h));
                 if let Some(p) = picture {
                     out.push(p);
                 } else if let Some(text_box) = el.els().find(|k| k.name == "draw:text-box") {
@@ -1024,11 +1047,31 @@ impl<'a> Writer<'a> {
         std::mem::replace(&mut self.blocks, held)
     }
 
-    fn picture(&mut self, href: &str, w: Option<f32>, h: Option<f32>) -> Option<Block> {
-        if href.contains("://") || href.starts_with('/') {
-            return None;
-        }
-        let data = part(&mut self.zip, href.trim_start_matches("./"))?;
+    /// A picture by its name in the zip, or written into the file as a flat
+    /// document writes it.
+    fn picture(&mut self, img: &El, w: Option<f32>, h: Option<f32>) -> Option<Block> {
+        let data = match img.attr("xlink:href") {
+            Some(href) if !href.contains("://") && !href.starts_with('/') => {
+                part(self.zip.as_mut()?, href.trim_start_matches("./"))?
+            }
+            Some(_) => return None,
+            None => {
+                let inline = img.els().find(|k| k.name == "office:binary-data")?;
+                let text: String = inline
+                    .kids
+                    .iter()
+                    .filter_map(|n| match n {
+                        Node::Text(t) => Some(t.as_str()),
+                        Node::El(_) => None,
+                    })
+                    .flat_map(|t| t.chars().filter(|c| !c.is_whitespace()))
+                    .collect();
+                if text.len() > scour_flow::MOST_PICTURE {
+                    return None;
+                }
+                scour_flow::decode(&text)?
+            }
+        };
         let mime = if data.starts_with(b"\x89PNG") {
             "image/png"
         } else if data.starts_with(b"\xFF\xD8") {

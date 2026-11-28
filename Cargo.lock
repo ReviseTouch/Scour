@@ -2734,6 +2734,9 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
@@ -5218,8 +5221,10 @@ name = "scour-doctext"
 version = "0.2.0-alpha.12"
 dependencies = [
  "mail-parser",
+ "memchr",
  "office_oxide",
  "pdf_oxide",
+ "pulldown-cmark",
  "quick-xml 0.42.0",
  "scour-flow",
  "scour-formats",
@@ -5276,6 +5281,7 @@ dependencies = [
  "flate2",
  "icu_normalizer",
  "memchr",
+ "scour-flow",
  "scour-formats",
 ]
 
@@ -5658,6 +5664,7 @@ dependencies = [
  "scour-engine",
  "scour-extract",
  "scour-flow",
+ "scour-formats",
  "scour-grep",
  "scour-hotkey",
  "scour-icon",

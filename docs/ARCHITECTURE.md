@@ -268,11 +268,14 @@ tests check that it names every extension the code draws.
 | file | shown as | where it depends on the machine |
 |---|---|---|
 | a folder | its facts | — |
-| png jpg jpeg jfif gif webp avif bmp ico svg | the picture, thumbnail first | — |
+| png jpg jpeg jfif gif webp avif bmp ico svg | the picture, thumbnail first | the window decodes png jpg jpeg jfif gif webp bmp ico tif tiff itself; others need a thumbnailer |
 | pdf | its pages | the window draws them with CoreGraphics (macOS), `Windows.Data.Pdf` (Windows) or the first of Poppler, MuPDF, Ghostscript on the path (Linux); with none, its text. The page leaves a PDF to the browser |
 | mp3 m4a aac oga ogg opus wav flac · mp4 m4v webm ogv mov mkv | played | the page only, by the browser, which decides the codec; the window shows the facts |
-| Word, Excel, PowerPoint (`office::is_office`) | its pages, where LibreOffice or Microsoft Office turns it into a PDF; else drawn by Scour (`office_view`: drawn) or its text | pages only on Windows and macOS: on Linux LibreOffice is never used, a document's seconds being no preview's |
-| OpenDocument (odt ods odp) | as Word, Excel and PowerPoint: its pages where a converter is, else drawn by Scour (`scour-doctext`'s own reader of `content.xml`) or its text | as Word's |
+| Word, Excel, PowerPoint (`office::is_office`), their macro-enabled files and templates (docm dotx dotm xlsm xltx xltm pptm potx potm ppsx ppsm) | its pages, where LibreOffice or Microsoft Office turns it into a PDF; else drawn by Scour (`office_view`: drawn) or its text | pages only on Windows and macOS: on Linux LibreOffice is never used, a document's seconds being no preview's |
+| OpenDocument (odt ods odp), its templates (ott ots otp) and its flat XML (fodt fods fodp) | as Word, Excel and PowerPoint: its pages where a converter is, else drawn by Scour (`scour-doctext`'s own reader of `content.xml`) or its text | as Word's |
+| md markdown · html htm xhtml · epub · eml | drawn by Scour as it reads (`scour-doctext`: pulldown-cmark; its own lenient HTML reader, never the page's markup or scripts; an e-book's chapters in its spine's order with its own pictures; a message's sender, recipients, date, body and attachments), or its text | — |
+| csv tsv | a sheet: RFC 4180's quoting, the separator the lines agree on, numbers to the right, a row of names as the heading | — |
+| zip jar whl · tar tgz gz | what it holds, as a sheet of paths, sizes and dates, read in the service: a zip's central directory from its end, a tar's headers from its start (gzipped up to 256 MB) | — |
 | RTF | its pages where a converter is; else its text | as Word's |
 | anything else whose first 8 KB has no NUL | text: UTF-8; UTF-16 with its mark; else, with almost no control bytes, Windows-1254 as content search reads it | — |
 | anything else | its facts | — |

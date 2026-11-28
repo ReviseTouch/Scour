@@ -172,6 +172,10 @@ pub struct Run {
     /// Raised (1) or lowered (-1) off the line.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub raise: i8,
+    /// Code, in a fixed-width face: a Markdown file's `inline` and fenced
+    /// blocks.
+    #[serde(default, skip_serializing_if = "no")]
+    pub code: bool,
 }
 
 fn no(b: &bool) -> bool {

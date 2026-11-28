@@ -50,6 +50,10 @@ pub enum Read {
 pub struct Format {
     /// Lowercase, without its dot.
     pub ext: &'static str,
+    /// The extension whose reader reads this one: a macro-enabled document or
+    /// a template is its document's container, read the same way. Itself,
+    /// for most.
+    pub like: &'static str,
     /// The media type a face is told, or a thumbnailer is looked up by.
     pub mime: Option<&'static str>,
     pub shown: Shown,

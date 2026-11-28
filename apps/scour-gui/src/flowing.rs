@@ -509,6 +509,7 @@ fn paragraph(p: &Para, bold: bool) -> StyledTextParagraph {
         style(r.italic, Style::Emphasis);
         style(r.underline, Style::Underline);
         style(r.strike, Style::Strikethrough);
+        style(r.code, Style::Code);
         if let Some([red, green, blue]) = r.color {
             style(
                 true,

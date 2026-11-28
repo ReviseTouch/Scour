@@ -3,8 +3,14 @@
 //! here — the caller reads the file under its own identity and bounds. And a
 //! word processor's document as it flows in a preview, from the same library.
 
+mod build;
+mod csv;
+mod epub;
 mod flow;
 mod format;
+mod html;
+mod mail;
+mod markdown;
 mod odf;
 mod text;
 

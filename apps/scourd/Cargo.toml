@@ -42,6 +42,8 @@ scour-preview       = { workspace = true }
 scour-flow          = { workspace = true }
 scour-source-fs     = { workspace = true }
 scour-extract       = { workspace = true }
+# What is drawn as it flows, and what is listed: the format table.
+scour-formats       = { workspace = true }
 scour-textcache     = { workspace = true }
 parking_lot         = { workspace = true }
 anyhow              = { workspace = true }

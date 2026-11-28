@@ -234,15 +234,17 @@ fn run(
                 look.shape = "text".to_owned();
                 look.kind = "text/plain".to_owned();
             }
-            // Where its pages are not drawn, a word processor's document flows,
-            // when there is an extractor to read it.
-            look.flow = !entry.is_dir
-                && !scour_preview::office::can_convert()
-                && crate::documents::shared().is_some()
-                && native
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(scour_flow::flows);
+            // What the format table draws flows (`scour_formats`): where its
+            // pages are not made, and with an extractor to read it — an
+            // archive is listed here, and needs none.
+            let format = (!entry.is_dir)
+                .then(|| scour_formats::of_path(&native))
+                .flatten()
+                .filter(|f| f.flows);
+            look.flow = format.is_some_and(|f| {
+                !(f.converts && scour_preview::office::can_convert())
+                    && (scour_extract::lists(&native) || crate::documents::shared().is_some())
+            });
             Response::Preview(look)
         }
         Request::Flow { path } => {
@@ -250,6 +252,18 @@ fn run(
             let Ok(_as) = crate::as_owner::for_a_read() else {
                 return Err(scour_core::Error::PermissionDenied { path });
             };
+            // An archive is listed here, by its directory or its headers:
+            // the extractor would be handed the whole of it.
+            let native = scour_core::path::to_path(&entry.path);
+            if scour_extract::lists(&native) {
+                let listed = std::fs::File::open(&native)
+                    .map_err(|e| e.to_string())
+                    .and_then(scour_extract::listing);
+                return match listed {
+                    Ok(flow) => Ok(Response::Flow(flow)),
+                    Err(why) => Err(scour_core::Error::Io { detail: why }),
+                };
+            }
             let Some(documents) = crate::documents::shared() else {
                 return Err(scour_core::Error::unsupported(
                     "no extractor is installed to read documents",

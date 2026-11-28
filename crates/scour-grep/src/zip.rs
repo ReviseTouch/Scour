@@ -62,6 +62,7 @@ impl EntryMeta {
             comp_size: self.comp_size,
             uncomp_size: self.uncomp_size,
             local_offset: self.local_offset,
+            modified: 0,
         }
     }
 }

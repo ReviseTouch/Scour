@@ -28,6 +28,9 @@ pub struct Entry {
     pub comp_size: u64,
     pub uncomp_size: u64,
     pub local_offset: u64,
+    /// When it was last changed, as DOS writes it: the date in the high
+    /// half, the time in the low.
+    pub modified: u32,
 }
 
 impl Entry {
@@ -88,6 +91,8 @@ pub fn central(cd: &[u8], base: usize, max_count: usize, mut each: impl FnMut(En
         let clen = u16::from_le_bytes([cd[at + 32], cd[at + 33]]) as usize;
         let local_offset =
             u32::from_le_bytes([cd[at + 42], cd[at + 43], cd[at + 44], cd[at + 45]]) as u64;
+        // Time then date, little-endian: the date lands in the high half.
+        let modified = u32::from_le_bytes([cd[at + 12], cd[at + 13], cd[at + 14], cd[at + 15]]);
         let Some(name_end) = at.checked_add(46).and_then(|x| x.checked_add(nlen)) else {
             break;
         };
@@ -104,6 +109,7 @@ pub fn central(cd: &[u8], base: usize, max_count: usize, mut each: impl FnMut(En
             comp_size,
             uncomp_size,
             local_offset,
+            modified,
         });
         seen += 1;
         at = next;
@@ -181,6 +187,13 @@ pub fn local_headers(archive: &[u8], mut each: impl FnMut(Entry)) {
             comp_size: eff_comp,
             uncomp_size,
             local_offset: at as u64,
+            // A local header's time is where the central one's is, less 2.
+            modified: u32::from_le_bytes([
+                archive[at + 10],
+                archive[at + 11],
+                archive[at + 12],
+                archive[at + 13],
+            ]),
         });
         if comp_size == 0 {
             break;

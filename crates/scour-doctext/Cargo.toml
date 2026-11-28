@@ -28,3 +28,7 @@ mail-parser  = { version = "=0.11.9", default-features = false, features = ["ful
 # crates at the versions it already brings, so nothing new is built.
 zip          = { version = "9.1", default-features = false, features = ["deflate"] }
 quick-xml    = "0.42"
+# Markdown, read as CommonMark with GitHub's tables, at the version Slint
+# already brings; no HTML of its own (`default-features = false`).
+pulldown-cmark = { version = "0.13.4", default-features = false }
+memchr       = { workspace = true }

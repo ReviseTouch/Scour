@@ -14,7 +14,13 @@ use scour_flow::{Align, Block, Cell, Flow, GridCell, GridRow, Para, Picture, Row
 
 /// The document in `bytes`, by its extension.
 pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
-    let format = match extension.to_ascii_lowercase().as_str() {
+    // By the reader the format table names: a template or a macro-enabled
+    // document is its document's container (`scour_formats`).
+    let like = scour_formats::of(extension)
+        .filter(|f| f.flows)
+        .map(|f| f.like)
+        .ok_or_else(|| format!("{extension} does not flow"))?;
+    let format = match like {
         "docx" => DocumentFormat::Docx,
         "doc" => DocumentFormat::Doc,
         "xlsx" => DocumentFormat::Xlsx,
@@ -22,7 +28,13 @@ pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
         "pptx" => DocumentFormat::Pptx,
         "ppt" => DocumentFormat::Ppt,
         "odt" | "ods" | "odp" => return crate::odf::flow(bytes),
-        other => return Err(format!("{other} does not flow")),
+        "fodt" => return crate::odf::flow_flat(bytes),
+        "md" => return crate::markdown::flow(bytes),
+        "html" => return crate::html::flow(bytes),
+        "epub" => return crate::epub::flow(bytes),
+        "eml" => return crate::mail::flow(bytes),
+        "csv" => return crate::csv::flow(bytes, extension),
+        other => return Err(format!("{other} has no drawing here")),
     };
     let doc =
         Document::from_reader(Cursor::new(bytes.to_vec()), format).map_err(|e| e.to_string())?;
@@ -683,6 +695,7 @@ fn run(t: &TextSpan) -> Run {
             Some(VerticalAlign::Subscript) => -1,
             _ => 0,
         },
+        code: false,
     }
 }
 

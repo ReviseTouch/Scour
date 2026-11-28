@@ -20,8 +20,6 @@ workspace = true
 # wire.
 [dependencies]
 serde = { workspace = true }
-# The types asked for when a desktop declares none: the format table.
-scour-formats = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -37,3 +35,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# The types asked for when a Linux desktop declares none: the format table.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+scour-formats = { workspace = true }

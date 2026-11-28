@@ -6,6 +6,7 @@
 mod codepage;
 mod document;
 mod inflate;
+mod listing;
 mod normal;
 mod rtf;
 pub mod wire;
@@ -15,6 +16,7 @@ pub mod zip;
 pub use codepage::*;
 pub use document::*;
 pub use inflate::*;
+pub use listing::{listing, lists};
 pub use normal::*;
 pub use rtf::*;
 pub use xml::*;
