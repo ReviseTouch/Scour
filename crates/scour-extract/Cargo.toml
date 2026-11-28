@@ -19,6 +19,10 @@ workspace = true
 scour-formats = { workspace = true }
 # An archive's listing is a sheet the faces already draw.
 scour-flow = { workspace = true }
+# A 7z archive's headers are LZMA-packed: read with a pure-Rust reader,
+# its compressors beyond LZMA left out (`default-features = false`). Held
+# at a release three weeks old (2026-11-06), not the newest.
+sevenz-rust2 = { version = "=0.25.0", default-features = false }
 flate2 = { workspace = true }
 memchr = { workspace = true }
 icu_normalizer = { workspace = true }

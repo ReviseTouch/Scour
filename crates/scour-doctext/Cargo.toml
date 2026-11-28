@@ -34,5 +34,10 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 memchr       = { workspace = true }
 # A notebook is JSON.
 serde_json   = { workspace = true }
+# A font's names, its letters drawn and written as a PNG: the versions Slint
+# and the image crate already bring.
+ttf-parser   = "0.25.1"
+ab_glyph     = "0.2.32"
+png          = "0.18.1"
 # The code pages a message's and an RTF document's bytes are read through.
 scour-extract = { workspace = true }

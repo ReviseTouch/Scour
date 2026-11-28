@@ -1543,6 +1543,8 @@ what reaching the bounds costs.
 | Outlook message | poi `58214_with_attachment.msg` | 50,688 | 0.07 | headers, body, its attachment listed |
 | notebook | go-colorful `LinearRGB Approximations.ipynb` | 351,881 | 3.34 | 2 headings, 24 paragraphs, 3 pictures |
 | RTF | .NET 3.5 SP1 `eula.1033.rtf` | 110,130 | 0.61 | 9 paragraphs: its 1,961 characters, as the search reads 1,967 |
+| font | `Carlito-Bold.ttf` | 682,468 | 1.16 | its name, and its letters drawn at five sizes |
+| font collection | `NotoSansCJK-Black.ttc` | 19,629,516 | 1.19 | its first face's |
 
 An archive's listing is read in the service, not drawn from its bytes: a
 zip's central directory from its end whatever its size, a tar's headers from
@@ -1554,6 +1556,9 @@ its start, a RAR's block by block. `cargo run --release -p scour-extract
 | a 19-entry zip | 9.86 ms | 0.07 ms |
 | a 217 MB RAR5 | 10.40 ms | 2.91 ms |
 | a 15 GB RAR5 on NTFS, entries spread through it | 207.81 ms | 3.50 ms |
+| a 46 MB 7z, 214 entries | 1.09 ms | 0.38 ms |
+| an 8 MB 7z | 36.72 ms | 0.04 ms |
+| a 317 MB SQLite database, 9 tables, 500 rows each | 22.47 ms | 4.70 ms |
 
 **The preview keeps up with the keys.** The window's preview used to share
 one connection with counts, lenses, the content search and thumbnails, and

@@ -161,7 +161,10 @@ fn the_same_documents_are_made_into_pages_and_flow() {
                     "md", "markdown", "csv", "tsv", "html", "htm", "xhtml", "epub", "eml"
                 ],
                 &["zip", "jar", "whl", "tar", "tgz", "gz"],
-                &["ipynb", "msg", "rtf", "rar"],
+                &[
+                    "ipynb", "msg", "rtf", "rar", "7z", "db", "sqlite", "sqlite3"
+                ],
+                &["ttf", "otf", "ttc"],
             ]
             .concat()
         )

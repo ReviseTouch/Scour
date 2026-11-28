@@ -7,6 +7,7 @@ mod build;
 mod csv;
 mod epub;
 mod flow;
+mod font;
 mod format;
 mod html;
 mod mail;

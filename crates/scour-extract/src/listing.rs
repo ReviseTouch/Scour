@@ -18,7 +18,8 @@ const MOST_UNPACKED: u64 = 256 << 20;
 /// Whether `path` is an archive listed here: the format table's `zip` and
 /// `tar` readers (`scour_formats`).
 pub fn lists(path: &Path) -> bool {
-    scour_formats::of_path(path).is_some_and(|f| f.flows && matches!(f.like, "zip" | "tar" | "rar"))
+    scour_formats::of_path(path)
+        .is_some_and(|f| f.flows && matches!(f.like, "zip" | "tar" | "rar" | "7z" | "sqlite"))
 }
 
 /// The listing of the archive opened as `file`.
@@ -31,6 +32,12 @@ pub fn listing(mut file: File) -> Result<Flow, String> {
         zip(&mut file, len, &mut rows)?
     } else if head[..got].starts_with(b"Rar!\x1a\x07") {
         rar(&mut file, len, head.get(6) == Some(&1), &mut rows)?
+    } else if head[..got].starts_with(b"7z\xbc\xaf\x27\x1c") {
+        sevenz(&mut file, &mut rows)?
+    } else if head[..got].starts_with(b"SQLite f") {
+        use std::io::Seek;
+        file.rewind().map_err(|e| e.to_string())?;
+        return crate::sqlite::database(file);
     } else {
         use std::io::Seek;
         file.rewind().map_err(|e| e.to_string())?;
@@ -280,6 +287,30 @@ fn rar4_block(b: &[u8], rows: &mut Vec<GridRow>) -> Result<Option<u64>, String> 
     Ok(Some(size + add))
 }
 
+/// A 7z archive's entries, from its header: packed with LZMA as a rule, so
+/// read with `sevenz-rust2`, the header alone and within 64 MB. An archive
+/// whose names are encrypted lists nothing.
+fn sevenz(file: &mut File, rows: &mut Vec<GridRow>) -> Result<bool, String> {
+    let archive = sevenz_rust2::Archive::read_with_memory_limit(
+        file,
+        &sevenz_rust2::Password::from_raw(&[]),
+        64 << 10,
+    )
+    .map_err(|e| e.to_string())?;
+    for e in archive.files.iter().take(MOST_ROWS) {
+        let when = if e.has_last_modified_date {
+            let ticks = u64::from(e.last_modified_date);
+            (ticks / 10_000_000)
+                .checked_sub(11_644_473_600)
+                .map_or_else(String::new, |s| unix_time(s as i64))
+        } else {
+            String::new()
+        };
+        rows.push(row(&e.name, Some(e.size), when, e.is_directory));
+    }
+    Ok(archive.files.len() > MOST_ROWS)
+}
+
 /// A DOS date and time, as `2026-11-28 13:04`; empty when unset.
 fn dos_time(v: u32) -> String {
     let (date, time) = (v >> 16, v & 0xffff);
@@ -303,14 +334,14 @@ fn tar(mut r: impl Read, rows: &mut Vec<GridRow>) -> Result<bool, String> {
     loop {
         if r.read_exact(&mut header).is_err() || header.iter().all(|&b| b == 0) {
             return if rows.is_empty() {
-                Err("not an archive listed here".into())
+                Err("nothing here to list".into())
             } else {
                 Ok(false)
             };
         }
         if !checksum_holds(&header) {
             return if rows.is_empty() {
-                Err("not a tar".into())
+                Err("nothing here to list".into())
             } else {
                 Ok(false)
             };

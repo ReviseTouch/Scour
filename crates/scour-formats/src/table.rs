@@ -105,7 +105,7 @@ impl Format {
 
 /// Every extension Scour does something with beyond reading its bytes.
 pub static FORMATS: &[Format] = &[
-    f("7z").binary(),
+    f("7z").flows().binary(),
     f("a").binary(),
     f("aac").streamed("audio/aac"),
     f("avi").thumb("video/x-msvideo").binary(),
@@ -115,7 +115,8 @@ pub static FORMATS: &[Format] = &[
     f("class").binary(),
     // Separated values, drawn as a sheet.
     f("csv").flows(),
-    f("db").binary(),
+    // A SQLite database, drawn as its tables; a `.db` that is not one is refused.
+    f("db").like("sqlite").flows().binary(),
     f("dex").binary(),
     f("dll").binary(),
     f("dmg").binary(),
@@ -184,7 +185,8 @@ pub static FORMATS: &[Format] = &[
     f("ogv").streamed("video/ogg"),
     f("opf").markup(),
     f("opus").streamed("audio/ogg").binary(),
-    f("otf").binary(),
+    // A font, drawn as its letters.
+    f("otf").like("ttf").flows().binary(),
     // OpenDocument's templates: its documents' containers.
     f("otp").like("odp").converts().flows().here().zip(),
     f("ots").like("ods").converts().flows().here().zip(),
@@ -212,14 +214,16 @@ pub static FORMATS: &[Format] = &[
     f("rmeta").binary(),
     f("rtf").converts().flows().here(),
     f("so").binary(),
-    f("sqlite").binary(),
+    f("sqlite").flows().binary(),
+    f("sqlite3").like("sqlite").flows(),
     f("svg").whole("image/svg+xml").thumbed(),
     f("tar").flows(),
     f("tgz").like("tar").flows(),
     f("tif").thumb("image/tiff").direct().binary(),
     f("tiff").thumb("image/tiff").direct().binary(),
     f("tsv").like("csv").flows(),
-    f("ttf").binary(),
+    f("ttc").like("ttf").flows(),
+    f("ttf").flows().binary(),
     f("udf").here().zip(),
     f("wasm").binary(),
     f("wav").streamed("audio/wav").binary(),

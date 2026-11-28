@@ -3268,6 +3268,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lzma-rust2"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1d73c59a56771343712b22ea5615092c612c16ba291c0979e3105dfeec4890"
+
+[[package]]
 name = "mac_address"
 version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5220,16 +5226,19 @@ dependencies = [
 name = "scour-doctext"
 version = "0.2.0-alpha.12"
 dependencies = [
+ "ab_glyph",
  "mail-parser",
  "memchr",
  "office_oxide",
  "pdf_oxide",
+ "png",
  "pulldown-cmark",
  "quick-xml 0.42.0",
  "scour-extract",
  "scour-flow",
  "scour-formats",
  "serde_json",
+ "ttf-parser",
  "zip",
 ]
 
@@ -5285,6 +5294,7 @@ dependencies = [
  "memchr",
  "scour-flow",
  "scour-formats",
+ "sevenz-rust2",
 ]
 
 [[package]]
@@ -5779,6 +5789,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "sevenz-rust2"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e465701779cbc6d0d10cf907f175035cfdd50b8d3cb628d7f1f435ef02972f"
+dependencies = [
+ "crc32fast",
+ "js-sys",
+ "lzma-rust2",
+ "wasm-bindgen",
 ]
 
 [[package]]
