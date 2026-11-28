@@ -525,7 +525,8 @@ fn collect_in_chunk(
 }
 
 /// Text already in memory — a document's, taken out of it — searched whole.
-pub(crate) fn search_whole(text: &[u8], pattern: &Pattern, opts: &Options) -> Outcome {
+/// It is UTF-8, so read by that spelling alone without being checked.
+pub(crate) fn search_whole(text: &str, pattern: &Pattern, opts: &Options) -> Outcome {
     let mut tally = Tally {
         hits: Vec::new(),
         more: false,
@@ -533,7 +534,8 @@ pub(crate) fn search_whole(text: &[u8], pattern: &Pattern, opts: &Options) -> Ou
         bin_skipped: false,
         uncomp_spent: 0,
     };
-    scan_bytes(text, Kind::Text, None, pattern, opts, &mut tally);
+    let words = pattern.for_words();
+    scan_bytes(text.as_bytes(), Kind::Text, None, &words, opts, &mut tally);
     for hit in &mut tally.hits {
         hit.text_len = Some(text.len() as u64);
     }

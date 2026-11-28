@@ -285,7 +285,7 @@ impl Reader {
         };
         let mut text = String::new();
         rtf_text(&whole, &mut text, RTF_TEXT);
-        (search_whole(text.as_bytes(), pattern, opts), extra)
+        (search_whole(&text, pattern, opts), extra)
     }
 }
 

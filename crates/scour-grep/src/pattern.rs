@@ -79,11 +79,22 @@ impl std::fmt::Display for BadPattern {
 
 impl std::error::Error for BadPattern {}
 
-/// A compiled needle. `narrow` reads text; the rest read the same characters
-/// as UTF-16, for a file that says it is or one that is not text at all.
+/// A compiled needle. `unicode` reads text that is UTF-8 and `narrow` text
+/// that may be in Windows' Turkish code page; the rest read the same
+/// characters as UTF-16, for a file that says it is or one that is not text
+/// at all.
 #[derive(Debug, Clone)]
 pub struct Pattern {
     narrow: Regex,
+    /// The needle's UTF-8 spelling alone, for a buffer that is UTF-8 — nearly
+    /// every one. Not `narrow` with its code-page spelling beside it: that
+    /// alternation stops the engine's literal search, and `aile` in Turkish
+    /// text is read at 871 MB/s by it and at 13,531 by this (28 November, 64
+    /// MB, one thread). None when the two are one expression.
+    unicode: Option<Regex>,
+    /// Its text is UTF-8 already — words taken out of a document — so no
+    /// buffer is checked.
+    words: bool,
     wide: Option<Wide>,
     raw_bytes: bool,
     /// Matches only at a file's first byte.
@@ -109,9 +120,20 @@ pub(crate) enum Term {
 /// most patterns find nothing.
 #[derive(Debug)]
 struct Bodies {
-    /// Text, little- and big-endian UTF-16, and either.
-    spelled: [String; 4],
-    built: OnceLock<Option<[Regex; 4]>>,
+    /// UTF-8 text, text of either spelling, little- and big-endian UTF-16,
+    /// and any of them.
+    spelled: [String; 5],
+    built: OnceLock<Option<[Regex; 5]>>,
+}
+
+/// Which of a pattern's expressions reads a buffer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Reading {
+    Unicode,
+    Narrow,
+    Le,
+    Be,
+    Any,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +188,8 @@ impl Pattern {
             Needle::Text(text) => Self::any_text(std::slice::from_ref(text), letters),
             Needle::Bytes(bytes) => Ok(Pattern {
                 narrow: raw(&escaped(bytes))?,
+                unicode: None,
+                words: false,
                 wide: None,
                 raw_bytes: true,
                 at_start: false,
@@ -182,6 +206,8 @@ impl Pattern {
                 }
                 Ok(Pattern {
                     narrow: raw(&expr)?,
+                    unicode: None,
+                    words: false,
                     wide: None,
                     raw_bytes: true,
                     at_start: *at_start,
@@ -195,6 +221,8 @@ impl Pattern {
                 .build()
                 .map(|narrow| Pattern {
                     narrow,
+                    unicode: None,
+                    words: false,
                     wide: None,
                     raw_bytes: false,
                     at_start: false,
@@ -239,7 +267,7 @@ impl Pattern {
                 ),
             }
         };
-        let readings = |body: bool| -> Result<[String; 4], BadPattern> {
+        let readings = |body: bool| -> Result<[String; 5], BadPattern> {
             let utf8 = join_enc(Encoding::Utf8, body).ok_or(BadPattern::Empty)?;
             let le = join_enc(Encoding::Utf16Le, body).ok_or(BadPattern::Empty)?;
             let be = join_enc(Encoding::Utf16Be, body).ok_or(BadPattern::Empty)?;
@@ -249,9 +277,9 @@ impl Pattern {
                 _ => utf8.clone(),
             };
             let any = format!("(?:{narrow})|(?:{le})|(?:{be})");
-            Ok([narrow, le, be, any])
+            Ok([utf8, narrow, le, be, any])
         };
-        let [narrow, le, be, any] = readings(false)?;
+        let [utf8, narrow, le, be, any] = readings(false)?;
         let pieces = if near {
             let plain: Option<Vec<Term>> = alts
                 .iter()
@@ -283,12 +311,28 @@ impl Pattern {
                 le: raw(&le)?,
                 be: raw(&be)?,
             }),
+            unicode: if utf8 == narrow {
+                None
+            } else {
+                Some(raw(&utf8)?)
+            },
             narrow: raw(&narrow)?,
+            words: false,
             raw_bytes: false,
             at_start: false,
             bodies,
             pieces,
         })
+    }
+
+    /// The same needle for text known to be UTF-8 — the words taken out of a
+    /// document — which is read without being checked.
+    pub(crate) fn for_words(&self) -> Pattern {
+        Pattern {
+            words: true,
+            pieces: self.pieces.as_ref().map(|p| Arc::new(p.for_words())),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn is_raw_bytes(&self) -> bool {
@@ -299,12 +343,24 @@ impl Pattern {
         self.at_start
     }
 
-    /// The expression that reads a file of this kind.
-    pub(crate) fn reading(&self, kind: Kind) -> &Regex {
+    /// Which expression reads `hay`, a buffer of a file of this kind: text
+    /// by its UTF-8 spelling alone when every byte of it is UTF-8.
+    pub(crate) fn reading_of(&self, kind: Kind, hay: &[u8]) -> Reading {
         match (kind, &self.wide) {
-            (Kind::Wide(false), Some(wide)) => &wide.le,
-            (Kind::Wide(true), Some(wide)) => &wide.be,
-            (Kind::Binary, Some(wide)) => &wide.any,
+            (Kind::Wide(false), Some(_)) => Reading::Le,
+            (Kind::Wide(true), Some(_)) => Reading::Be,
+            (Kind::Binary, Some(_)) => Reading::Any,
+            _ if self.unicode.is_some() && (self.words || is_utf8(hay)) => Reading::Unicode,
+            _ => Reading::Narrow,
+        }
+    }
+
+    pub(crate) fn reading(&self, reading: Reading) -> &Regex {
+        match (reading, &self.wide, &self.unicode) {
+            (Reading::Le, Some(wide), _) => &wide.le,
+            (Reading::Be, Some(wide), _) => &wide.be,
+            (Reading::Any, Some(wide), _) => &wide.any,
+            (Reading::Unicode, _, Some(unicode)) => unicode,
             _ => &self.narrow,
         }
     }
@@ -329,11 +385,12 @@ impl Pattern {
         kind: Kind,
         hay: &'a [u8],
     ) -> impl Iterator<Item = (usize, usize)> + 'a {
+        let reading = self.reading_of(kind, hay);
         let held = self
             .pieces
             .as_ref()
-            .is_none_or(|p| p.reading(kind).is_match(hay));
-        self.reading(kind)
+            .is_none_or(|p| p.reading(reading).is_match(hay));
+        self.reading(reading)
             .find_iter(if held { hay } else { &[] })
             .filter(|m| !m.is_empty())
             .map(move |m| {
@@ -341,29 +398,43 @@ impl Pattern {
                     Kind::Binary => self.settled(hay, m.start(), m.end()),
                     _ => (m.start(), m.end()),
                 };
-                (self.word_begun(kind, hay, start, end), end)
+                (self.word_begun(kind, reading, hay, start, end), end)
             })
     }
 
     /// A misspelt find begins with the character before the word: stepped
     /// over, so the span is the word alone.
-    fn word_begun(&self, kind: Kind, hay: &[u8], start: usize, end: usize) -> usize {
+    fn word_begun(
+        &self,
+        kind: Kind,
+        reading: Reading,
+        hay: &[u8],
+        start: usize,
+        end: usize,
+    ) -> usize {
         let Some(bodies) = &self.bodies else {
             return start;
         };
         let built = bodies.built.get_or_init(|| {
             let whole = |e: &String| raw(&format!("\\A(?:{e})\\z")).ok();
-            let [narrow, le, be, any] = &bodies.spelled;
-            Some([whole(narrow)?, whole(le)?, whole(be)?, whole(any)?])
+            let [utf8, narrow, le, be, any] = &bodies.spelled;
+            Some([
+                whole(utf8)?,
+                whole(narrow)?,
+                whole(le)?,
+                whole(be)?,
+                whole(any)?,
+            ])
         });
-        let Some([narrow, le, be, any]) = built else {
+        let Some([utf8, narrow, le, be, any]) = built else {
             return start;
         };
-        let body = match kind {
-            Kind::Text => narrow,
-            Kind::Wide(false) => le,
-            Kind::Wide(true) => be,
-            Kind::Binary => any,
+        let body = match reading {
+            Reading::Unicode => utf8,
+            Reading::Narrow => narrow,
+            Reading::Le => le,
+            Reading::Be => be,
+            Reading::Any => any,
         };
         if body.is_match(&hay[start..end]) {
             return start;
@@ -386,6 +457,21 @@ impl Term {
         match self {
             Term::Plain(text) | Term::Near(text, _) => text,
         }
+    }
+}
+
+/// Whether every byte of `hay` is UTF-8, a character the read cut at either
+/// end counted whole. `simdutf8` checks Turkish text at 16 GB/s; `std`'s
+/// check, at 0.9, would be slower than the search it decides.
+fn is_utf8(hay: &[u8]) -> bool {
+    let cut = hay
+        .iter()
+        .take(3)
+        .take_while(|&&b| b & 0xC0 == 0x80)
+        .count();
+    match simdutf8::compat::from_utf8(&hay[cut..]) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none(),
     }
 }
 
@@ -480,10 +566,11 @@ pub(crate) fn atom(c: char, encoding: Encoding, letters: Letters) -> Option<Stri
 /// The marked letters a plain one stands for: Turkish's — `â î û`, `ç ğ ö ş ü`
 /// and their capitals (`ı` and `İ` are [`cases`]).
 ///
-/// **Not every mark in Latin-1** (27 November, 64 MB of Turkish text, one
-/// thread): folding them all puts fifteen to twenty spellings on each vowel,
-/// the regex's literal prefilter gives up, and `Necmeddin` is searched at
-/// 851 MB/s rather than 12,059. Turkish's alone keeps it at 8,681 MB/s.
+/// **Not every mark in Latin-1** (28 November, 64 MB of Turkish text, one
+/// thread, the UTF-8 spelling alone): folding them all puts fifteen to
+/// twenty spellings on each vowel, and a short word of vowels loses the
+/// engine's literal search — `aile` is read at 446 MB/s, against 13,531
+/// with Turkish's marks alone.
 const MARKED: [char; 16] = [
     'â', 'Â', 'î', 'Î', 'û', 'Û', 'ç', 'Ç', 'ö', 'Ö', 'ü', 'Ü', 'ğ', 'Ğ', 'ş', 'Ş',
 ];
@@ -607,15 +694,42 @@ mod tests {
         assert!(!finds("sirket", case_only, "Şirket"));
     }
 
+    /// A buffer that is UTF-8 is read by that spelling alone. The code page's
+    /// `â` is the byte that leads `’` in UTF-8, so `kira` found `kir’` in it.
+    #[test]
+    fn utf8_text_is_not_read_as_the_code_page_too() {
+        let p = Pattern::new(&Needle::Text("kira".into()), false).unwrap();
+        let finds = |hay: &[u8]| p.finds(Kind::Text, hay).count();
+        assert_eq!(finds("Bu kir’den, KİRÂ".as_bytes()), 1);
+        // `kirâ` in 1254, and a line of each spelling in one file.
+        assert_eq!(finds(b"kir\xE2 bedeli"), 1);
+        let s = Pattern::new(&Needle::Text("sirket".into()), false).unwrap();
+        let mixed = b"\xC5\x9Firket ve \xFEirket";
+        assert_eq!(s.finds(Kind::Text, mixed).count(), 2);
+        // Words taken out of a document are not checked.
+        let words = s.for_words();
+        assert_eq!(words.finds(Kind::Text, "ŞİRKET".as_bytes()).count(), 1);
+    }
+
+    #[test]
+    fn a_character_cut_by_the_read_does_not_make_text_another_spelling() {
+        let text = "aşk".as_bytes();
+        assert!(is_utf8(&text[..2]));
+        assert!(is_utf8(&text[2..]));
+        assert!(is_utf8(b""));
+        assert!(!is_utf8(b"a\xFEk"));
+        assert!(!is_utf8(b"\xC5\x9F\xFF\xC5\x9F"));
+    }
+
     #[test]
     fn wide_finds_utf16_of_either_order() {
         let p = Pattern::new(&Needle::Text("şey".into()), false).unwrap();
         let le: Vec<u8> = "ŞEY".encode_utf16().flat_map(u16::to_le_bytes).collect();
         let be: Vec<u8> = "şey".encode_utf16().flat_map(u16::to_be_bytes).collect();
-        assert!(p.reading(Kind::Wide(false)).is_match(&le));
-        assert!(p.reading(Kind::Wide(true)).is_match(&be));
-        assert!(p.reading(Kind::Binary).is_match(&be));
-        assert!(!p.reading(Kind::Text).is_match(&le));
+        assert!(p.reading(Reading::Le).is_match(&le));
+        assert!(p.reading(Reading::Be).is_match(&be));
+        assert!(p.reading(Reading::Any).is_match(&be));
+        assert!(!p.reading(Reading::Narrow).is_match(&le));
     }
 
     #[test]
@@ -625,7 +739,7 @@ mod tests {
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
-        let found = p.reading(Kind::Binary).find(&hay).unwrap();
+        let found = p.reading(Reading::Any).find(&hay).unwrap();
         assert_eq!(found.start(), 3);
         assert_eq!(p.settled(&hay, found.start(), found.end()), (4, 16));
     }

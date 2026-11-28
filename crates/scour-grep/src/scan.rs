@@ -422,7 +422,7 @@ impl Scanner {
 /// What a document's text says of the pattern.
 pub(crate) fn outcome_of(text: DocText, pattern: &Pattern, options: &Options) -> Outcome {
     match text {
-        DocText::Words(words) => search_whole(words.as_bytes(), pattern, options),
+        DocText::Words(words) => search_whole(&words, pattern, options),
         DocText::NoText => Outcome::Skipped(Skip::NoText),
         DocText::Broken => Outcome::Skipped(Skip::Broken),
     }

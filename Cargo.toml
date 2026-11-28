@@ -149,6 +149,10 @@ flate2      = { version = "1.1", default-features = false, features = ["zlib-rs"
 # For `regex:` terms in a query. Its engine, regex-automata and regex-syntax,
 # is here for this alone since the walker stopped being `ignore`.
 regex       = "1"
+# Whether a buffer is UTF-8, at the speed of the search that follows: `std`'s
+# check reads Turkish text at 0.9 GB/s, slower than the search it decides.
+# Already here under `encoding_rs`.
+simdutf8    = "0.1"
 
 # One writer per index directory. The lock has to be released by the *kernel*
 # when a process dies — a pid file leaves a stale claim after exactly the crash

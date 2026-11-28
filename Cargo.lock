@@ -5560,6 +5560,7 @@ dependencies = [
  "regex",
  "scour-core",
  "scour-extract",
+ "simdutf8",
  "surefoot",
  "tempfile",
  "windows-sys 0.61.2",

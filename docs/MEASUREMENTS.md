@@ -1273,6 +1273,59 @@ Compiling the pattern: 3 ms at 5 letters, 6 at 10, 21 at 11, 43 at 20, 209 at
 64; most of the gap on short runs. Source code stays near 3× for long words:
 their pieces are in nearly every file. Not tried: a per-window prefilter.
 
+## Content: text read by its UTF-8 spelling alone (2026-11-28)
+
+A word's spelling in Windows' Turkish code page sat beside its UTF-8 one in a
+single expression, `(utf8)|(1254)`. That alternation stops the regex engine's
+literal search, and a word of vowels was read byte by byte. Now a buffer that
+is UTF-8 (checked with `simdutf8`) is read by the UTF-8 spelling alone; one
+that is not, by both, as before. Words taken out of a document are UTF-8 and
+are not checked.
+
+`target/release/examples/scan --quiet WORD < LIST`: 96 files of 16 MB, 1.5 GB of
+Turkish text (ŞELÇUKLU TIP.doc's text repeated), warm cache, ten readers,
+before and after alternated A B A B. Each word is one the text does not hold,
+so every byte is read:
+
+| word | before MiB/s | after MiB/s |
+|---|---|---|
+| `ailevi` | 6,233 – 6,426 | 28,321 – 30,101 |
+| `aileye` | 6,257 – 6,504 | 24,892 – 30,491 |
+| `ulusal` | 6,246 – 6,327 | 21,541 – 22,304 |
+| `iyilik` | 6,441 – 6,449 | 19,680 – 20,125 |
+| `eline` | 34,337 – 36,259 | 22,191 – 22,600 |
+| `yolcu` | 28,113 – 28,381 | 23,209 – 24,511 |
+| `oyuncu` | 34,129 – 35,034 | 22,771 – 23,570 |
+| `uygulama` | 28,598 – 32,987 | 25,889 – 26,191 |
+
+Before, half these words were read at 6.3 GB/s, below a PCIe 4 disk (about 7)
+and half a PCIe 5 one (about 14). After, none is below 19.7. The check costs
+the words that were fast a fifth to a third: `simdutf8` reads Turkish text at
+16 GB/s on one thread, and `std`'s check at 0.97, slower than the search.
+
+One thread, 64 MB in memory, read a megabyte at a time (MB/s):
+
+| word | before | after, a file | after, a document's words |
+|---|---|---|---|
+| `aile` | 863 | 5,857 | 8,880 |
+| `Necmeddin` | 7,039 | 6,820 | 8,456 |
+| `hastalik` | 6,708 | 3,786 | 5,274 |
+| `the` | 12,728 | 7,261 | 8,322 |
+
+The UTF-8 expression alone is not always the faster of the two: the engine
+picks its literal differently, and `hastalik` lost a fifth with no check at
+all.
+
+Tried and set aside, on the same text:
+- **Each letter's code-page byte in its own place**, one expression with no
+  top-level alternation: `aile` 1,562 MB/s.
+- **A run of letters no mark sits on** (`dd` in `Necmeddin`) looked for first,
+  the expression read around it: 15–20 GB/s with two such letters, 377 MB/s
+  with one (`aile`).
+- **The text folded, then a plain search**: 800 MB/s. 12 % of Turkish
+  characters are marked, so a 16-byte block is seldom all ASCII. It would
+  need a vectorised fold written for it; this CPU has no AVX-512 compress.
+
 ## Reproducing
 
 ```sh
