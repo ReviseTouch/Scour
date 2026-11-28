@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 pub fn flows(extension: &str) -> bool {
     matches!(
         extension.to_ascii_lowercase().as_str(),
-        "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt"
+        "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "odt" | "ods" | "odp"
     )
 }
 

@@ -262,7 +262,8 @@ code draws.
 | pdf | its pages | the window draws them with CoreGraphics (macOS), `Windows.Data.Pdf` (Windows) or the first of Poppler, MuPDF, Ghostscript on the path (Linux); with none, its text. The page leaves a PDF to the browser |
 | mp3 m4a aac oga ogg opus wav flac · mp4 m4v webm ogv mov mkv | played | the page only, by the browser, which decides the codec; the window shows the facts |
 | Word, Excel, PowerPoint (`office::is_office`) | its pages, where LibreOffice or Microsoft Office turns it into a PDF; else drawn by Scour (`office_view`: drawn) or its text | pages only on Windows and macOS: on Linux LibreOffice is never used, a document's seconds being no preview's |
-| OpenDocument (odt ods odp), RTF | its pages where a converter is, as Word's; else its text | as Word's |
+| OpenDocument (odt ods odp) | as Word, Excel and PowerPoint: its pages where a converter is, else drawn by Scour (`scour-doctext`'s own reader of `content.xml`) or its text | as Word's |
+| RTF | its pages where a converter is; else its text | as Word's |
 | anything else whose first 8 KB has no NUL | text: UTF-8; UTF-16 with its mark; else, with almost no control bytes, Windows-1254 as content search reads it | — |
 | anything else | its facts | — |
 
@@ -291,7 +292,6 @@ the right", and it is the only way the panel can take its width.
 | index of contents | a crate of its own, implementing a trait in `scour-core` | `holding()` in `scour-engine/src/content.rs`, named in `scourd/src/wire.rs` |
 | a new document format | `scour-extract` | its container and text layers; grep and the preview both read it from there |
 | richer preview | `scour-preview`, reading document text through `scour-extract` | `Request::Preview`, new fields `#[serde(default)]` |
-| an OpenDocument file drawn | its own reader of `content.xml` filling `scour-flow`'s model; office_oxide reads only Microsoft's six formats | `Request::Flow`; `Look::flow` says it is there |
 | AI-written queries | a crate depending on `scour-query` only: a sentence in, a query and its reading out | a request the service answers, so every face has it and one place holds the key and the consent |
 | a plugin | a process of its own, linking `scour-client` | the socket, as `scour-mcp` does |
 

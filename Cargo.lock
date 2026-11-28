@@ -5478,7 +5478,9 @@ dependencies = [
  "mail-parser",
  "office_oxide",
  "pdf_oxide",
+ "quick-xml 0.42.0",
  "scour-flow",
+ "zip",
 ]
 
 [[package]]

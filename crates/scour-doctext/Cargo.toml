@@ -22,3 +22,7 @@ office_oxide = { version = "=0.1.17", default-features = false }
 # from, which is `serde` alone and reads nothing (`crates/scour-flow`).
 scour-flow   = { workspace = true }
 mail-parser  = { version = "=0.11.9", default-features = false, features = ["full_encoding"] }
+# OpenDocument's parts, read as office_oxide reads Microsoft's: the same two
+# crates at the versions it already brings, so nothing new is built.
+zip          = { version = "9.1", default-features = false, features = ["deflate"] }
+quick-xml    = "0.42"

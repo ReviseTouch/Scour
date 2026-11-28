@@ -28,7 +28,8 @@ fn base64_goes_there_and_back() {
 fn the_six_formats_of_office_flow() {
     assert!(flows("docx") && flows("DOC") && flows("xlsx") && flows("xls"));
     assert!(flows("pptx") && flows("ppt"));
-    assert!(!flows("pdf") && !flows("ods") && !flows("odp"));
+    assert!(flows("odt") && flows("ods") && flows("odp"));
+    assert!(!flows("pdf") && !flows("rtf"));
 }
 
 #[test]

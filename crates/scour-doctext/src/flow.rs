@@ -21,6 +21,7 @@ pub fn flow(bytes: &[u8], extension: &str) -> Result<Flow, String> {
         "xls" => DocumentFormat::Xls,
         "pptx" => DocumentFormat::Pptx,
         "ppt" => DocumentFormat::Ppt,
+        "odt" | "ods" | "odp" => return crate::odf::flow(bytes),
         other => return Err(format!("{other} does not flow")),
     };
     let doc =
@@ -128,18 +129,36 @@ fn sheets(ir: &DocumentIR) -> Flow {
 }
 
 fn sheet(name: String, t: &Table) -> scour_flow::Sheet {
-    let mut rows: Vec<GridRow> = t
+    let rows: Vec<GridRow> = t
         .rows
         .iter()
         .take(scour_flow::MOST_SHEET_ROWS + 1)
-        .map(|r| {
-            let mut cells: Vec<GridCell> = r.cells.iter().map(grid_cell).collect();
-            while cells.last().is_some_and(blank) {
-                cells.pop();
-            }
-            GridRow { cells }
+        .map(|r| GridRow {
+            cells: r.cells.iter().map(grid_cell).collect(),
         })
         .collect();
+    let widths_pt = t
+        .column_widths_twips
+        .iter()
+        .map(|&w| w as f32 * PT_PER_TWIP)
+        .collect();
+    finish_sheet(name, rows, widths_pt)
+}
+
+/// A sheet's rows made a [`scour_flow::Sheet`]: blank cells and rows at the
+/// ends dropped, held to the bounds, each column as wide as `widths_pt` says
+/// or else as wide as what it shows, and a first row of labels kept in view.
+/// Shared by every book, whatever wrote it.
+pub(crate) fn finish_sheet(
+    name: String,
+    mut rows: Vec<GridRow>,
+    widths_pt: Vec<f32>,
+) -> scour_flow::Sheet {
+    for r in &mut rows {
+        while r.cells.last().is_some_and(blank) {
+            r.cells.pop();
+        }
+    }
     while rows.last().is_some_and(|r| r.cells.is_empty()) {
         rows.pop();
     }
@@ -150,11 +169,11 @@ fn sheet(name: String, t: &Table) -> scour_flow::Sheet {
         .map(|r| r.cells.iter().map(|c| c.span as usize).sum::<usize>())
         .max()
         .unwrap_or(0);
-    let widths = if t.column_widths_twips.len() >= columns && columns > 0 {
-        t.column_widths_twips
+    let widths = if widths_pt.len() >= columns && columns > 0 {
+        widths_pt
             .iter()
             .take(columns)
-            .map(|&w| w as f32 * PT_PER_TWIP / GRID_PT)
+            .map(|&w| w / GRID_PT)
             .collect()
     } else {
         measured(&rows, columns)
@@ -274,7 +293,7 @@ const PT_PER_EMU: f32 = 1.0 / 12_700.0;
 const PLAIN_PT: f32 = 11.0;
 /// Empty paragraphs in a row kept: they are a document's spacing, and a title
 /// page's twenty of them are a screen of nothing.
-const BLANKS: usize = 2;
+pub(crate) const BLANKS: usize = 2;
 
 struct Out {
     blocks: Vec<Block>,
@@ -647,7 +666,7 @@ fn runs(content: &[InlineContent]) -> Vec<Run> {
 }
 
 /// A link with no colour of its own looks like one.
-const LINK: [u8; 3] = [0x09, 0x69, 0xda];
+pub(crate) const LINK: [u8; 3] = [0x09, 0x69, 0xda];
 
 fn run(t: &TextSpan) -> Run {
     let link = t.hyperlink.is_some();
