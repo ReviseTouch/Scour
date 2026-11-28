@@ -44,6 +44,7 @@ Dependencies flow downwards and **never** upwards.
 | **storage** | `scour-index-native` | columns, trigrams, the directory table | where a query came from |
 | **search** | `scour-engine` | which rows answer, in what order | who is asking |
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
+| **formats** | `scour-formats` | what is done with a file, by its extension: shown how, pages made, flowing, words read where, and what it is inside a zip — one row each | everything else: a table with no dependencies |
 | **reading files** | `scour-grep`, `scour-extract`, `scour-preview`, `scour-textcache` | what is inside a file, under bounds; documents' text kept | Scour: paths in, text out |
 | **document readers** | `scour-doctext`, linked by `apps/scour-extractor` alone | PDF, legacy Office, e-mail: bytes in, text out; a word processor's document as it flows | files, the service; it runs in a process the service may kill |
 | **flowing documents** | `scour-flow` | a word processor's document as paragraphs, tables and pictures, a spreadsheet's as sheets with their numbers' formats, a presentation's as slide cards, and their drawing as HTML | files and formats: `serde` alone, filled by the extractor, drawn by the faces |
@@ -222,6 +223,15 @@ The measuring rule is at the top of `docs/MEASUREMENTS.md`: run two binaries
    and write it to `docs/MEASUREMENTS.md` with the command.
 5. If there is a correctness claim, compare against brute force.
 
+**A new file format is a row in `scour-formats`** (`crates/scour-formats/src/table.rs`):
+whether the preview draws or streams it and under what type, whether its pages
+are made, whether it flows, where its words are read, what it is inside a zip,
+and whether thumbnailers are asked for it. The preview, the flow, the document
+readers, the content search, the thumbnails and the window all ask the table;
+`scour formats` prints it. What a format needs beyond that is a reader, and
+only that is code. What a file *is* for a search (`kind:`) stays in
+`scour-core`'s kind table.
+
 ---
 
 ## 9. Where to start reading
@@ -251,9 +261,9 @@ and the page draw the same panel:
 | whether it is open | `Settings::preview` — a panel pinned in one face opens in the other |
 
 **What is shown of a file**, decided once, by `scour_preview::shape_of` in the
-service (`Request::Preview`), and drawn by each face as it can. This table is
-the rule; `scour-preview`'s tests check that it names every extension the
-code draws.
+service (`Request::Preview`), from the format table (`scour formats` prints
+it), and drawn by each face as it can. This table is the rule; `scour-preview`'s
+tests check that it names every extension the code draws.
 
 | file | shown as | where it depends on the machine |
 |---|---|---|

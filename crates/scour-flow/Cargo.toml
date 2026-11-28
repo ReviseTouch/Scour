@@ -11,12 +11,14 @@ publish.workspace      = true
 [lints]
 workspace = true
 
-# **`serde` alone.** The model is filled in `scour-doctext`, in the extractor's
+# **`serde`, and the format table.** The model is filled in `scour-doctext`, in the extractor's
 # process, from a library that parses what anybody can put on a disk; it is
 # carried by the protocol and drawn by the faces. None of them may pull a
-# document reader in through it, so it reads no file and knows no format.
+# document reader in through it, so it reads no file and parses no format.
 [dependencies]
 serde = { workspace = true }
+# Which extensions flow: a table with no dependencies of its own.
+scour-formats = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -685,29 +685,11 @@ fn classify_archive_entry(name: &[u8], allow_bin: bool) -> Role {
         Some(i) if i > 0 => &leaf[i + 1..],
         _ => return Role::PlainStream,
     };
-    if ext.len() > 12 {
-        return Role::PlainStream;
-    }
-    let mut low = [0u8; 12];
-    for (d, &s) in low.iter_mut().zip(ext) {
-        *d = s.to_ascii_lowercase();
-    }
-    let ext = &low[..ext.len()];
-    match ext {
-        b"udf" | b"docx" | b"xlsx" | b"pptx" | b"odt" | b"ods" | b"odp" | b"epub" | b"zip"
-        | b"jar" | b"whl" => Role::NestedZip,
-        b"xhtml" | b"html" | b"htm" | b"opf" | b"ncx" => Role::DocXml,
-        b"png" | b"jpg" | b"jpeg" | b"gif" | b"webp" | b"avif" | b"bmp" | b"ico" | b"tif"
-        | b"tiff" | b"mp3" | b"mp4" | b"m4a" | b"mkv" | b"avi" | b"mov" | b"webm" | b"wav"
-        | b"flac" | b"ogg" | b"opus" | b"woff" | b"woff2" | b"ttf" | b"otf" | b"eot" | b"so"
-        | b"dll" | b"dylib" | b"exe" | b"o" | b"obj" | b"a" | b"lib" | b"rlib" | b"rmeta"
-        | b"pdb" | b"class" | b"dex" | b"pyc" | b"wasm" | b"7z" | b"rar" | b"gz" | b"bz2"
-        | b"xz" | b"zst" | b"lz4" | b"iso" | b"img" | b"dmg" | b"pdf" | b"db" | b"sqlite"
-        | b"parquet"
-            if !allow_bin =>
-        {
-            Role::SkipBin
-        }
+    // What a name inside a zip is, by the format table (`scour_formats`).
+    match scour_formats::of_bytes(ext) {
+        Some(f) if f.zip => Role::NestedZip,
+        Some(f) if f.markup => Role::DocXml,
+        Some(f) if f.binary && !allow_bin => Role::SkipBin,
         _ => Role::PlainStream,
     }
 }

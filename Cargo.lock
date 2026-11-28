@@ -5160,6 +5160,7 @@ dependencies = [
  "scour-chart",
  "scour-config",
  "scour-core",
+ "scour-formats",
  "scour-hotkey",
  "scour-i18n",
  "scour-icon",
@@ -5221,6 +5222,7 @@ dependencies = [
  "pdf_oxide",
  "quick-xml 0.42.0",
  "scour-flow",
+ "scour-formats",
  "zip",
 ]
 
@@ -5274,6 +5276,7 @@ dependencies = [
  "flate2",
  "icu_normalizer",
  "memchr",
+ "scour-formats",
 ]
 
 [[package]]
@@ -5289,9 +5292,14 @@ dependencies = [
 name = "scour-flow"
 version = "0.2.0-alpha.12"
 dependencies = [
+ "scour-formats",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "scour-formats"
+version = "0.2.0-alpha.12"
 
 [[package]]
 name = "scour-grep"
@@ -5303,6 +5311,7 @@ dependencies = [
  "regex",
  "scour-core",
  "scour-extract",
+ "scour-formats",
  "simdutf8",
  "surefoot",
  "tempfile",
@@ -5328,6 +5337,7 @@ dependencies = [
  "scour-core",
  "scour-drag",
  "scour-flow",
+ "scour-formats",
  "scour-hotkey",
  "scour-i18n",
  "scour-icon",
@@ -5470,6 +5480,7 @@ name = "scour-preview"
 version = "0.2.0-alpha.12"
 dependencies = [
  "scour-extract",
+ "scour-formats",
  "serde",
  "windows",
 ]
@@ -5536,6 +5547,7 @@ dependencies = [
 name = "scour-thumbs"
 version = "0.2.0-alpha.12"
 dependencies = [
+ "scour-formats",
  "serde",
  "tempfile",
  "windows",

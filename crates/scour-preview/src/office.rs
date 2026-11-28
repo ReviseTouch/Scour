@@ -7,21 +7,15 @@ use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-const OFFICE_EXTS: &[&str] = &[
-    "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp", "xls", "xlsx", "ods",
-];
 const TIMEOUT: Duration = Duration::from_secs(25);
 const CACHE_CAP: usize = 64;
 
 static CONVERT_LOCK: Mutex<()> = Mutex::new(());
 
-/// Whether `path` names an Office document convertible to PDF.
+/// Whether `path` names an Office document convertible to PDF: the table's
+/// `converts` (`scour_formats`).
 pub fn is_office(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    let lower = ext.to_ascii_lowercase();
-    OFFICE_EXTS.contains(&lower.as_str())
+    scour_formats::of_path(path).is_some_and(|f| f.converts)
 }
 
 /// True when LibreOffice or (on Windows) Microsoft Office can render PDFs.

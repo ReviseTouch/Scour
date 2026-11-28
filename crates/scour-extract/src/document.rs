@@ -96,11 +96,12 @@ pub fn reads_document(path: &Path) -> bool {
     kind_of(path).is_some()
 }
 
+/// The table's documents read in this process (`scour_formats`), by their
+/// extension as the table spells it.
 fn kind_of(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    ["docx", "odt", "ods", "odp", "pptx", "xlsx", "udf", "rtf"]
-        .into_iter()
-        .find(|k| *k == ext)
+    scour_formats::of_path(path)
+        .filter(|f| f.read == scour_formats::Read::Here)
+        .map(|f| f.ext)
 }
 
 /// RTF read whole: it is text with its markup inline, no container.

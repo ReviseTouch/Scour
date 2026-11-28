@@ -24,12 +24,9 @@ use serde::{Deserialize, Serialize};
 
 /// The extensions read this way: a word processor's, whose text flows, a
 /// spreadsheet's, whose sheets are grids, and a presentation's, whose slides
-/// are cards.
+/// are cards. The table's `flows` (`scour_formats`).
 pub fn flows(extension: &str) -> bool {
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "docx" | "doc" | "xlsx" | "xls" | "pptx" | "ppt" | "odt" | "ods" | "odp"
-    )
+    scour_formats::of(extension).is_some_and(|f| f.flows)
 }
 
 /// Blocks drawn at most; a preview past them says it stopped.

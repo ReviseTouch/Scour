@@ -23,6 +23,8 @@ workspace = true
 [dependencies]
 serde = { workspace = true }
 scour-extract = { workspace = true }
+# Which extensions are drawn and which are made into pages: one table for all.
+scour-formats = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

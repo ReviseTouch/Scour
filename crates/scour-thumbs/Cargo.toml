@@ -20,6 +20,8 @@ workspace = true
 # wire.
 [dependencies]
 serde = { workspace = true }
+# The types asked for when a desktop declares none: the format table.
+scour-formats = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -18,19 +18,18 @@ impl Format {
     /// From a document's first bytes and its extension. An OLE2 compound file
     /// says only that it is one; which of the three is the name's to say.
     pub fn of(head: &[u8], extension: &str) -> Option<Format> {
-        let ext = extension.to_ascii_lowercase();
         if head.starts_with(b"%PDF-") {
             return Some(Format::Pdf);
         }
+        // The reader the table names for the extension (`scour_formats`).
+        let named = match scour_formats::of(extension).map(|f| f.read) {
+            Some(scour_formats::Read::Extractor(name)) => Format::named(name),
+            _ => None,
+        };
         if head.starts_with(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") {
-            return match ext.as_str() {
-                "doc" | "dot" => Some(Format::Doc),
-                "xls" | "xlt" => Some(Format::Xls),
-                "ppt" | "pps" | "pot" => Some(Format::Ppt),
-                _ => None,
-            };
+            return named.filter(|f| matches!(f, Format::Doc | Format::Xls | Format::Ppt));
         }
-        (ext == "eml").then_some(Format::Mail)
+        named.filter(|f| *f == Format::Mail)
     }
 
     /// The name this format is known by on the wire between the two processes.

@@ -135,34 +135,11 @@ fn take_icon_map(into: &mut HashMap<String, String>, text: &str) {
 /// FFmpeg or ImageMagick without GNOME `.thumbnailer` files. Fill only gaps.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn fill_unix_fallbacks(it: &mut Known) {
-    const CORE_EXTS: &[(&str, &str)] = &[
-        ("png", "image/png"),
-        ("jpg", "image/jpeg"),
-        ("jpeg", "image/jpeg"),
-        ("jfif", "image/jpeg"),
-        ("webp", "image/webp"),
-        ("gif", "image/gif"),
-        ("bmp", "image/bmp"),
-        ("tif", "image/tiff"),
-        ("tiff", "image/tiff"),
-        ("avif", "image/avif"),
-        ("heic", "image/heic"),
-        ("heif", "image/heif"),
-        ("jxl", "image/jxl"),
-        ("svg", "image/svg+xml"),
-        ("pdf", "application/pdf"),
-        ("mp4", "video/mp4"),
-        ("m4v", "video/mp4"),
-        ("mkv", "video/x-matroska"),
-        ("webm", "video/webm"),
-        ("mov", "video/quicktime"),
-        ("avi", "video/x-msvideo"),
-        ("mpeg", "video/mpeg"),
-        ("mpg", "video/mpeg"),
-    ];
-    for &(ext, mime) in CORE_EXTS {
+    // The types the format table marks for thumbnailers (`scour_formats`).
+    for f in scour_formats::FORMATS.iter().filter(|f| f.thumb) {
+        let Some(mime) = f.mime else { continue };
         it.by_ext
-            .entry(ext.to_owned())
+            .entry(f.ext.to_owned())
             .or_insert_with(|| mime.to_owned());
     }
 

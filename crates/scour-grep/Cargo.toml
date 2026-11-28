@@ -18,6 +18,9 @@ workspace = true
 [dependencies]
 flate2   = { workspace = true }
 scour-extract = { workspace = true }
+# Which documents are handed over, and what a name inside a zip is: the
+# format table.
+scour-formats = { workspace = true }
 regex    = { workspace = true }
 memchr   = { workspace = true }
 simdutf8 = { workspace = true }

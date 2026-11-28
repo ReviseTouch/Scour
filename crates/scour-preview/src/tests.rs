@@ -89,11 +89,11 @@ fn a_multibyte_character_split_by_the_sniff_boundary_is_still_text() {
     let _ = std::fs::remove_file(p);
 }
 
-/// Derived from the content type, so a format added to `DRAWN` cannot land
+/// Derived from the content type, so a format added to the table cannot land
 /// in the wrong bucket.
 #[test]
 fn every_drawn_format_says_which_element_it_is() {
-    for (ext, shape) in DRAWN {
+    for (ext, shape) in every_drawn() {
         let (what, kind) = shape.shown();
         assert!(
             ["image", "audio", "video", "pdf"].contains(&what),
@@ -114,7 +114,7 @@ fn a_web_page_is_offered_as_text_and_not_as_a_page() {
         assert_eq!(shape_of(&p, false), Shape::Text, "{name}");
         let _ = std::fs::remove_file(p);
     }
-    assert!(!DRAWN.iter().any(|(_, s)| s.shown().1.contains("html")));
+    assert!(!every_drawn().any(|(_, s)| s.shown().1.contains("html")));
 }
 
 #[test]
@@ -277,10 +277,10 @@ fn the_written_rule_names_every_extension_drawn() {
     let rows = &doc[heading..];
     let rows = &rows[rows.find("\n|").expect("the table")..];
     let table = &rows[..rows[1..].find("\n\n").map_or(rows.len(), |end| end + 1)];
-    for (ext, _) in crate::shape::DRAWN {
+    for (ext, _) in crate::shape::every_drawn() {
         let named = table
             .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| word == *ext);
+            .any(|word| word == ext);
         assert!(named, "{ext} is drawn but not in the written rule");
     }
 }

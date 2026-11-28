@@ -47,13 +47,11 @@ pub trait Texts: Send + Sync {
     }
 }
 
-/// Extensions of the documents handed over. The bytes decide in the end:
-/// an OLE2 file named `.doc` is still one, a `.pdf` that is text is text.
+/// Extensions of the documents handed over: the table's (`scour_formats`).
+/// The bytes decide in the end: an OLE2 file named `.doc` is still one, a
+/// `.pdf` that is text is text.
 pub(crate) fn handed_over(extension: &str) -> bool {
-    matches!(
-        extension,
-        "pdf" | "doc" | "dot" | "xls" | "xlt" | "ppt" | "pps" | "pot" | "eml"
-    )
+    scour_formats::of(extension).is_some_and(scour_formats::Format::handed_over)
 }
 
 pub(crate) fn extension_of(path: &Path) -> String {

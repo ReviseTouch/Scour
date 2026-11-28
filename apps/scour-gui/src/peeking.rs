@@ -668,12 +668,11 @@ pub(super) fn show_peek(
     coming
 }
 
+/// A picture this window decodes itself: the format table's `direct`.
 pub(super) fn has_direct_image_ext(path: &str) -> bool {
-    let ext = path
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "jfif")
+    path.rsplit_once('.')
+        .and_then(|(_, e)| scour_formats::of(e))
+        .is_some_and(|f| f.direct)
 }
 
 /// The facts of one row: the summary line — kind in bold, then size and when it

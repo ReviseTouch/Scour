@@ -21,6 +21,8 @@ office_oxide = { version = "=0.1.17", default-features = false }
 # The one thing of Scour's: the model a word processor's document is drawn
 # from, which is `serde` alone and reads nothing (`crates/scour-flow`).
 scour-flow   = { workspace = true }
+# Which reader a name asks for: the format table.
+scour-formats = { workspace = true }
 mail-parser  = { version = "=0.11.9", default-features = false, features = ["full_encoding"] }
 # OpenDocument's parts, read as office_oxide reads Microsoft's: the same two
 # crates at the versions it already brings, so nothing new is built.

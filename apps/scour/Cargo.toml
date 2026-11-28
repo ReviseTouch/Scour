@@ -21,6 +21,8 @@ workspace = true
 scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
 scour-ui     = { workspace = true }
+# `scour formats`: the table of what is done with a file, printed.
+scour-formats = { workspace = true }
 # The shares behind the picture a terminal draws. Arithmetic only: the window
 # and this one print the same percentage of the same bytes.
 scour-chart  = { workspace = true }

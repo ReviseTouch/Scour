@@ -205,6 +205,9 @@ enum Command {
     },
     /// What Scour does, and which of its four faces does it.
     Features,
+    /// What Scour does with a file, by its extension: how it is previewed,
+    /// whether its pages are made or it flows, and where its words are read.
+    Formats,
     /// The configured sources.
     Sources,
     /// What the service is doing.
@@ -430,6 +433,10 @@ fn main() -> Result<()> {
         Some(Command::Where) => return render::locations(),
         Some(Command::Features) => {
             print!("{}", scour_ui::faces::table());
+            return Ok(());
+        }
+        Some(Command::Formats) => {
+            print!("{}", scour_formats::table());
             return Ok(());
         }
         Some(Command::Faces { face }) => return render::faces(face.as_deref()),
@@ -761,6 +768,7 @@ fn build(args: &Args) -> Result<Request> {
             Command::McpConfig { .. }
             | Command::Where
             | Command::Features
+            | Command::Formats
             | Command::Faces { .. }
             | Command::Hotkey { .. },
         ) => {

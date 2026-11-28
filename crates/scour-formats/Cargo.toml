@@ -1,0 +1,16 @@
+[package]
+name        = "scour-formats"
+description = "What Scour does with a file, by its extension: one row per extension, read by every place that used to keep a list of its own."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Nothing. A table and the questions asked of it; the readers, the preview and
+# the content search depend on it, so it depends on none of them.
+[dependencies]

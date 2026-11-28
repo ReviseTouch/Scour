@@ -22,7 +22,7 @@ pub enum Shape {
 
 impl Shape {
     /// The category a caller builds an element from, and the content type. The
-    /// category is derived from the type, so `DRAWN` cannot name the wrong bucket.
+    /// category is derived from the type, so the table cannot name the wrong bucket.
     pub fn shown(self) -> (&'static str, &'static str) {
         match self {
             Shape::Text => ("text", "text/plain"),
@@ -122,52 +122,36 @@ pub fn look_at(path: &std::path::Path, is_dir: bool) -> Look {
     look
 }
 
-/// The formats a browser draws, by extension and not by content: the browser
+/// A format a browser draws, by extension and not by content: the browser
 /// decides by the type header, so sniffing would let anything claim to be one.
-pub(super) const DRAWN: &[(&str, Shape)] = &[
-    ("png", Shape::Whole("image/png")),
-    ("jpg", Shape::Whole("image/jpeg")),
-    ("jpeg", Shape::Whole("image/jpeg")),
-    ("jfif", Shape::Whole("image/jpeg")),
-    ("gif", Shape::Whole("image/gif")),
-    ("webp", Shape::Whole("image/webp")),
-    ("avif", Shape::Whole("image/avif")),
-    ("bmp", Shape::Whole("image/bmp")),
-    ("ico", Shape::Whole("image/x-icon")),
-    // Safe only with the caller's `sandbox` header: an `<img>` never runs an
-    // SVG's script, and the sandboxed opaque origin stops a direct tab too.
-    ("svg", Shape::Whole("image/svg+xml")),
-    // Streamed: a PDF viewer reads the trailer first, then pages in what it needs.
-    ("pdf", Shape::Streamed("application/pdf")),
-    ("mp3", Shape::Streamed("audio/mpeg")),
-    ("m4a", Shape::Streamed("audio/mp4")),
-    ("aac", Shape::Streamed("audio/aac")),
-    ("oga", Shape::Streamed("audio/ogg")),
-    ("ogg", Shape::Streamed("audio/ogg")),
-    ("opus", Shape::Streamed("audio/ogg")),
-    ("wav", Shape::Streamed("audio/wav")),
-    ("flac", Shape::Streamed("audio/flac")),
-    // The container names the type; whether the codec inside plays is the
-    // browser's business.
-    ("mp4", Shape::Streamed("video/mp4")),
-    ("m4v", Shape::Streamed("video/mp4")),
-    ("webm", Shape::Streamed("video/webm")),
-    ("ogv", Shape::Streamed("video/ogg")),
-    ("mov", Shape::Streamed("video/quicktime")),
-    ("mkv", Shape::Streamed("video/x-matroska")),
-];
+/// Which they are is `scour_formats`' table. SVG among them is safe only with
+/// the caller's `sandbox` header: an `<img>` never runs an SVG's script, and
+/// the sandboxed opaque origin stops a direct tab too.
+pub(super) fn drawn(f: &scour_formats::Format) -> Option<Shape> {
+    match (f.shown, f.mime) {
+        (scour_formats::Shown::Whole, Some(t)) => Some(Shape::Whole(t)),
+        // A PDF viewer reads the trailer first, then pages in what it needs;
+        // audio and video cannot seek without ranges.
+        (scour_formats::Shown::Streamed, Some(t)) => Some(Shape::Streamed(t)),
+        _ => None,
+    }
+}
+
+/// Every format drawn, and how: what the tests hold the written rule to.
+#[cfg(test)]
+pub(super) fn every_drawn() -> impl Iterator<Item = (&'static str, Shape)> {
+    scour_formats::FORMATS
+        .iter()
+        .filter_map(|f| Some((f.ext, drawn(f)?)))
+}
 
 /// How this file should be shown, if at all. A directory is never previewed.
 pub fn shape_of(path: &std::path::Path, is_dir: bool) -> Shape {
     if is_dir {
         return Shape::Nothing;
     }
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if let Some((_, shape)) = DRAWN.iter().find(|(e, _)| *e == ext) {
-        return *shape;
+    if let Some(shape) = scour_formats::of_path(path).and_then(drawn) {
+        return shape;
     }
     // An Office document is never its raw bytes — RTF would show its markup —
     // but its pages where they are drawn, else its text: [`look_at`] reads it.
